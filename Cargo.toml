@@ -1,0 +1,3 @@
+[workspace]
+resolver = "2"
+members = ["connectrpc-axum", "connectrpc-axum-build", "connectrpc-axum-examples"]
