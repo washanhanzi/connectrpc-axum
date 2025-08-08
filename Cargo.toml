@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = [
+    "connectrpc-axum",
+    "connectrpc-axum-build",
+    "connectrpc-axum-examples",
+]
+
+[workspace.package]
+edition = "2024"
+
+[workspace.dependencies]
+prost = "0.14"
+prost-build = "0.14"
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
+tower = "0.5"
+tower-http = "0.6"
+serde = { version = "1.0", features = ["derive"] }
+axum = { version = "0.8" }
+axum-core = "0.5"
+axum-extra = "0.10"

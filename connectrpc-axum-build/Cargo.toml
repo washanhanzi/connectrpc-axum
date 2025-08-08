@@ -1,0 +1,24 @@
+[package]
+name = "connectrpc-axum-build"
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+readme = "../README.md"
+repository = "https://github.com/AThilenius/axum-connect"
+
+[features]
+default = []
+tonic = ["dep:tonic-prost-build"]
+
+[dependencies]
+anyhow = "1.0"
+convert_case = "0.8"
+pbjson-build = "0.8"
+proc-macro2 = "1.0"
+prost = { workspace = true }
+prost-build = { workspace = true }
+prost-reflect = "0.16"
+protoc-fetcher = "0.1.2"
+quote = "1.0.38"
+syn = "2.0"
+tonic-prost-build = { workspace = true, optional = true }

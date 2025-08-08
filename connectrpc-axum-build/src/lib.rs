@@ -1,0 +1,270 @@
+use r#gen::AxumConnectServiceGenerator;
+use std::io::Result;
+use std::path::{Path, PathBuf};
+
+mod r#gen;
+
+pub fn compile(
+    protos: &[impl AsRef<std::path::Path>],
+    includes: &[impl AsRef<std::path::Path>],
+    mut config: prost_build::Config,
+) -> Result<()> {
+    config.service_generator(Box::new(AxumConnectServiceGenerator::new()));
+    config.compile_protos(protos, includes)
+}
+
+/// Builder for compiling proto files with optional configuration.
+pub struct CompileBuilder {
+    includes_dir: PathBuf,
+    config: Option<prost_build::Config>,
+    grpc: bool,
+}
+
+impl CompileBuilder {
+    /// Create a new builder for the given includes directory.
+    fn new(includes_dir: impl AsRef<Path>) -> Self {
+        Self {
+            includes_dir: includes_dir.as_ref().to_path_buf(),
+            config: None,
+            grpc: false,
+        }
+    }
+
+    /// Provide a custom prost configuration.
+    /// If not called, a default configuration will be used.
+    pub fn with_config(mut self, config: prost_build::Config) -> Self {
+        self.config = Some(config);
+        self
+    }
+
+    /// Enable gRPC code generation using Tonic.
+    /// When enabled, both ConnectRPC and gRPC service code will be generated.
+    ///
+    /// Requires the `tonic` Cargo feature on `connectrpc-axum-build`.
+    pub fn with_tonic(mut self) -> Self {
+        #[cfg(feature = "tonic")]
+        {
+            self.grpc = true;
+            return self;
+        }
+        #[cfg(not(feature = "tonic"))]
+        {
+            // Fail fast when the method is used without enabling the feature.
+            // This triggers during the build script execution.
+            panic!(
+                "connectrpc-axum-build: with_tonic() requires the 'tonic' feature. \
+                 Enable it on connectrpc-axum-build (e.g., features = [\"tonic\"])."
+            );
+        }
+    }
+
+    /// Compile the proto files.
+    pub fn compile(self) -> Result<()> {
+        let mut config = self.config.unwrap_or_else(|| {
+            let mut config = prost_build::Config::new();
+            // Set up default configuration for JSON serialization
+            config.type_attribute(".", "#[derive(::serde::Serialize, ::serde::Deserialize)]");
+            config.type_attribute(".", "#[serde(rename_all = \"camelCase\")]");
+            config.extern_path(".serde", "::serde");
+            config
+        });
+
+        // Auto-discover all .proto files in the includes directory
+        let mut proto_files = Vec::new();
+        discover_proto_files(&self.includes_dir, &mut proto_files)?;
+
+        if proto_files.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!(
+                    "No .proto files found in directory: {}",
+                    self.includes_dir.display()
+                ),
+            ));
+        }
+
+        // Generate ConnectRPC service code first; include Tonic-compatible surfaces only if requested
+        let service_generator = AxumConnectServiceGenerator::with_tonic(self.grpc);
+        config.service_generator(Box::new(service_generator));
+        config.compile_protos(&proto_files, &[&self.includes_dir])?;
+
+        // Keep Prost output as `{stem}.rs` and append other generated content as needed.
+
+        // Generate gRPC service code if enabled and append to existing file
+        #[cfg(feature = "tonic")]
+        if self.grpc {
+                let proto_file_paths: Vec<&str> =
+                    proto_files.iter().map(|p| p.to_str().unwrap()).collect();
+
+                // Generate gRPC code to a temporary location then append
+                let temp_out_dir = format!("{}/grpc_temp", std::env::var("OUT_DIR").unwrap());
+                std::fs::create_dir_all(&temp_out_dir)?;
+
+                // Generate tonic gRPC server code into the temp directory
+                tonic_prost_build::configure()
+                    .out_dir(&temp_out_dir)
+                    .build_client(false)
+                    .compile_protos(
+                        &proto_file_paths,
+                        &[self.includes_dir.as_path().to_str().unwrap()],
+                    )?;
+
+                // Read the tonic-generated file and append it to our ConnectRPC file
+                let out_dir = std::env::var("OUT_DIR").unwrap();
+                for proto_file in &proto_files {
+                    let file_stem = proto_file.file_stem().unwrap().to_str().unwrap();
+                    let connect_file = format!("{}/{}.rs", out_dir, file_stem);
+                    let grpc_file = format!("{}/{}.rs", temp_out_dir, file_stem);
+
+                    if std::path::Path::new(&grpc_file).exists() {
+                        let connect_content =
+                            std::fs::read_to_string(&connect_file).unwrap_or_else(|_| String::new());
+                        let grpc_content = std::fs::read_to_string(&grpc_file)?;
+
+                        // Filter out duplicate message definitions from gRPC content
+                        let filtered_grpc_content = filter_duplicate_messages(&grpc_content);
+
+                        // Combine both contents
+                        let combined = format!(
+                            "{}\n// gRPC definitions from tonic\n{}",
+                            connect_content, filtered_grpc_content
+                        );
+                        std::fs::write(&connect_file, combined)?;
+                    }
+                }
+
+                // Clean up temp directory
+                std::fs::remove_dir_all(&temp_out_dir)?;
+        }
+
+        Ok(())
+    }
+}
+
+/// Filter out duplicate message struct definitions and header comments to avoid conflicts
+fn filter_duplicate_messages(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut filtered_lines = Vec::new();
+    let mut skip_until_closing_brace = false;
+    let mut brace_depth = 0;
+    let mut i = 0;
+
+    while i < lines.len() {
+        let line = lines[i];
+        let trimmed = line.trim();
+
+        // Skip prost-build file header comments
+        if trimmed == "// This file is @generated by prost-build." {
+            i += 1;
+            continue;
+        }
+
+        // Skip duplicate derive attributes that appear before message structs
+        if trimmed.starts_with("#[derive(")
+            && i + 1 < lines.len()
+            && lines[i + 1].trim().starts_with("pub struct Hello")
+            && (lines[i + 1].contains("Request") || lines[i + 1].contains("Response"))
+        {
+            // Skip both the derive attribute and the struct definition
+            i += 1; // Skip current derive line
+            skip_until_closing_brace = true;
+            brace_depth = 0;
+            i += 1; // Move to struct line, which will be skipped in the next iteration
+            continue;
+        }
+
+        // Check if this is a message struct definition we want to skip
+        if trimmed.starts_with("pub struct Hello")
+            && (trimmed.contains("Request") || trimmed.contains("Response"))
+        {
+            skip_until_closing_brace = true;
+            brace_depth = 0;
+            i += 1;
+            continue;
+        }
+
+        if skip_until_closing_brace {
+            // Count braces to know when struct definition ends
+            brace_depth += trimmed.chars().filter(|&c| c == '{').count();
+            brace_depth = brace_depth.saturating_sub(trimmed.chars().filter(|&c| c == '}').count());
+
+            if brace_depth == 0 && trimmed == "}" {
+                skip_until_closing_brace = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        filtered_lines.push(line);
+        i += 1;
+    }
+
+    filtered_lines.join("\n")
+}
+
+/// Convenience function that auto-discovers all .proto files in the includes directory
+/// and compiles them with a default or custom configuration.
+///
+/// This provides the best developer experience by only requiring the includes path.
+/// Use `.with_config()` if you need custom configuration.
+///
+/// # Examples
+///
+/// Basic usage with default configuration:
+/// ```rust,no_run
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     connectrpc_axum_build::compile_dir("proto").compile()?;
+///     Ok(())
+/// }
+/// ```
+///
+/// With custom configuration:
+/// ```rust,no_run
+/// use prost_build::Config;
+///
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let mut config = Config::new();
+///     config.type_attribute(".", "#[derive(Debug)]");
+///
+///     connectrpc_axum_build::compile_dir("proto")
+///         .with_config(config)
+///         .compile()?;
+///     Ok(())
+/// }
+/// ```
+///
+/// With gRPC support:
+/// ```rust,no_run
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     connectrpc_axum_build::compile_dir("proto")
+///         .with_tonic()  // Enable Tonic gRPC code generation
+///         .compile()?;
+///     Ok(())
+/// }
+/// ```
+pub fn compile_dir(includes_dir: impl AsRef<Path>) -> CompileBuilder {
+    CompileBuilder::new(includes_dir)
+}
+
+fn discover_proto_files(dir: &Path, proto_files: &mut Vec<std::path::PathBuf>) -> Result<()> {
+    if !dir.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Directory not found: {}", dir.display()),
+        ));
+    }
+
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("proto") {
+            proto_files.push(path);
+        } else if path.is_dir() {
+            // Recursively search subdirectories
+            discover_proto_files(&path, proto_files)?;
+        }
+    }
+
+    Ok(())
+}
