@@ -8,7 +8,7 @@
 //!
 //! ## Simple Handler (no extractors)
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use connectrpc_axum::prelude::*;
 //!
 //! async fn say_hello(
@@ -20,14 +20,14 @@
 //!     Ok(ConnectResponse(response))
 //! }
 //!
-//! // Use directly with Axum - automatically implements Handler via bridge
+//! // Wrap the handler with `post_connect` so Axum can accept it
 //! let app = axum::Router::new()
-//!     .route("/my.Service/SayHello", axum::routing::post(say_hello));
+//!     .route("/my.Service/SayHello", post_connect(say_hello));
 //! ```
 //!
 //! ## Handler with State
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use connectrpc_axum::prelude::*;
 //! use axum::extract::State;
 //!
@@ -45,13 +45,13 @@
 //! }
 //!
 //! let app = axum::Router::new()
-//!     .route("/my.Service/GetUser", axum::routing::post(get_user))
+//!     .route("/my.Service/GetUser", post_connect(get_user))
 //!     .with_state(AppState { db: Database::new() });
 //! ```
 //!
 //! ## Handler with Multiple Extractors
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use connectrpc_axum::prelude::*;
 //! use axum::extract::{State, Query, Path};
 //!
@@ -70,7 +70,8 @@
 //!
 //! - `ConnectRequest<T>` must always be the LAST parameter since it consumes the request body
 //! - All other extractors must implement `FromRequestParts` and come before `ConnectRequest`
-//! - Handlers automatically implement both `ConnectHandler` and Axum's `Handler` traits
+//! - Handlers automatically implement `ConnectHandler` and can be wrapped with `post_connect`
+//!   (or [`ConnectHandlerWrapper`]) to work with Axum's routing APIs
 //! - The bridge implementation ensures full compatibility with Axum's ecosystem
 
 use crate::extractor::ConnectRequest;
@@ -115,7 +116,7 @@ macro_rules! all_the_tuples {
 /// implemented for qualifying functions via the macro system.
 pub trait ConnectHandler<T, S>: Clone + Send + 'static {
     type Future: Future<Output = Response> + Send;
-    
+
     fn call(self, req: Request, state: S) -> Self::Future;
 }
 
@@ -134,19 +135,19 @@ macro_rules! impl_connect_handler {
             Fut: Future<Output = Res> + Send,
             Res: IntoResponse,
             S: Clone + Send + Sync + 'static,
-            ConnectRequest<Req>: axum::extract::FromRequest<S>,
+            ConnectRequest<Req>: axum::extract::FromRequest<S, axum::body::Body>,
             Req: Send + 'static,
             $($ty: axum::extract::FromRequestParts<S> + Send + 'static,)*
         {
             type Future = std::pin::Pin<Box<dyn Future<Output = Response> + Send>>;
-            
+
             fn call(self, req: Request, state: S) -> Self::Future {
                 Box::pin(async move {
                     // Split the request into parts and body for extraction
                     let (mut parts, body) = req.into_parts();
-                    
+
                     // Extract all the FromRequestParts extractors first
-                    $( 
+                    $(
                         let $ty = match $ty::from_request_parts(&mut parts, &state).await {
                             Ok(extractor) => extractor,
                             Err(rejection) => {
@@ -154,10 +155,10 @@ macro_rules! impl_connect_handler {
                             }
                         };
                     )*
-                    
+
                     // Reconstruct the request for ConnectRequest
                     let req = Request::from_parts(parts, body);
-                    
+
                     // Extract the ConnectRequest (this consumes the body)
                     let connect_req = match ConnectRequest::<Req>::from_request(req, &state).await {
                         Ok(req) => req,
@@ -165,7 +166,7 @@ macro_rules! impl_connect_handler {
                             return rejection.into_response();
                         }
                     };
-                    
+
                     // Call the handler function and convert result to Response
                     let result = self($($ty,)* connect_req).await;
                     result.into_response()
@@ -193,7 +194,7 @@ macro_rules! impl_handler_for_wrapper {
             S: Send + Sync + 'static,
         {
             type Future = H::Future;
-            
+
             fn call(self, req: Request, state: S) -> Self::Future {
                 ConnectHandler::call(self.0, req, state)
             }
@@ -255,7 +256,8 @@ where
 /// Convenience function to create a ConnectService.
 pub fn connect_service<H, T, S>(handler: H, state: S) -> ConnectService<H, T, S>
 where
-    H: Handler<T, S>,
+    H: Handler<T, S> + Clone + Send + 'static,
+    S: Clone + Send + Sync + 'static,
 {
     ConnectService::new(handler, state)
 }
@@ -267,12 +269,12 @@ pub fn connect_handler<H>(handler: H) -> ConnectHandlerWrapper<H> {
 }
 
 /// Helper function to wrap a Connect handler into a POST method router.
-/// This avoids type inference issues by explicitly constraining the handler wrapper.
-/// This version is specifically for handlers that only take ConnectRequest<Req>.
-pub fn post_connect<H, S, Req>(handler: H) -> axum::routing::MethodRouter<S>
+/// This avoids requiring users to manually wrap handlers with [`ConnectHandlerWrapper`].
+pub fn post_connect<H, T, S>(handler: H) -> axum::routing::MethodRouter<S>
 where
-    H: ConnectHandler<(ConnectRequest<Req>,), S> + Sync,
-    (ConnectRequest<Req>,): Send + 'static,
+    H: ConnectHandler<T, S> + Sync,
+    ConnectHandlerWrapper<H>: Handler<T, S>,
+    T: Send + 'static,
     S: Clone + Send + Sync + 'static,
 {
     axum::routing::post(ConnectHandlerWrapper(handler))

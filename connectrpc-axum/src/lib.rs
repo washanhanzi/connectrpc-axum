@@ -37,7 +37,9 @@ pub mod prelude {
     //! A prelude for `axum-connect` providing the most common types.
     pub use crate::error::{Code, ConnectError};
     pub use crate::extractor::ConnectRequest;
-    pub use crate::handler::{ConnectHandler, ConnectService, connect_service};
+    pub use crate::handler::{
+        ConnectHandler, ConnectService, connect_handler, connect_service, post_connect,
+    };
     pub use crate::response::ConnectResponse;
     pub use crate::stream_response::ConnectStreamResponse;
 }
