@@ -18,6 +18,7 @@ struct AppState {
 }
 
 // Individual handler functions that work with ConnectHandler trait
+#[axum::debug_handler]
 async fn say_hello(
     ConnectRequest(req): ConnectRequest<HelloRequest>,
 ) -> Result<ConnectResponse<HelloResponse>, ConnectError> {
@@ -26,8 +27,8 @@ async fn say_hello(
     }))
 }
 
+#[axum::debug_handler]
 async fn say_hello_stream(
-    _state: State<AppState>,
     ConnectRequest(req): ConnectRequest<HelloRequest>,
 ) -> ConnectStreamResponse<Box<dyn Stream<Item = Result<HelloResponse, ConnectError>> + Send + Unpin>>
 {
@@ -58,6 +59,7 @@ async fn main() {
         say_hello_stream,
     };
 
+    
     // Create ConnectRPC router with handlers struct
     let connect_router = helloworldservice::router(handlers).with_state(app_state.clone());
 

@@ -43,7 +43,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                 quote! {
                     .route(
                         #path,
-                        axum::routing::post(connectrpc_axum::handler::ConnectHandlerWrapper(handlers.#method_name))
+                        connectrpc_axum::handler::post_connect(handlers.#method_name)
                     )
                 }
             })
@@ -76,27 +76,18 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             })
             .collect();
 
-        // Generate handler where clauses - require ConnectHandler which provides Handler via bridge
-        let handler_where_clauses: Vec<_> = service.methods.iter().map(|method| {
-            let handler_type = format_ident!("{}Handler", method.name.to_case(Case::Pascal));
-            let method_name = format_ident!("{}", method.name.to_case(Case::Snake));
-            let tuple_type_param = format_ident!("T{}", method.name.to_case(Case::Pascal));
-            
-            // For ConnectHandler, we need to specify the parameter tuple type
-            // This will be something like (State<S>, ConnectRequest<HelloRequest>) or (ConnectRequest<HelloRequest>)
-            quote! {
-                #handler_type: connectrpc_axum::handler::ConnectHandler<#tuple_type_param, S> + Send + Sync + 'static,
-                #tuple_type_param: Send + Sync + 'static
-            }
-        }).collect();
-
-        // Generate type parameters for handler parameter tuples
-        let handler_tuple_type_params: Vec<_> = service.methods.iter().map(|method| {
-            let tuple_type_param = format_ident!("T{}", method.name.to_case(Case::Pascal));
-            quote! {
-                #tuple_type_param
-            }
-        }).collect();
+        // Generate where clauses for each handler type to ensure they have the necessary traits
+        let handler_where_clauses: Vec<_> = service
+            .methods
+            .iter()
+            .map(|method| {
+                let handler_type = format_ident!("{}Handler", method.name.to_case(Case::Pascal));
+                
+                quote! {
+                    #handler_type: Clone + Send + Sync + 'static
+                }
+            })
+            .collect();
 
         let handlers_struct_name = format_ident!("{}Handlers", service.name);
 
@@ -114,28 +105,30 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
 
                 /// Create a router for the #service.name service.
                 ///
-                /// Takes a handlers struct containing ConnectHandler implementations
-                /// and returns a Router<S> that can be merged into your main application router.
+                /// Accepts a handlers struct. Each handler may use multiple Axum extractors,
+                /// but the final parameter must be `ConnectRequest<T>` for the corresponding
+                /// request type. This matches normal Axum handlers with the additional
+                /// requirement that the request body extractor is last.
                 ///
                 /// # Example
                 /// ```rust,no_run
-                /// use axum::Router;
+                /// use axum::{Router, extract::{State, Query}};
                 ///
                 /// async fn say_hello(
-                ///     ConnectRequest(req): ConnectRequest<HelloRequest>
+                ///     State(app): State<AppState>,
+                ///     Query(q): Query<Filters>,
+                ///     ConnectRequest(req): ConnectRequest<HelloRequest>, // must be last
                 /// ) -> Result<ConnectResponse<HelloResponse>, ConnectError> {
                 ///     // handler implementation
                 /// }
                 ///
-                /// let handlers = #handlers_struct_name {
-                ///     say_hello,
-                /// };
+                /// let handlers = #handlers_struct_name { say_hello };
                 ///
                 /// let app = Router::new()
                 ///     .merge(#service_module_name::router(handlers))
                 ///     .with_state(app_state);
                 /// ```
-                pub fn router<S, #(#handler_type_params,)* #(#handler_tuple_type_params,)*>(
+                pub fn router<S, #(#handler_type_params,)*>(
                     handlers: #handlers_struct_name<#(#handler_type_params,)*>
                 ) -> axum::Router<S>
                 where
@@ -156,7 +149,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                 &service,
                 &handlers_struct_name,
                 &handler_type_params,
-                &handler_tuple_type_params,
+                &[],
                 &handler_where_clauses,
                 &service_module_name
             );

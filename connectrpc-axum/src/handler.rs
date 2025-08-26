@@ -85,22 +85,23 @@ use std::future::Future;
 #[rustfmt::skip]
 macro_rules! all_the_tuples {
     ($name:ident) => {
-        $name!([], T1);
-        $name!([T1], T2);
-        $name!([T1, T2], T3);
-        $name!([T1, T2, T3], T4);
-        $name!([T1, T2, T3, T4], T5);
-        $name!([T1, T2, T3, T4, T5], T6);
-        $name!([T1, T2, T3, T4, T5, T6], T7);
-        $name!([T1, T2, T3, T4, T5, T6, T7], T8);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8], T9);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9], T10);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10], T11);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11], T12);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12], T13);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13], T14);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14], T15);
-        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15], T16);
+        $name!([]);
+        $name!([T1]);
+        $name!([T1, T2]);
+        $name!([T1, T2, T3]);
+        $name!([T1, T2, T3, T4]);
+        $name!([T1, T2, T3, T4, T5]);
+        $name!([T1, T2, T3, T4, T5, T6]);
+        $name!([T1, T2, T3, T4, T5, T6, T7]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15]);
+        $name!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16]);
     };
 }
 
@@ -118,17 +119,24 @@ pub trait ConnectHandler<T, S>: Clone + Send + 'static {
     fn call(self, req: Request, state: S) -> Self::Future;
 }
 
+// Note: We intentionally do not expose a marker trait like
+// `ConnectHandlerAny<S>` here. The blanket `Handler` impl for
+// `ConnectHandlerWrapper<H>` below allows the router to accept
+// any handler whose last argument is `ConnectRequest<_>`, without
+// naming the extractor tuple in bounds.
+
 // Implement ConnectHandler for all function arities where the last parameter is ConnectRequest<Req>
 macro_rules! impl_connect_handler {
-    ([$($ty:ident),*], $last:ident) => {
+    ([$($ty:ident),*]) => {
         impl<F, Fut, Res, S, Req, $($ty,)*> ConnectHandler<($($ty,)* ConnectRequest<Req>,), S> for F
         where
-            F: FnOnce($($ty,)* ConnectRequest<Req>) -> Fut + Clone + Send + 'static,
+            F: Fn($($ty,)* ConnectRequest<Req>) -> Fut + Clone + Send + 'static,
             Fut: Future<Output = Res> + Send,
             Res: IntoResponse,
             S: Clone + Send + Sync + 'static,
-            Req: prost::Message + serde::de::DeserializeOwned + Default + Send + 'static,
-            $($ty: axum::extract::FromRequestParts<S> + Send,)*
+            ConnectRequest<Req>: axum::extract::FromRequest<S>,
+            Req: Send + 'static,
+            $($ty: axum::extract::FromRequestParts<S> + Send + 'static,)*
         {
             type Future = std::pin::Pin<Box<dyn Future<Output = Response> + Send>>;
             
@@ -174,18 +182,26 @@ all_the_tuples!(impl_connect_handler);
 #[derive(Clone)]
 pub struct ConnectHandlerWrapper<H>(pub H);
 
-impl<H, T, S> Handler<T, S> for ConnectHandlerWrapper<H>
-where
-    H: ConnectHandler<T, S> + Sync,
-    T: Send + 'static,
-    S: Send + Sync + 'static,
-{
-    type Future = H::Future;
-    
-    fn call(self, req: Request, state: S) -> Self::Future {
-        ConnectHandler::call(self.0, req, state)
-    }
+// We need specific implementations for each tuple arity rather than a generic one
+// This avoids the inference issues with the generic T parameter
+macro_rules! impl_handler_for_wrapper {
+    ([$($ty:ident),*]) => {
+        impl<H, S, Req, $($ty,)*> Handler<($($ty,)* ConnectRequest<Req>,), S> for ConnectHandlerWrapper<H>
+        where
+            H: ConnectHandler<($($ty,)* ConnectRequest<Req>,), S> + Sync,
+            ($($ty,)* ConnectRequest<Req>,): Send + 'static,
+            S: Send + Sync + 'static,
+        {
+            type Future = H::Future;
+            
+            fn call(self, req: Request, state: S) -> Self::Future {
+                ConnectHandler::call(self.0, req, state)
+            }
+        }
+    };
 }
+
+all_the_tuples!(impl_handler_for_wrapper);
 
 use tower::Service;
 
@@ -242,4 +258,22 @@ where
     H: Handler<T, S>,
 {
     ConnectService::new(handler, state)
+}
+
+/// Helper function to wrap handlers for use with axum routing.
+/// This provides the necessary type inference to resolve the Handler trait implementation.
+pub fn connect_handler<H>(handler: H) -> ConnectHandlerWrapper<H> {
+    ConnectHandlerWrapper(handler)
+}
+
+/// Helper function to wrap a Connect handler into a POST method router.
+/// This avoids type inference issues by explicitly constraining the handler wrapper.
+/// This version is specifically for handlers that only take ConnectRequest<Req>.
+pub fn post_connect<H, S, Req>(handler: H) -> axum::routing::MethodRouter<S>
+where
+    H: ConnectHandler<(ConnectRequest<Req>,), S> + Sync,
+    (ConnectRequest<Req>,): Send + 'static,
+    S: Clone + Send + Sync + 'static,
+{
+    axum::routing::post(ConnectHandlerWrapper(handler))
 }

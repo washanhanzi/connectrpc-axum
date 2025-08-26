@@ -83,12 +83,6 @@ impl CompileBuilder {
             let temp_out_dir = format!("{}/grpc_temp", std::env::var("OUT_DIR").unwrap());
             std::fs::create_dir_all(&temp_out_dir)?;
 
-            tonic_build::configure()
-                .out_dir(&temp_out_dir)
-                .build_server(true)
-                .build_client(false)
-                .compile_protos(&proto_file_paths, &[self.includes_dir.to_str().unwrap()])?;
-
             // Read the tonic-generated file and append it to our ConnectRPC file
             let out_dir = std::env::var("OUT_DIR").unwrap();
             for proto_file in &proto_files {
@@ -205,7 +199,7 @@ fn filter_duplicate_messages(content: &str) -> String {
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let mut config = Config::new();
 ///     config.type_attribute(".", "#[derive(Debug)]");
-///     
+///
 ///     connectrpc_axum_build::compile_dir("proto")
 ///         .with_config(config)
 ///         .compile()?;
