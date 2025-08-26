@@ -86,7 +86,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             // This will be something like (State<S>, ConnectRequest<HelloRequest>) or (ConnectRequest<HelloRequest>)
             quote! {
                 #handler_type: connectrpc_axum::handler::ConnectHandler<#tuple_type_param, S> + Send + Sync + 'static,
-                #tuple_type_param: Send + 'static
+                #tuple_type_param: Send + Sync + 'static
             }
         }).collect();
 
@@ -156,6 +156,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                 &service,
                 &handlers_struct_name,
                 &handler_type_params,
+                &handler_tuple_type_params,
                 &handler_where_clauses,
                 &service_module_name
             );
@@ -170,6 +171,7 @@ impl AxumConnectServiceGenerator {
         service: &prost_build::Service,
         handlers_struct_name: &proc_macro2::Ident,
         handler_type_params: &[proc_macro2::TokenStream],
+        handler_tuple_type_params: &[proc_macro2::TokenStream],
         handler_where_clauses: &[proc_macro2::TokenStream],
         service_module_name: &proc_macro2::Ident,
     ) -> String {
@@ -213,13 +215,15 @@ impl AxumConnectServiceGenerator {
         let grpc_adapter_struct = quote! {
             /// Auto-generated gRPC adapter that wraps ConnectRPC handlers
             #[derive(Clone)]
-            pub struct GrpcAdapter<#(#handler_type_params,)* S>
+            pub struct GrpcAdapter<#(#handler_type_params,)* S, #(#handler_tuple_type_params,)*>
             where
                 S: Clone + Send + Sync + 'static,
                 #(#handler_where_clauses,)*
             {
                 handlers: super::#service_module_name::#handlers_struct_name<#(#handler_type_params,)*>,
                 state: S,
+                // PhantomData for unused type parameters
+                _phantom: std::marker::PhantomData<(#(#handler_tuple_type_params,)*)>,
             }
         };
 
@@ -230,16 +234,21 @@ impl AxumConnectServiceGenerator {
             where
                 T: prost::Message + serde::Serialize,
             {
-                let body = ::serde_json::to_vec(&tonic_req.into_inner()).unwrap();
+                // Convert protobuf message to JSON for ConnectRequest compatibility
+                let message = tonic_req.into_inner();
+                let json_bytes = serde_json::to_vec(&message)
+                    .expect("Failed to serialize message to JSON");
+                
+                // Create Axum request with JSON body that ConnectRequest can parse
                 axum::extract::Request::builder()
                     .method("POST")
                     .uri("/")
                     .header("content-type", "application/json")
-                    .body(axum::body::Body::from(body))
+                    .body(axum::body::Body::from(json_bytes))
                     .unwrap()
             }
 
-            /// Extract response data from Axum Response
+            /// Extract response data from ConnectResponse wrapped Axum Response
             async fn extract_response_data<T>(response: axum::response::Response) -> Result<T, tonic::Status>
             where
                 T: serde::de::DeserializeOwned,
@@ -247,8 +256,10 @@ impl AxumConnectServiceGenerator {
                 let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await
                     .map_err(|e| tonic::Status::internal(format!("Failed to read response body: {}", e)))?;
                 
-                ::serde_json::from_slice::<T>(&body_bytes)
-                    .map_err(|e| tonic::Status::internal(format!("Failed to parse response: {}", e)))
+                // The ConnectResponse handler returns JSON, so we deserialize from JSON
+                // The message is already the unwrapped response (not wrapped in ConnectResponse)
+                serde_json::from_slice::<T>(&body_bytes)
+                    .map_err(|e| tonic::Status::internal(format!("Failed to deserialize JSON response: {}", e)))
             }
         };
 
@@ -270,10 +281,9 @@ impl AxumConnectServiceGenerator {
                         // Convert tonic::Request to Axum Request
                         let axum_request = tonic_to_axum_request(request);
                         
-                        // Call the handler using Axum's Handler trait
-                        // This works for both stateless and stateful handlers automatically
+                        // Call the handler using ConnectHandlerWrapper to bridge to Axum's Handler trait
                         let response = axum::handler::Handler::call(
-                            self.handlers.#method_name.clone(),
+                            connectrpc_axum::handler::ConnectHandlerWrapper(self.handlers.#method_name.clone()),
                             axum_request,
                             self.state.clone()
                         ).await;
@@ -293,10 +303,9 @@ impl AxumConnectServiceGenerator {
                         // Convert tonic::Request to Axum Request  
                         let axum_request = tonic_to_axum_request(request);
                         
-                        // Call the handler using Axum's Handler trait
-                        // This works for both stateless and stateful handlers automatically
+                        // Call the handler using ConnectHandlerWrapper to bridge to Axum's Handler trait
                         let response = axum::handler::Handler::call(
-                            self.handlers.#method_name.clone(),
+                            connectrpc_axum::handler::ConnectHandlerWrapper(self.handlers.#method_name.clone()),
                             axum_request,
                             self.state.clone()
                         ).await;
@@ -312,7 +321,7 @@ impl AxumConnectServiceGenerator {
 
         // Generate trait implementation (using native async fn in traits - no async_trait needed)
         let grpc_trait_impl = quote! {
-            impl<#(#handler_type_params,)* S> super::hello_world_service_server::#grpc_service_trait_name for GrpcAdapter<#(#handler_type_params,)* S>
+            impl<#(#handler_type_params,)* S, #(#handler_tuple_type_params,)*> super::hello_world_service_server::#grpc_service_trait_name for GrpcAdapter<#(#handler_type_params,)* S, #(#handler_tuple_type_params,)*>
             where
                 S: Clone + Send + Sync + 'static,
                 #(#handler_where_clauses,)*
@@ -340,10 +349,10 @@ impl AxumConnectServiceGenerator {
             ///     app_state
             /// );
             /// ```
-            pub fn create_services<#(#handler_type_params,)* S>(
+            pub fn create_services<#(#handler_type_params,)* S, #(#handler_tuple_type_params,)*>(
                 handlers: super::#service_module_name::#handlers_struct_name<#(#handler_type_params,)*>,
                 state: S
-            ) -> (axum::Router<S>, super::hello_world_service_server::#grpc_server_name<GrpcAdapter<#(#handler_type_params,)* S>>)
+            ) -> (axum::Router<S>, super::hello_world_service_server::#grpc_server_name<GrpcAdapter<#(#handler_type_params,)* S, #(#handler_tuple_type_params,)*>>)
             where
                 S: Clone + Send + Sync + 'static,
                 #(#handler_where_clauses,)*
@@ -351,7 +360,8 @@ impl AxumConnectServiceGenerator {
                 let connect_router = super::#service_module_name::router(handlers.clone()).with_state(state.clone());
                 let grpc_adapter = GrpcAdapter { 
                     handlers: handlers.clone(),
-                    state: state.clone() 
+                    state: state.clone(),
+                    _phantom: std::marker::PhantomData,
                 };
                 let grpc_service = super::hello_world_service_server::#grpc_server_name::new(grpc_adapter);
                 (connect_router, grpc_service)
@@ -364,6 +374,7 @@ impl AxumConnectServiceGenerator {
 
             pub mod grpc_adapter {
                 use super::*;
+                use std::marker::PhantomData;
 
                 #conversion_helpers
 
