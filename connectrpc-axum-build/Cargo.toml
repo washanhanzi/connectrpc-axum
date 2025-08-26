@@ -15,14 +15,14 @@ readme = "../README.md"
 repository = "https://github.com/AThilenius/axum-connect"
 
 [dependencies]
-anyhow = "1.0.95"
-convert_case = "0.7.1"
-pbjson-build = "0.7.0"
-proc-macro2 = "1.0.93"
-prost = ">=0.13"
-prost-build = "0.13.4"
-prost-reflect = "0.14.5"
+anyhow = "1.0"
+convert_case = "0.8"
+pbjson-build = "0.8"
+proc-macro2 = "1.0"
+prost = { workspace = true }
+prost-build = { workspace = true }
+prost-reflect = "0.16"
 protoc-fetcher = "0.1.2"
 quote = "1.0.38"
-syn = "2.0.96"
-tonic-build = "0.12"
+syn = "2.0"
+tonic-build = "0.14"
