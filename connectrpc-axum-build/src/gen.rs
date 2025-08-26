@@ -76,15 +76,26 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             })
             .collect();
 
-        // Generate where clauses for each handler type to ensure they have the necessary traits
+        // Generate where clauses requiring each handler to implement ConnectHandler for its request type
         let handler_where_clauses: Vec<_> = service
             .methods
             .iter()
             .map(|method| {
                 let handler_type = format_ident!("{}Handler", method.name.to_case(Case::Pascal));
-                
+                let request_ty = format_ident!(
+                    "{}",
+                    method
+                        .input_type
+                        .split('.')
+                        .last()
+                        .unwrap_or(&method.input_type)
+                );
+
                 quote! {
-                    #handler_type: Clone + Send + Sync + 'static
+                    #handler_type: connectrpc_axum::handler::ConnectHandler<
+                        (connectrpc_axum::extractor::ConnectRequest<#request_ty>,),
+                        S,
+                    > + Clone + Send + Sync + 'static
                 }
             })
             .collect();
@@ -151,7 +162,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                 &handler_type_params,
                 &[],
                 &handler_where_clauses,
-                &service_module_name
+                &service_module_name,
             );
             buf.push_str(&grpc_adapter);
         }
@@ -231,7 +242,7 @@ impl AxumConnectServiceGenerator {
                 let message = tonic_req.into_inner();
                 let json_bytes = serde_json::to_vec(&message)
                     .expect("Failed to serialize message to JSON");
-                
+
                 // Create Axum request with JSON body that ConnectRequest can parse
                 axum::extract::Request::builder()
                     .method("POST")
@@ -248,7 +259,7 @@ impl AxumConnectServiceGenerator {
             {
                 let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await
                     .map_err(|e| tonic::Status::internal(format!("Failed to read response body: {}", e)))?;
-                
+
                 // The ConnectResponse handler returns JSON, so we deserialize from JSON
                 // The message is already the unwrapped response (not wrapped in ConnectResponse)
                 serde_json::from_slice::<T>(&body_bytes)
@@ -266,14 +277,14 @@ impl AxumConnectServiceGenerator {
                 let stream_type_name = format_ident!("{}Stream", method.name.to_case(Case::Pascal));
                 quote! {
                     type #stream_type_name = std::pin::Pin<Box<dyn tokio_stream::Stream<Item = Result<super::#response_ty, tonic::Status>> + Send>>;
-                    
+
                     async fn #method_name(
                         &self,
                         request: tonic::Request<super::#request_ty>,
                     ) -> Result<tonic::Response<Self::#stream_type_name>, tonic::Status> {
                         // Convert tonic::Request to Axum Request
                         let axum_request = tonic_to_axum_request(request);
-                        
+
                         // Call the handler using ConnectHandlerWrapper to bridge to Axum's Handler trait
                         let response = axum::handler::Handler::call(
                             connectrpc_axum::handler::ConnectHandlerWrapper(self.handlers.#method_name.clone()),
@@ -293,19 +304,19 @@ impl AxumConnectServiceGenerator {
                         &self,
                         request: tonic::Request<super::#request_ty>,
                     ) -> Result<tonic::Response<super::#response_ty>, tonic::Status> {
-                        // Convert tonic::Request to Axum Request  
+                        // Convert tonic::Request to Axum Request
                         let axum_request = tonic_to_axum_request(request);
-                        
+
                         // Call the handler using ConnectHandlerWrapper to bridge to Axum's Handler trait
                         let response = axum::handler::Handler::call(
                             connectrpc_axum::handler::ConnectHandlerWrapper(self.handlers.#method_name.clone()),
                             axum_request,
                             self.state.clone()
                         ).await;
-                        
+
                         // Extract the response data
                         let response_data = extract_response_data::<super::#response_ty>(response).await?;
-                        
+
                         Ok(tonic::Response::new(response_data))
                     }
                 }
@@ -351,7 +362,7 @@ impl AxumConnectServiceGenerator {
                 #(#handler_where_clauses,)*
             {
                 let connect_router = super::#service_module_name::router(handlers.clone()).with_state(state.clone());
-                let grpc_adapter = GrpcAdapter { 
+                let grpc_adapter = GrpcAdapter {
                     handlers: handlers.clone(),
                     state: state.clone(),
                     _phantom: std::marker::PhantomData,

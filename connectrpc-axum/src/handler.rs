@@ -135,7 +135,7 @@ macro_rules! impl_connect_handler {
             Fut: Future<Output = Res> + Send,
             Res: IntoResponse,
             S: Clone + Send + Sync + 'static,
-            ConnectRequest<Req>: axum::extract::FromRequest<S, axum::body::Body>,
+            ConnectRequest<Req>: axum::extract::FromRequest<S>,
             Req: Send + 'static,
             $($ty: axum::extract::FromRequestParts<S> + Send + 'static,)*
         {
