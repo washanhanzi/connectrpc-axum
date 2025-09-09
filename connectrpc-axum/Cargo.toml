@@ -6,7 +6,7 @@ edition = "2024"
 license = "MIT"
 readme = "../README.md"
 repository = "https://github.com/AThilenius/axum-connect"
-description = "Axum style Connect Protocol server"
+description = "Axum-style Connect RPC server"
 
 
 [features]

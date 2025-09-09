@@ -1,6 +1,6 @@
 # ConnectRPC Axum
 
-Axum-style Connect Protocol Server.
+Axum-style Connect RPC server.
 
 > Work in progress.
 
