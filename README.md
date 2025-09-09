@@ -53,7 +53,7 @@ async fn say_hello_simple(
 // Build routes via the generated service builder (no manual paths)
 let router = helloworldservice::HelloWorldServiceBuilder::new()
     .say_hello(say_hello)
-    .say_hello_simple(say_hello_simple)
+    .say_hello_stream(say_hello_simple)
     .with_state(AppState::default())
     .build();
 
