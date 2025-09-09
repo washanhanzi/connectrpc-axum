@@ -121,3 +121,45 @@ Notes
 - Errors map to Connect JSON responses via `ConnectError: IntoResponse`; generated tonic impls map to `tonic::Status`.
 - Route paths follow `/<package>.<Service>/<Method>`; see `connectrpc-axum-examples/proto/hello.proto`.
 - The dispatcher is available as `connectrpc_axum::ContentTypeSwitch` (top‑level re‑export). `TonicCompatible` remains as a type alias.
+
+## Code Generation
+
+Overview:
+
+1. Base (always): We invoke `prost_build::Config` to generate all protobuf message types plus the custom service builders produced by `AxumConnectServiceGenerator` (Connect + optional tonic‑compatible builders). Every message gets:
+   - `#[derive(Serialize, Deserialize)]`
+   - `#[serde(rename_all = "camelCase")]`
+   - `#[serde(default)]` (so omitted JSON fields, including repeated fields, deserialize to Rust defaults).
+2. Tonic feature (two‑pass): When the `tonic` Cargo feature is enabled and the user calls `.with_tonic()`, we perform a second pass dedicated to gRPC server stubs without regenerating (and thus duplicating) message structs.
+
+Two‑Pass Flow (feature = tonic):
+
+- Pass 1 (prost + connect):
+  - Configure prost with the attributes above.
+  - Attach the `AxumConnectServiceGenerator` (flagged to also emit tonic‑compatible builder types).
+  - If gRPC is requested, emit a `descriptor.bin` (FileDescriptorSet) to `OUT_DIR` for later reflection.
+- Pass 2 (tonic server stubs only):
+  - Decode `descriptor.bin` (using `prost_types::FileDescriptorSet`).
+  - Recursively collect fully qualified proto type names (messages & enums, including nested) and map them to the already generated Rust types.
+  - Configure `tonic_prost_build` with `build_client(false)`, `build_server(true)`, and supply `extern_path` for every collected type so tonic reuses existing structs instead of emitting new ones.
+  - Generate server code into a temporary `tonic_server/` directory in `OUT_DIR`.
+  - Append the server stub code to each first‑pass `<file>.rs` so a single `include!(concat!(env!("OUT_DIR"), "/<proto>.rs"));` brings in everything (messages + builders + tonic server trait impls).
+  - Clean up: remove `descriptor.bin` and the temporary `tonic_server/` directory so only the merged `<proto>.rs` files remain visible to consumers.
+
+Why extern_path:
+
+`tonic_prost_build` ordinarily regenerates message types. By supplying `extern_path` entries (e.g. `.hello.HelloRequest` -> `crate::HelloRequest`), we direct tonic to reference the already generated prost structs, eliminating duplication and the need for brittle post‑processing (text stripping).
+
+Nested Types:
+
+Current mapping strategy anticipates nested messages/enums by constructing fully qualified names from the descriptor set; if/when nested declarations are introduced, the extern mapping logic can be extended (prost typically flattens or modules them—adjust as needed based on actual output naming).
+
+Artifacts:
+
+- Final OUT_DIR after build: only consolidated `<proto>.rs` files.
+- Temporary artifacts (`descriptor.bin`, `tonic_server/`) are removed post‑append to avoid accidental `include!` of intermediate files.
+
+Extension Points / Future Work:
+
+- Add tests that compile a sample proto with nested types to validate extern_path mapping.
+- Optionally gate cleanup behind an env var (e.g. `CONNECTAXUM_DEBUG_CODEGEN=1`) for debugging generated intermediate outputs.

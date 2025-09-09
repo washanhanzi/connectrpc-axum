@@ -4,15 +4,6 @@ use std::path::{Path, PathBuf};
 
 mod r#gen;
 
-pub fn compile(
-    protos: &[impl AsRef<std::path::Path>],
-    includes: &[impl AsRef<std::path::Path>],
-    mut config: prost_build::Config,
-) -> Result<()> {
-    config.service_generator(Box::new(AxumConnectServiceGenerator::new()));
-    config.compile_protos(protos, includes)
-}
-
 /// Builder for compiling proto files with optional configuration.
 pub struct CompileBuilder {
     includes_dir: PathBuf,
@@ -22,7 +13,7 @@ pub struct CompileBuilder {
 
 impl CompileBuilder {
     /// Create a new builder for the given includes directory.
-    fn new(includes_dir: impl AsRef<Path>) -> Self {
+    pub fn new(includes_dir: impl AsRef<Path>) -> Self {
         Self {
             includes_dir: includes_dir.as_ref().to_path_buf(),
             config: None,
@@ -30,51 +21,37 @@ impl CompileBuilder {
         }
     }
 
-    /// Provide a custom prost configuration.
-    /// If not called, a default configuration will be used.
+    /// Provide a custom prost_build::Config (still augmented with serde + default attributes).
     pub fn with_config(mut self, config: prost_build::Config) -> Self {
         self.config = Some(config);
         self
     }
 
-    /// Enable gRPC code generation using Tonic.
-    /// When enabled, both ConnectRPC and gRPC service code will be generated.
-    ///
-    /// Requires the `tonic` Cargo feature on `connectrpc-axum-build`.
+    /// Enable generating tonic gRPC server stubs (second pass) + tonic-compatible helpers in first pass.
     pub fn with_tonic(mut self) -> Self {
-        #[cfg(feature = "tonic")]
-        {
-            self.grpc = true;
-            return self;
-        }
-        #[cfg(not(feature = "tonic"))]
-        {
-            // Fail fast when the method is used without enabling the feature.
-            // This triggers during the build script execution.
-            panic!(
-                "connectrpc-axum-build: with_tonic() requires the 'tonic' feature. \
-                 Enable it on connectrpc-axum-build (e.g., features = [\"tonic\"])."
-            );
-        }
+        self.grpc = true;
+        self
     }
 
-    /// Compile the proto files.
+    /// Execute code generation.
     pub fn compile(self) -> Result<()> {
+        // -------- Pass 1: prost + connect (always) --------
         let mut config = self.config.unwrap_or_else(|| {
-            let mut config = prost_build::Config::new();
-            // Set up default configuration for JSON serialization
-            config.type_attribute(".", "#[derive(::serde::Serialize, ::serde::Deserialize)]");
-            config.type_attribute(".", "#[serde(rename_all = \"camelCase\")]");
-            // Ensure missing JSON fields (including repeated vectors) default properly during deserialization
-            config.type_attribute(".", "#[serde(default)]");
-            config.extern_path(".serde", "::serde");
-            config
+            let mut cfg = prost_build::Config::new();
+            cfg.type_attribute(".", "#[derive(::serde::Serialize, ::serde::Deserialize)]");
+            cfg.type_attribute(".", "#[serde(rename_all = \"camelCase\")]");
+            cfg.type_attribute(".", "#[serde(default)]");
+            // Only need descriptor set if we will run second pass (tonic)
+            if cfg!(feature = "tonic") && self.grpc {
+                if let Ok(out_dir) = std::env::var("OUT_DIR") {
+                    cfg.file_descriptor_set_path(format!("{}/descriptor.bin", out_dir));
+                }
+            }
+            cfg
         });
 
-        // Auto-discover all .proto files in the includes directory
         let mut proto_files = Vec::new();
         discover_proto_files(&self.includes_dir, &mut proto_files)?;
-
         if proto_files.is_empty() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -85,124 +62,165 @@ impl CompileBuilder {
             ));
         }
 
-        // Generate ConnectRPC service code first; include Tonic-compatible surfaces only if requested
+        // Generate connect (and tonic-compatible wrapper builders if requested) in first pass
         let service_generator = AxumConnectServiceGenerator::with_tonic(self.grpc);
         config.service_generator(Box::new(service_generator));
         config.compile_protos(&proto_files, &[&self.includes_dir])?;
 
-        // Keep Prost output as `{stem}.rs` and append other generated content as needed.
-
-        // Generate gRPC service code if enabled and append to existing file
+        // -------- Pass 2: tonic server-only (feature + user requested) --------
         #[cfg(feature = "tonic")]
         if self.grpc {
-            let proto_file_paths: Vec<&str> =
-                proto_files.iter().map(|p| p.to_str().unwrap()).collect();
+            use prost::Message; // for descriptor decode
+            use std::fs;
 
-            // Generate gRPC code to a temporary location then append
-            let temp_out_dir = format!("{}/grpc_temp", std::env::var("OUT_DIR").unwrap());
-            std::fs::create_dir_all(&temp_out_dir)?;
-
-            // Generate tonic gRPC server code into the temp directory
-            tonic_prost_build::configure()
-                .out_dir(&temp_out_dir)
-                .build_client(false)
-                .compile_protos(
-                    &proto_file_paths,
-                    &[self.includes_dir.as_path().to_str().unwrap()],
-                )?;
-
-            // Read the tonic-generated file and append it to our ConnectRPC file
             let out_dir = std::env::var("OUT_DIR").unwrap();
-            for proto_file in &proto_files {
-                let file_stem = proto_file.file_stem().unwrap().to_str().unwrap();
-                let connect_file = format!("{}/{}.rs", out_dir, file_stem);
-                let grpc_file = format!("{}/{}.rs", temp_out_dir, file_stem);
+            let descriptor_path = format!("{}/descriptor.bin", out_dir);
+            let bytes = fs::read(&descriptor_path)
+                .map_err(|e| std::io::Error::other(format!("read descriptor: {e}")))?;
+            let fds = prost_types::FileDescriptorSet::decode(bytes.as_slice())
+                .map_err(|e| std::io::Error::other(format!("decode descriptor: {e}")))?;
 
-                if std::path::Path::new(&grpc_file).exists() {
-                    let connect_content =
-                        std::fs::read_to_string(&connect_file).unwrap_or_else(|_| String::new());
-                    let grpc_content = std::fs::read_to_string(&grpc_file)?;
+            let type_refs = collect_type_refs(&fds);
 
-                    // Filter out duplicate message definitions from gRPC content
-                    let filtered_grpc_content = filter_duplicate_messages(&grpc_content);
+            // Generate tonic server stubs referencing existing types
+            let temp_out_dir = format!("{}/tonic_server", out_dir);
+            fs::create_dir_all(&temp_out_dir)?;
+            let mut builder = tonic_prost_build::configure();
+            builder = builder
+                .build_client(false)
+                .build_server(true)
+                .out_dir(&temp_out_dir);
+            for tr in &type_refs {
+                builder = builder.extern_path(&tr.full, &tr.rust);
+            }
+            let proto_paths: Vec<&str> = proto_files.iter().map(|p| p.to_str().unwrap()).collect();
+            builder.compile_protos(
+                &proto_paths,
+                &[self.includes_dir.as_path().to_str().unwrap()],
+            )?;
 
-                    // Combine both contents
-                    let combined = format!(
-                        "{}\n// gRPC definitions from tonic\n{}",
-                        connect_content, filtered_grpc_content
+            // Append server code to first-pass files
+            for pf in &proto_files {
+                let stem = pf.file_stem().unwrap().to_str().unwrap();
+                let first_pass_file = format!("{}/{}.rs", out_dir, stem);
+                let tonic_file = format!("{}/{}.rs", temp_out_dir, stem);
+                if std::path::Path::new(&tonic_file).exists() {
+                    let mut content = fs::read_to_string(&first_pass_file).unwrap_or_default();
+                    content.push_str(
+                        "\n// --- Tonic gRPC server stubs (extern_path reused messages) ---\n",
                     );
-                    std::fs::write(&connect_file, combined)?;
+                    content.push_str(&fs::read_to_string(&tonic_file)?);
+                    fs::write(&first_pass_file, content)?;
                 }
             }
 
-            // Clean up temp directory
-            std::fs::remove_dir_all(&temp_out_dir)?;
+            // Clean up temporary artifacts so include!(concat!(env!("OUT_DIR"), "/<file>.rs")) users don't see extras.
+            let _ = fs::remove_file(&descriptor_path);
+            let _ = fs::remove_dir_all(&temp_out_dir);
         }
 
         Ok(())
     }
 }
-
-/// Filter out duplicate message struct definitions and header comments to avoid conflicts
-fn filter_duplicate_messages(content: &str) -> String {
-    let lines: Vec<&str> = content.lines().collect();
-    let mut filtered_lines = Vec::new();
-    let mut skip_until_closing_brace = false;
-    let mut brace_depth = 0;
-    let mut i = 0;
-
-    while i < lines.len() {
-        let line = lines[i];
-        let trimmed = line.trim();
-
-        // Skip prost-build file header comments
-        if trimmed == "// This file is @generated by prost-build." {
-            i += 1;
-            continue;
-        }
-
-        // Skip duplicate derive attributes that appear before message structs
-        if trimmed.starts_with("#[derive(")
-            && i + 1 < lines.len()
-            && lines[i + 1].trim().starts_with("pub struct Hello")
-            && (lines[i + 1].contains("Request") || lines[i + 1].contains("Response"))
-        {
-            // Skip both the derive attribute and the struct definition
-            i += 1; // Skip current derive line
-            skip_until_closing_brace = true;
-            brace_depth = 0;
-            i += 1; // Move to struct line, which will be skipped in the next iteration
-            continue;
-        }
-
-        // Check if this is a message struct definition we want to skip
-        if trimmed.starts_with("pub struct Hello")
-            && (trimmed.contains("Request") || trimmed.contains("Response"))
-        {
-            skip_until_closing_brace = true;
-            brace_depth = 0;
-            i += 1;
-            continue;
-        }
-
-        if skip_until_closing_brace {
-            // Count braces to know when struct definition ends
-            brace_depth += trimmed.chars().filter(|&c| c == '{').count();
-            brace_depth = brace_depth.saturating_sub(trimmed.chars().filter(|&c| c == '}').count());
-
-            if brace_depth == 0 && trimmed == "}" {
-                skip_until_closing_brace = false;
-            }
-            i += 1;
-            continue;
-        }
-
-        filtered_lines.push(line);
-        i += 1;
-    }
-
-    filtered_lines.join("\n")
+#[cfg(feature = "tonic")]
+#[derive(Debug)]
+struct TypeRef {
+    full: String,
+    rust: String,
 }
+
+#[cfg(feature = "tonic")]
+fn collect_type_refs(fds: &prost_types::FileDescriptorSet) -> Vec<TypeRef> {
+    let mut out = Vec::new();
+    for file in &fds.file {
+        let pkg = file.package.clone().unwrap_or_default();
+        if pkg.is_empty() {
+            continue;
+        }
+        for msg in &file.message_type {
+            recurse_message(&pkg, msg, &[], &mut out);
+        }
+        for en in &file.enum_type {
+            recurse_enum(&pkg, en, &[], &mut out);
+        }
+    }
+    out
+}
+
+#[cfg(feature = "tonic")]
+fn recurse_message(
+    pkg: &str,
+    msg: &prost_types::DescriptorProto,
+    parents: &[String],
+    out: &mut Vec<TypeRef>,
+) {
+    let name = msg.name.as_deref().unwrap_or("").to_string();
+    if !name.is_empty() {
+        let full_proto = format!(
+            ".{}.{}{}",
+            pkg,
+            if parents.is_empty() {
+                String::new()
+            } else {
+                format!("{}.", parents.join("."))
+            },
+            name
+        );
+        // Prost flattens nested types by prefixing parent names with underscores; we mimic by joining with '_' for nested mapping.
+        let rust_ident = if parents.is_empty() {
+            name.clone()
+        } else {
+            format!("{}_{}", parents.join("_"), name)
+        };
+        out.push(TypeRef {
+            full: full_proto,
+            rust: format!("crate::{}", rust_ident),
+        });
+    }
+    let mut new_parents = parents.to_vec();
+    if !name.is_empty() {
+        new_parents.push(name.clone());
+    }
+    for nested in &msg.nested_type {
+        recurse_message(pkg, nested, &new_parents, out);
+    }
+    for en in &msg.enum_type {
+        recurse_enum(pkg, en, &new_parents, out);
+    }
+}
+
+#[cfg(feature = "tonic")]
+fn recurse_enum(
+    pkg: &str,
+    en: &prost_types::EnumDescriptorProto,
+    parents: &[String],
+    out: &mut Vec<TypeRef>,
+) {
+    let name = en.name.as_deref().unwrap_or("").to_string();
+    if !name.is_empty() {
+        let full_proto = format!(
+            ".{}.{}{}",
+            pkg,
+            if parents.is_empty() {
+                String::new()
+            } else {
+                format!("{}.", parents.join("."))
+            },
+            name
+        );
+        let rust_ident = if parents.is_empty() {
+            name.clone()
+        } else {
+            format!("{}_{}", parents.join("_"), name)
+        };
+        out.push(TypeRef {
+            full: full_proto,
+            rust: format!("crate::{}", rust_ident),
+        });
+    }
+}
+// (Note) Previous text-stripping approach removed; now we rely on extern_path mappings in a second pass
+// to avoid regenerating protobuf message definitions when producing tonic server stubs.
 
 /// Convenience function that auto-discovers all .proto files in the includes directory
 /// and compiles them with a default or custom configuration.

@@ -18,6 +18,7 @@ pbjson-build = "0.8"
 proc-macro2 = "1.0"
 prost = { workspace = true }
 prost-build = { workspace = true }
+prost-types = { workspace = true }
 prost-reflect = "0.16"
 protoc-fetcher = "0.1.2"
 quote = "1.0.38"
