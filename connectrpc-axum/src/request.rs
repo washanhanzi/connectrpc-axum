@@ -48,7 +48,7 @@ where
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
-    let content_type = content_type.to_string(); // Clone to avoid borrow issues
+    let content_type = content_type.to_string();
 
     let bytes = Bytes::from_request(req, _state)
         .await
@@ -59,7 +59,7 @@ where
             .map_err(|err| ConnectError::new(Code::InvalidArgument, err.to_string()))?;
         Ok(ConnectRequest(message))
     } else if content_type.starts_with(APPLICATION_JSON) {
-        let message = serde_json::from_slice(&bytes)
+        let message: T = serde_json::from_slice(&bytes)
             .map_err(|err| ConnectError::new(Code::InvalidArgument, err.to_string()))?;
         Ok(ConnectRequest(message))
     } else {

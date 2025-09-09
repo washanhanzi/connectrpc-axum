@@ -65,6 +65,8 @@ impl CompileBuilder {
             // Set up default configuration for JSON serialization
             config.type_attribute(".", "#[derive(::serde::Serialize, ::serde::Deserialize)]");
             config.type_attribute(".", "#[serde(rename_all = \"camelCase\")]");
+            // Ensure missing JSON fields (including repeated vectors) default properly during deserialization
+            config.type_attribute(".", "#[serde(default)]");
             config.extern_path(".serde", "::serde");
             config
         });
@@ -93,48 +95,48 @@ impl CompileBuilder {
         // Generate gRPC service code if enabled and append to existing file
         #[cfg(feature = "tonic")]
         if self.grpc {
-                let proto_file_paths: Vec<&str> =
-                    proto_files.iter().map(|p| p.to_str().unwrap()).collect();
+            let proto_file_paths: Vec<&str> =
+                proto_files.iter().map(|p| p.to_str().unwrap()).collect();
 
-                // Generate gRPC code to a temporary location then append
-                let temp_out_dir = format!("{}/grpc_temp", std::env::var("OUT_DIR").unwrap());
-                std::fs::create_dir_all(&temp_out_dir)?;
+            // Generate gRPC code to a temporary location then append
+            let temp_out_dir = format!("{}/grpc_temp", std::env::var("OUT_DIR").unwrap());
+            std::fs::create_dir_all(&temp_out_dir)?;
 
-                // Generate tonic gRPC server code into the temp directory
-                tonic_prost_build::configure()
-                    .out_dir(&temp_out_dir)
-                    .build_client(false)
-                    .compile_protos(
-                        &proto_file_paths,
-                        &[self.includes_dir.as_path().to_str().unwrap()],
-                    )?;
+            // Generate tonic gRPC server code into the temp directory
+            tonic_prost_build::configure()
+                .out_dir(&temp_out_dir)
+                .build_client(false)
+                .compile_protos(
+                    &proto_file_paths,
+                    &[self.includes_dir.as_path().to_str().unwrap()],
+                )?;
 
-                // Read the tonic-generated file and append it to our ConnectRPC file
-                let out_dir = std::env::var("OUT_DIR").unwrap();
-                for proto_file in &proto_files {
-                    let file_stem = proto_file.file_stem().unwrap().to_str().unwrap();
-                    let connect_file = format!("{}/{}.rs", out_dir, file_stem);
-                    let grpc_file = format!("{}/{}.rs", temp_out_dir, file_stem);
+            // Read the tonic-generated file and append it to our ConnectRPC file
+            let out_dir = std::env::var("OUT_DIR").unwrap();
+            for proto_file in &proto_files {
+                let file_stem = proto_file.file_stem().unwrap().to_str().unwrap();
+                let connect_file = format!("{}/{}.rs", out_dir, file_stem);
+                let grpc_file = format!("{}/{}.rs", temp_out_dir, file_stem);
 
-                    if std::path::Path::new(&grpc_file).exists() {
-                        let connect_content =
-                            std::fs::read_to_string(&connect_file).unwrap_or_else(|_| String::new());
-                        let grpc_content = std::fs::read_to_string(&grpc_file)?;
+                if std::path::Path::new(&grpc_file).exists() {
+                    let connect_content =
+                        std::fs::read_to_string(&connect_file).unwrap_or_else(|_| String::new());
+                    let grpc_content = std::fs::read_to_string(&grpc_file)?;
 
-                        // Filter out duplicate message definitions from gRPC content
-                        let filtered_grpc_content = filter_duplicate_messages(&grpc_content);
+                    // Filter out duplicate message definitions from gRPC content
+                    let filtered_grpc_content = filter_duplicate_messages(&grpc_content);
 
-                        // Combine both contents
-                        let combined = format!(
-                            "{}\n// gRPC definitions from tonic\n{}",
-                            connect_content, filtered_grpc_content
-                        );
-                        std::fs::write(&connect_file, combined)?;
-                    }
+                    // Combine both contents
+                    let combined = format!(
+                        "{}\n// gRPC definitions from tonic\n{}",
+                        connect_content, filtered_grpc_content
+                    );
+                    std::fs::write(&connect_file, combined)?;
                 }
+            }
 
-                // Clean up temp directory
-                std::fs::remove_dir_all(&temp_out_dir)?;
+            // Clean up temp directory
+            std::fs::remove_dir_all(&temp_out_dir)?;
         }
 
         Ok(())
