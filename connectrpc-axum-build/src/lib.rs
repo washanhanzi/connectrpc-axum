@@ -4,6 +4,11 @@ use std::path::{Path, PathBuf};
 
 mod r#gen;
 
+// Re-export build-time deps so consumers don't need to depend on them directly
+pub use prost_build as prost_build;
+#[cfg(feature = "tonic")]
+pub use tonic_prost_build as tonic_prost_build;
+
 /// Builder for compiling proto files with optional configuration.
 pub struct CompileBuilder {
     includes_dir: PathBuf,

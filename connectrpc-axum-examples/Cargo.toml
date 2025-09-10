@@ -29,5 +29,3 @@ anyhow = "1"
 connectrpc-axum-build = { path = "../connectrpc-axum-build", features = [
   "tonic",
 ] }
-prost-build = { workspace = true }
-tonic-prost-build = { workspace = true }
