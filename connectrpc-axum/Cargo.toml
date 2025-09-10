@@ -18,20 +18,20 @@ tonic = []
 axum = { workspace = true, features = ["multipart"] }
 axum-core = { workspace = true }
 axum-extra = { workspace = true, optional = true }
-base64 = "0.22.1"
-futures = "0.3.31"
-http = "1.1.0"
-http-body = "1.0"
-http-body-util = "0.1"
-hyper = "1.0"
-bytes = "1"
-pbjson = "0.8"
-pbjson-types = "0.8"
+base64 = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }
+http-body = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true }
+bytes = { workspace = true }
+pbjson = { workspace = true }
+pbjson-types = { workspace = true }
 prost = { workspace = true }
 serde = { workspace = true }
-serde_json = "1.0"
-serde_qs = "0.15"
+serde_json = { workspace = true }
+serde_qs = { workspace = true }
 tower = { workspace = true, features = ["full"] }
 tower-http = { workspace = true, features = ["cors"] }
-pin-project-lite = "0.2"
-tokio-util = { version = "0.7", features = ["io"] }
+pin-project-lite = { workspace = true }
+tokio-util = { workspace = true, features = ["io"] }

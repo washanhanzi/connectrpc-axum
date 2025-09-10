@@ -12,15 +12,15 @@ default = []
 tonic = ["dep:tonic-prost-build"]
 
 [dependencies]
-anyhow = "1.0"
-convert_case = "0.8"
-pbjson-build = "0.8"
-proc-macro2 = "1.0"
+anyhow = { workspace = true }
+convert_case = { workspace = true }
+pbjson-build = { workspace = true }
+proc-macro2 = { workspace = true }
 prost = { workspace = true }
 prost-build = { workspace = true }
 prost-types = { workspace = true }
-prost-reflect = "0.16"
-protoc-fetcher = "0.1.2"
-quote = "1.0.38"
-syn = "2.0"
+prost-reflect = { workspace = true }
+protoc-fetcher = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true }
 tonic-prost-build = { workspace = true, optional = true }
