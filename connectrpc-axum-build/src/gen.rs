@@ -279,7 +279,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                                     let _ = tx.send(Ok(resp)).await;
                                 }
                                 Err(err) => {
-                                    let _ = tx.send(Err(connect_error_to_status(err))).await;
+                                    let _ = tx.send(Err(err.into())).await;
                                 }
                             }
                             Ok(::tonic::Response::new(::tokio_stream::wrappers::ReceiverStream::new(rx)))
@@ -294,7 +294,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                             let req = connectrpc_axum::request::ConnectRequest(request.into_inner());
                             match (self.#method_name)(req).await {
                                 Ok(connectrpc_axum::response::ConnectResponse(resp)) => Ok(::tonic::Response::new(resp)),
-                                Err(err) => Err(connect_error_to_status(err)),
+                                Err(err) => Err(err.into()),
                             }
                         }
                     }
@@ -396,30 +396,6 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
 
                 impl #tonic_service_name {
                     #(#tonic_service_methods)*
-                }
-
-                // Map ConnectError to tonic::Status (generated for convenience)
-                fn connect_error_to_status(err: connectrpc_axum::error::ConnectError) -> ::tonic::Status {
-                    let code = match err.code() {
-                        connectrpc_axum::error::Code::Ok => ::tonic::Code::Ok,
-                        connectrpc_axum::error::Code::Canceled => ::tonic::Code::Cancelled,
-                        connectrpc_axum::error::Code::Unknown => ::tonic::Code::Unknown,
-                        connectrpc_axum::error::Code::InvalidArgument => ::tonic::Code::InvalidArgument,
-                        connectrpc_axum::error::Code::DeadlineExceeded => ::tonic::Code::DeadlineExceeded,
-                        connectrpc_axum::error::Code::NotFound => ::tonic::Code::NotFound,
-                        connectrpc_axum::error::Code::AlreadyExists => ::tonic::Code::AlreadyExists,
-                        connectrpc_axum::error::Code::PermissionDenied => ::tonic::Code::PermissionDenied,
-                        connectrpc_axum::error::Code::ResourceExhausted => ::tonic::Code::ResourceExhausted,
-                        connectrpc_axum::error::Code::FailedPrecondition => ::tonic::Code::FailedPrecondition,
-                        connectrpc_axum::error::Code::Aborted => ::tonic::Code::Aborted,
-                        connectrpc_axum::error::Code::OutOfRange => ::tonic::Code::OutOfRange,
-                        connectrpc_axum::error::Code::Unimplemented => ::tonic::Code::Unimplemented,
-                        connectrpc_axum::error::Code::Internal => ::tonic::Code::Internal,
-                        connectrpc_axum::error::Code::Unavailable => ::tonic::Code::Unavailable,
-                        connectrpc_axum::error::Code::DataLoss => ::tonic::Code::DataLoss,
-                        connectrpc_axum::error::Code::Unauthenticated => ::tonic::Code::Unauthenticated,
-                    };
-                    ::tonic::Status::new(code, err.message().unwrap_or(""))
                 }
 
                 // Implement the tonic service trait for the generated boxed service

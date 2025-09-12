@@ -161,6 +161,37 @@ impl IntoResponse for ConnectError {
     }
 }
 
+// ---- Conversions from HTTP status codes ----
+
+impl From<(StatusCode, String)> for ConnectError {
+    /// Convert an HTTP status code and message into a ConnectError.
+    ///
+    /// This provides a simple DX helper to lift common HTTP errors into
+    /// Connect's error space.
+    fn from(value: (StatusCode, String)) -> Self {
+        let (status, message) = value;
+        let code = http_status_to_connect_code(status);
+        ConnectError::new(code, message)
+    }
+}
+
+fn http_status_to_connect_code(status: StatusCode) -> Code {
+    match status {
+        StatusCode::OK => Code::Ok,
+        StatusCode::BAD_REQUEST => Code::InvalidArgument,
+        StatusCode::UNAUTHORIZED => Code::Unauthenticated,
+        StatusCode::FORBIDDEN => Code::PermissionDenied,
+        StatusCode::NOT_FOUND => Code::NotFound,
+        StatusCode::CONFLICT => Code::AlreadyExists,
+        StatusCode::REQUEST_TIMEOUT => Code::DeadlineExceeded,
+        StatusCode::TOO_MANY_REQUESTS => Code::ResourceExhausted,
+        StatusCode::NOT_IMPLEMENTED => Code::Unimplemented,
+        StatusCode::SERVICE_UNAVAILABLE => Code::Unavailable,
+        StatusCode::INTERNAL_SERVER_ERROR => Code::Internal,
+        _ => Code::Unknown,
+    }
+}
+
 /// The JSON body structure for error responses.
 #[derive(Serialize)]
 struct ErrorResponseBody {
@@ -202,5 +233,81 @@ impl Serialize for ConnectError {
             details: self.details.clone(),
         }
         .serialize(serializer)
+    }
+}
+
+// ---- Conversions from tonic types (feature-gated) ----
+#[cfg(feature = "tonic")]
+impl From<::tonic::Code> for Code {
+    fn from(code: ::tonic::Code) -> Self {
+        match code {
+            ::tonic::Code::Ok => Code::Ok,
+            ::tonic::Code::Cancelled => Code::Canceled,
+            ::tonic::Code::Unknown => Code::Unknown,
+            ::tonic::Code::InvalidArgument => Code::InvalidArgument,
+            ::tonic::Code::DeadlineExceeded => Code::DeadlineExceeded,
+            ::tonic::Code::NotFound => Code::NotFound,
+            ::tonic::Code::AlreadyExists => Code::AlreadyExists,
+            ::tonic::Code::PermissionDenied => Code::PermissionDenied,
+            ::tonic::Code::ResourceExhausted => Code::ResourceExhausted,
+            ::tonic::Code::FailedPrecondition => Code::FailedPrecondition,
+            ::tonic::Code::Aborted => Code::Aborted,
+            ::tonic::Code::OutOfRange => Code::OutOfRange,
+            ::tonic::Code::Unimplemented => Code::Unimplemented,
+            ::tonic::Code::Internal => Code::Internal,
+            ::tonic::Code::Unavailable => Code::Unavailable,
+            ::tonic::Code::DataLoss => Code::DataLoss,
+            ::tonic::Code::Unauthenticated => Code::Unauthenticated,
+        }
+    }
+}
+
+#[cfg(feature = "tonic")]
+impl From<::tonic::Status> for ConnectError {
+    fn from(status: ::tonic::Status) -> Self {
+        let code: Code = status.code().into();
+        let msg = status.message().to_string();
+
+        // Note: Tonic status can carry metadata, but Connect error metadata is HTTP headers.
+        // We currently carry just code + message to align with Connect JSON shape.
+        // Details are not directly accessible from `tonic::Status`.
+        if msg.is_empty() {
+            ConnectError::from_code(code)
+        } else {
+            ConnectError::new(code, msg)
+        }
+    }
+}
+
+#[cfg(feature = "tonic")]
+impl From<Code> for ::tonic::Code {
+    fn from(code: Code) -> Self {
+        match code {
+            Code::Ok => ::tonic::Code::Ok,
+            Code::Canceled => ::tonic::Code::Cancelled,
+            Code::Unknown => ::tonic::Code::Unknown,
+            Code::InvalidArgument => ::tonic::Code::InvalidArgument,
+            Code::DeadlineExceeded => ::tonic::Code::DeadlineExceeded,
+            Code::NotFound => ::tonic::Code::NotFound,
+            Code::AlreadyExists => ::tonic::Code::AlreadyExists,
+            Code::PermissionDenied => ::tonic::Code::PermissionDenied,
+            Code::ResourceExhausted => ::tonic::Code::ResourceExhausted,
+            Code::FailedPrecondition => ::tonic::Code::FailedPrecondition,
+            Code::Aborted => ::tonic::Code::Aborted,
+            Code::OutOfRange => ::tonic::Code::OutOfRange,
+            Code::Unimplemented => ::tonic::Code::Unimplemented,
+            Code::Internal => ::tonic::Code::Internal,
+            Code::Unavailable => ::tonic::Code::Unavailable,
+            Code::DataLoss => ::tonic::Code::DataLoss,
+            Code::Unauthenticated => ::tonic::Code::Unauthenticated,
+        }
+    }
+}
+
+#[cfg(feature = "tonic")]
+impl From<ConnectError> for ::tonic::Status {
+    fn from(err: ConnectError) -> Self {
+        let code: ::tonic::Code = err.code().into();
+        ::tonic::Status::new(code, err.message().unwrap_or("").to_string())
     }
 }

@@ -276,7 +276,7 @@ dependencies = [
 
 [[package]]
 name = "connectrpc-axum"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "axum",
  "axum-core",
@@ -296,13 +296,14 @@ dependencies = [
  "serde_json",
  "serde_qs",
  "tokio-util",
+ "tonic",
  "tower",
  "tower-http",
 ]
 
 [[package]]
 name = "connectrpc-axum-build"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "convert_case",
