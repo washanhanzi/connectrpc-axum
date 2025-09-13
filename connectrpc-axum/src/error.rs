@@ -170,25 +170,26 @@ impl From<(StatusCode, String)> for ConnectError {
     /// Connect's error space.
     fn from(value: (StatusCode, String)) -> Self {
         let (status, message) = value;
-        let code = http_status_to_connect_code(status);
-        ConnectError::new(code, message)
+        ConnectError::new(status.into(), message)
     }
 }
 
-fn http_status_to_connect_code(status: StatusCode) -> Code {
-    match status {
-        StatusCode::OK => Code::Ok,
-        StatusCode::BAD_REQUEST => Code::InvalidArgument,
-        StatusCode::UNAUTHORIZED => Code::Unauthenticated,
-        StatusCode::FORBIDDEN => Code::PermissionDenied,
-        StatusCode::NOT_FOUND => Code::NotFound,
-        StatusCode::CONFLICT => Code::AlreadyExists,
-        StatusCode::REQUEST_TIMEOUT => Code::DeadlineExceeded,
-        StatusCode::TOO_MANY_REQUESTS => Code::ResourceExhausted,
-        StatusCode::NOT_IMPLEMENTED => Code::Unimplemented,
-        StatusCode::SERVICE_UNAVAILABLE => Code::Unavailable,
-        StatusCode::INTERNAL_SERVER_ERROR => Code::Internal,
-        _ => Code::Unknown,
+impl From<StatusCode> for Code {
+    fn from(status: StatusCode) -> Self {
+        match status {
+            StatusCode::OK => Code::Ok,
+            StatusCode::BAD_REQUEST => Code::InvalidArgument,
+            StatusCode::UNAUTHORIZED => Code::Unauthenticated,
+            StatusCode::FORBIDDEN => Code::PermissionDenied,
+            StatusCode::NOT_FOUND => Code::NotFound,
+            StatusCode::CONFLICT => Code::AlreadyExists,
+            StatusCode::REQUEST_TIMEOUT => Code::DeadlineExceeded,
+            StatusCode::TOO_MANY_REQUESTS => Code::ResourceExhausted,
+            StatusCode::NOT_IMPLEMENTED => Code::Unimplemented,
+            StatusCode::SERVICE_UNAVAILABLE => Code::Unavailable,
+            StatusCode::INTERNAL_SERVER_ERROR => Code::Internal,
+            _ => Code::Unknown,
+        }
     }
 }
 
