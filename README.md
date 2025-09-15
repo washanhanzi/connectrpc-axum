@@ -3,6 +3,7 @@
 Axum-style Connect RPC server.
 
 > Work in progress.
+> Don't use in procudtion.
 
 ## 1 Code Generation (build.rs)
 
@@ -12,10 +13,10 @@ Add a build script to generate code from your `.proto` files.
 // build.rs
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // EITHER: Connect-only
-    // connectrpc_axum_build::compile_dir("proto").compile()?;
+    connectrpc_axum_build::compile_dir("proto").compile()?;
 
     // OR: Connect + Tonic (enable the "tonic" feature on the build crate)
-    connectrpc_axum_build::compile_dir("proto").with_tonic().compile()?;
+    // connectrpc_axum_build::compile_dir("proto").with_tonic().compile()?;
     Ok(())
 }
 ```
