@@ -1,0 +1,193 @@
+[config]
+default_to_workspace = false
+skip_core_tasks = true
+
+# ============================================================================
+# Rust Server Tasks
+# ============================================================================
+
+[tasks.run-connect-only]
+description = "Run the connect-only example server"
+category = "Rust Servers"
+command = "cargo"
+args = ["run", "--bin", "connect-only"]
+
+[tasks.run-connect-tonic]
+description = "Run the connect-tonic example server"
+category = "Rust Servers"
+command = "cargo"
+args = ["run", "--bin", "connect-tonic"]
+
+[tasks.run-connect-tonic-bidi]
+description = "Run the connect-tonic-bidi-stream example server"
+category = "Rust Servers"
+command = "cargo"
+args = ["run", "--bin", "connect-tonic-bidi-stream"]
+
+[tasks.build-servers]
+description = "Build all example servers"
+category = "Rust Servers"
+command = "cargo"
+args = ["build", "--bins"]
+
+# ============================================================================
+# Go Client Tasks
+# ============================================================================
+
+[tasks.go-generate]
+description = "Generate Go protobuf code from .proto files (using buf managed mode)"
+category = "Go Client"
+script = [
+  "buf generate",
+]
+
+[tasks.go-deps]
+description = "Download Go dependencies"
+category = "Go Client"
+cwd = "go-client"
+command = "go"
+args = ["mod", "download"]
+
+[tasks.go-build-client]
+description = "Build the Go streaming test client"
+category = "Go Client"
+cwd = "go-client"
+command = "go"
+args = ["build", "-o", "go-client", "./cmd/client"]
+dependencies = ["go-generate"]
+
+[tasks.go-build-server]
+description = "Build the Go reference server"
+category = "Go Server"
+cwd = "go-client"
+command = "go"
+args = ["build", "-o", "go-server", "./cmd/server"]
+dependencies = ["go-generate"]
+
+[tasks.go-build]
+description = "Build both Go client and server"
+category = "Go Client"
+dependencies = ["go-build-client", "go-build-server"]
+
+[tasks.go-run-client]
+description = "Build and run the Go streaming test client"
+category = "Go Client"
+cwd = "go-client"
+script = ["./go-client"]
+dependencies = ["go-build-client"]
+
+[tasks.go-run-server]
+description = "Build and run the Go reference server"
+category = "Go Server"
+cwd = "go-client"
+script = ["./go-server"]
+dependencies = ["go-build-server"]
+
+[tasks.go-run]
+description = "Build and run the Go streaming test client (alias for go-run-client)"
+category = "Go Client"
+alias = "go-run-client"
+
+[tasks.go-clean]
+description = "Clean Go generated files and binaries"
+category = "Go Client"
+script = [
+  "cd go-client",
+  "rm -rf gen/",
+  "rm -f go-client go-server",
+  "echo 'Cleaned Go client and server artifacts'"
+]
+
+# ============================================================================
+# Combined Tasks
+# ============================================================================
+
+[tasks.build-all]
+description = "Build all Rust servers and Go client"
+category = "Build"
+dependencies = ["build-servers", "go-build"]
+
+[tasks.clean-all]
+description = "Clean all generated files and binaries"
+category = "Clean"
+dependencies = ["go-clean"]
+script = ["cargo clean", "echo 'Cleaned all artifacts'"]
+
+# ============================================================================
+# Help and Documentation
+# ============================================================================
+
+[tasks.default]
+description = "Show available tasks"
+alias = "help"
+
+[tasks.help]
+description = "Show all available tasks with descriptions"
+script = [
+  "echo '================================================================================'",
+  "echo '         ConnectRPC Axum Examples - Task Runner (cargo-make)               '",
+  "echo '================================================================================'",
+  "echo ''",
+  "echo 'RUST SERVERS'",
+  "echo '  cargo make run-connect-only       - Run connect-only example (port 3000)'",
+  "echo '  cargo make run-connect-tonic      - Run connect-tonic example'",
+  "echo '  cargo make run-connect-tonic-bidi - Run bidi streaming example'",
+  "echo '  cargo make build-servers          - Build all server examples'",
+  "echo ''",
+  "echo 'GO CLIENT'",
+  "echo '  cargo make go-generate            - Generate Go protobuf code'",
+  "echo '  cargo make go-build               - Build both Go client and server'",
+  "echo '  cargo make go-build-client        - Build Go streaming test client only'",
+  "echo '  cargo make go-build-server        - Build Go reference server only'",
+  "echo '  cargo make go-run                 - Run Go streaming test client'",
+  "echo '  cargo make go-run-client          - Run Go streaming test client'",
+  "echo '  cargo make go-run-server          - Run Go reference server (port 3001)'",
+  "echo '  cargo make go-deps                - Download Go dependencies'",
+  "echo '  cargo make go-clean               - Clean Go generated files'",
+  "echo ''",
+  "echo 'BUILD & CLEAN'",
+  "echo '  cargo make build-all              - Build all Rust servers and Go client'",
+  "echo '  cargo make clean-all              - Clean all generated files'",
+  "echo ''",
+  "echo 'QUICK START - Test Rust Server'",
+  "echo '  1. cargo make go-generate         # Generate Go code (one-time setup)'",
+  "echo '  2. cargo make run-connect-only    # Terminal 1: Start Rust server (port 3000)'",
+  "echo '  3. cargo make go-run              # Terminal 2: Run client tests'",
+  "echo ''",
+  "echo 'QUICK START - Test Go Reference Server'",
+  "echo '  1. cargo make go-generate         # Generate Go code (one-time setup)'",
+  "echo '  2. cargo make go-run-server       # Terminal 1: Start Go server (port 3001)'",
+  "echo '  3. Update serverURL in go-client/cmd/client/main.go to localhost:3001'",
+  "echo '  4. cargo make go-run              # Terminal 2: Run client tests'",
+  "echo ''",
+  "echo 'For more info: https://sagiegurari.github.io/cargo-make/'",
+]
+
+# ============================================================================
+# Setup Task
+# ============================================================================
+
+[tasks.setup]
+description = "Initial setup - install dependencies and generate code"
+category = "Setup"
+script = [
+  "echo 'Setting up ConnectRPC Axum Examples...'",
+  "echo ''",
+  "echo '1. Generating Go protobuf code...'",
+  "cargo make go-generate",
+  "echo ''",
+  "echo '2. Building Rust servers...'",
+  "cargo make build-servers",
+  "echo ''",
+  "echo '3. Building Go client...'",
+  "cargo make go-build",
+  "echo ''",
+  "echo 'Setup complete! Run cargo make help to see available tasks'"
+]
+
+[tasks.watch-server]
+description = "Watch and auto-restart connect-only server on changes"
+category = "Development"
+install_crate = { crate_name = "cargo-watch", binary = "cargo-watch", test_arg = "--version" }
+command = "cargo"
+args = ["watch", "-x", "run --bin connect-only"]

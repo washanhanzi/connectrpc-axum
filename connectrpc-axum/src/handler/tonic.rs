@@ -4,9 +4,14 @@ use axum::{
     response::{IntoResponse, Response},
     routing::MethodRouter,
 };
+use futures::Stream;
 use std::{future::Future, pin::Pin};
 
-use crate::{error::ConnectError, request::ConnectRequest, response::ConnectResponse};
+use crate::{
+    error::ConnectError,
+    request::ConnectRequest,
+    response::{ConnectResponse, StreamBody},
+};
 
 // =============== Factory trait for deferred handler boxing ===============
 /// Strict wrapper that only allows Tonic-compatible handler patterns
@@ -16,6 +21,14 @@ use crate::{error::ConnectError, request::ConnectRequest, response::ConnectRespo
 /// - `(axum::extract::State<S>, ConnectRequest<Req>) -> impl Future<Result<ConnectResponse<Resp>, ConnectError>>`
 #[derive(Clone)]
 pub struct TonicCompatibleHandlerWrapper<F>(pub F);
+
+/// Strict wrapper for Tonic-compatible streaming handler patterns
+///
+/// Allowed handler signatures:
+/// - `(ConnectRequest<Req>) -> impl Future<Result<ConnectResponse<StreamBody<S>>, ConnectError>>`
+/// - `(axum::extract::State<S>, ConnectRequest<Req>) -> impl Future<Result<ConnectResponse<StreamBody<St>>, ConnectError>>`
+#[derive(Clone)]
+pub struct TonicCompatibleStreamHandlerWrapper<F>(pub F);
 
 // =============== Boxed callable and IntoFactory adapters ===============
 
@@ -31,10 +44,37 @@ pub type BoxedCall<Req, Resp> = Box<
         + Sync,
 >;
 
+/// Boxed stream type for streaming responses
+pub type BoxedStream<T> = Pin<Box<dyn Stream<Item = Result<T, ConnectError>> + Send + 'static>>;
+
+/// Boxed callable for streaming methods used by generated tonic-compatible services.
+pub type BoxedStreamCall<Req, Resp> = Box<
+    dyn Fn(
+            ConnectRequest<Req>,
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<
+                            ConnectResponse<StreamBody<BoxedStream<Resp>>>,
+                            ConnectError,
+                        >,
+                    > + Send
+                    + 'static,
+            >,
+        > + Send
+        + Sync,
+>;
+
 /// Adapter that turns a user handler `F` into a factory that, given `&S`, yields a `BoxedCall`.
 /// Keyed by the extractor tuple `T` to select the appropriate implementation.
 pub trait IntoFactory<T, Req, Resp, S> {
     fn into_factory(self) -> Box<dyn Fn(&S) -> BoxedCall<Req, Resp> + Send + Sync>;
+}
+
+/// Adapter that turns a streaming user handler `F` into a factory that, given `&S`, yields a `BoxedStreamCall`.
+/// Keyed by the extractor tuple `T` to select the appropriate implementation.
+pub trait IntoStreamFactory<T, Req, Resp, S> {
+    fn into_stream_factory(self) -> Box<dyn Fn(&S) -> BoxedStreamCall<Req, Resp> + Send + Sync>;
 }
 
 /// Trait for tonic-compatible handlers with specific request/response types
@@ -77,6 +117,71 @@ where
                 let state = axum::extract::State(state_cloned.clone());
                 let fut = f(state, req);
                 Box::pin(async move { fut.await })
+            })
+        })
+    }
+}
+
+// =============== IntoStreamFactory implementations for streaming handlers ===============
+
+// no-state: (ConnectRequest<Req>,)
+impl<F, Fut, Req, Resp, St, S> IntoStreamFactory<(ConnectRequest<Req>,), Req, Resp, S>
+    for TonicCompatibleStreamHandlerWrapper<F>
+where
+    F: Fn(ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
+    St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
+    S: Clone + Send + Sync + 'static,
+    Req: Send + Sync + 'static,
+    Resp: Send + Sync + 'static,
+{
+    fn into_stream_factory(self) -> Box<dyn Fn(&S) -> BoxedStreamCall<Req, Resp> + Send + Sync> {
+        let f = self.0.clone();
+        Box::new(move |_state: &S| {
+            let f = f.clone();
+            Box::new(move |req: ConnectRequest<Req>| {
+                let fut = f(req);
+                Box::pin(async move {
+                    // Execute the handler and map the stream to BoxedStream
+                    fut.await.map(|response| {
+                        let stream = response.into_inner().into_inner();
+                        let boxed_stream: BoxedStream<Resp> = Box::pin(stream);
+                        ConnectResponse(StreamBody::new(boxed_stream))
+                    })
+                })
+            })
+        })
+    }
+}
+
+// with-state: (State<S>, ConnectRequest<Req>)
+impl<F, Fut, Req, Resp, St, S>
+    IntoStreamFactory<(axum::extract::State<S>, ConnectRequest<Req>), Req, Resp, S>
+    for TonicCompatibleStreamHandlerWrapper<F>
+where
+    F: Fn(axum::extract::State<S>, ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
+    St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
+    S: Clone + Send + Sync + 'static,
+    Req: Send + Sync + 'static,
+    Resp: Send + Sync + 'static,
+{
+    fn into_stream_factory(self) -> Box<dyn Fn(&S) -> BoxedStreamCall<Req, Resp> + Send + Sync> {
+        let f = self.0.clone();
+        Box::new(move |state_ref: &S| {
+            let f = f.clone();
+            let state_cloned = state_ref.clone();
+            Box::new(move |req: ConnectRequest<Req>| {
+                let state = axum::extract::State(state_cloned.clone());
+                let fut = f(state, req);
+                Box::pin(async move {
+                    // Execute the handler and map the stream to BoxedStream
+                    fut.await.map(|response| {
+                        let stream = response.into_inner().into_inner();
+                        let boxed_stream: BoxedStream<Resp> = Box::pin(stream);
+                        ConnectResponse(StreamBody::new(boxed_stream))
+                    })
+                })
             })
         })
     }
@@ -173,9 +278,105 @@ where
     axum::routing::post(TonicCompatibleHandlerWrapper(f))
 }
 
+/// Creates a POST method router from a TonicCompatible streaming handler function (strict mode)
+pub fn post_connect_tonic_stream<F, T, S>(f: F) -> MethodRouter<S>
+where
+    S: Clone + Send + Sync + 'static,
+    TonicCompatibleStreamHandlerWrapper<F>: Handler<T, S>,
+    T: 'static,
+{
+    axum::routing::post(TonicCompatibleStreamHandlerWrapper(f))
+}
+
+// =============== Streaming Handler Implementations ===============
+
+// Implement Handler for TonicCompatibleStreamHandlerWrapper (no-state)
+impl<F, Fut, Req, Resp, St> Handler<(ConnectRequest<Req>,), ()>
+    for TonicCompatibleStreamHandlerWrapper<F>
+where
+    F: Fn(ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
+    St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
+    ConnectRequest<Req>: FromRequest<()>,
+    ConnectResponse<StreamBody<St>>: IntoResponse,
+    Req: Send + Sync + 'static,
+    Resp: Send + Sync + 'static,
+{
+    type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
+
+    fn call(self, req: Request, _state: ()) -> Self::Future {
+        Box::pin(async move {
+            // Extract the ConnectRequest (body only)
+            let connect_req = match ConnectRequest::<Req>::from_request(req, &()).await {
+                Ok(value) => value,
+                Err(err) => return err.into_response(),
+            };
+
+            // Call the handler function
+            let result = (self.0)(connect_req).await;
+
+            // Convert result to response
+            match result {
+                Ok(response) => response.into_response(),
+                Err(err) => err.into_response(),
+            }
+        })
+    }
+}
+
+// Implement Handler for TonicCompatibleStreamHandlerWrapper (with-state)
+impl<F, Fut, S, Req, Resp, St> Handler<(axum::extract::State<S>, ConnectRequest<Req>), S>
+    for TonicCompatibleStreamHandlerWrapper<F>
+where
+    F: Fn(axum::extract::State<S>, ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
+    St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
+    ConnectRequest<Req>: FromRequest<S>,
+    S: Clone + Send + Sync + 'static,
+    ConnectResponse<StreamBody<St>>: IntoResponse,
+    Req: Send + Sync + 'static,
+    Resp: Send + Sync + 'static,
+{
+    type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
+
+    fn call(self, req: Request, state: S) -> Self::Future {
+        Box::pin(async move {
+            // Clone state for the extractor and extract body directly
+            let state_extractor = axum::extract::State(state.clone());
+
+            // Extract the ConnectRequest (body)
+            let connect_req = match ConnectRequest::<Req>::from_request(req, &state).await {
+                Ok(value) => value,
+                Err(err) => return err.into_response(),
+            };
+
+            // Call the handler function
+            let result = (self.0)(state_extractor, connect_req).await;
+
+            // Convert result to response
+            match result {
+                Ok(response) => response.into_response(),
+                Err(err) => err.into_response(),
+            }
+        })
+    }
+}
+
 /// Creates an unimplemented handler that returns ConnectError::unimplemented for the given method name
 /// Convenience: produce an unimplemented boxed call for a method.
 pub fn unimplemented_boxed_call<Req, Resp>() -> BoxedCall<Req, Resp>
+where
+    Req: Send + Sync + 'static,
+    Resp: Send + Sync + 'static,
+{
+    Box::new(|_req: ConnectRequest<Req>| {
+        Box::pin(async move { Err(ConnectError::new_unimplemented()) })
+    })
+}
+
+/// Creates an unimplemented handler that returns ConnectError::unimplemented for streaming methods
+/// Convenience: produce an unimplemented boxed stream call for a method.
+pub fn unimplemented_boxed_stream_call<Req, Resp>() -> BoxedStreamCall<Req, Resp>
 where
     Req: Send + Sync + 'static,
     Resp: Send + Sync + 'static,

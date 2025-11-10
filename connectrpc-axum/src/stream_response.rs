@@ -11,7 +11,7 @@ use axum::{
     http::{HeaderValue, header},
     response::{IntoResponse, Response},
 };
-use futures::{Stream, TryStreamExt};
+use futures::Stream;
 use prost::Message;
 use serde::Serialize;
 
@@ -45,28 +45,66 @@ where
     T: Message + Serialize + Send + 'static,
 {
     fn into_response(self) -> Response {
+        use axum::http::StatusCode;
+        use futures::StreamExt;
+
+        // Track whether an error occurred to determine the final EndStreamResponse
         let body_stream = self
             .stream
-            .map_ok(|msg| {
-                let mut buf = vec![0u8; 5];
-                serde_json::to_writer(&mut buf, &msg).unwrap();
-                let len = (buf.len() - 5) as u32;
-                buf[1..5].copy_from_slice(&len.to_be_bytes());
-                Bytes::from(buf)
+            .map(|result| match result {
+                Ok(msg) => {
+                    // Regular message frame with flags=0x00
+                    let mut buf = vec![0u8; 5];
+                    serde_json::to_writer(&mut buf, &msg).unwrap();
+                    let len = (buf.len() - 5) as u32;
+                    buf[1..5].copy_from_slice(&len.to_be_bytes());
+                    Ok(Bytes::from(buf))
+                }
+                Err(err) => {
+                    // Error EndStreamResponse with flags=0x02 (EndStream)
+                    let mut buf = vec![0b0000_0010u8, 0, 0, 0, 0];
+                    let json = serde_json::json!({ "error": err });
+                    serde_json::to_writer(&mut buf, &json).unwrap();
+                    let len = (buf.len() - 5) as u32;
+                    buf[1..5].copy_from_slice(&len.to_be_bytes());
+                    Err(Bytes::from(buf)) // Mark as error to prevent success EndStream
+                }
             })
-            .or_else(|err| {
-                let mut buf = vec![0b0000_0010u8, 0, 0, 0, 0]; // End stream flag
-                let json = serde_json::json!({ "error": err });
+            .chain(futures::stream::once(async {
+                // Success EndStreamResponse with flags=0x02 (EndStream)
+                // This is sent only if no error occurred (handled by scan below)
+                let mut buf = vec![0b0000_0010u8, 0, 0, 0, 0];
+                let json = serde_json::json!({});
                 serde_json::to_writer(&mut buf, &json).unwrap();
                 let len = (buf.len() - 5) as u32;
                 buf[1..5].copy_from_slice(&len.to_be_bytes());
-                futures::future::ready(Ok::<Bytes, std::convert::Infallible>(Bytes::from(buf)))
+                Ok(Bytes::from(buf))
+            }))
+            // Take messages while they're Ok, stop after first Err (which contains the error EndStream)
+            .scan(false, |error_seen, item| {
+                if *error_seen {
+                    futures::future::ready(None)
+                } else {
+                    match item {
+                        Err(_) => {
+                            *error_seen = true;
+                            futures::future::ready(Some(item))
+                        }
+                        Ok(_) => futures::future::ready(Some(item)),
+                    }
+                }
+            })
+            // Convert Result<Bytes, Bytes> to Result<Bytes, Infallible>
+            .map(|item| match item {
+                Ok(bytes) => Ok::<_, std::convert::Infallible>(bytes),
+                Err(bytes) => Ok::<_, std::convert::Infallible>(bytes),
             });
 
         // Convert the stream directly to Body
         let body = Body::from_stream(body_stream);
 
         Response::builder()
+            .status(StatusCode::OK)
             .header(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static("application/connect+json"),

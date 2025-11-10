@@ -2,6 +2,7 @@ pub mod error;
 pub mod handler;
 pub mod request;
 pub mod response;
+pub mod service_builder;
 pub mod stream_response;
 #[cfg(feature = "tonic")]
 pub mod tonic;
@@ -15,6 +16,7 @@ pub use handler::{
     unimplemented_boxed_call,
 };
 pub use handler::{ConnectHandler, ConnectHandlerWrapper, post_connect};
+pub use service_builder::MakeServiceBuilder;
 
 // Re-export several crates
 pub use futures;
@@ -33,9 +35,13 @@ pub mod prelude {
         BoxedCall, IntoFactory, TonicCompatibleHandlerWrapper, post_connect_tonic,
         unimplemented_boxed_call,
     };
-    pub use crate::handler::{ConnectHandler, ConnectHandlerWrapper, post_connect};
+    pub use crate::handler::{
+        ConnectHandler, ConnectHandlerWrapper, ConnectStreamHandlerWrapper, post_connect,
+        post_connect_stream,
+    };
     pub use crate::request::ConnectRequest;
-    pub use crate::response::ConnectResponse;
+    pub use crate::response::{ConnectResponse, StreamBody};
+    pub use crate::service_builder::MakeServiceBuilder;
     pub use crate::stream_response::ConnectStreamResponse;
     #[cfg(feature = "tonic")]
     pub use crate::tonic::{ContentTypeSwitch, TonicCompatible};

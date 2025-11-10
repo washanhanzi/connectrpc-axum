@@ -1,0 +1,12 @@
+# Binaries
+stream-test
+*.exe
+
+# Generated code
+gen/
+
+# Go
+go.sum
+
+go-client
+go-server

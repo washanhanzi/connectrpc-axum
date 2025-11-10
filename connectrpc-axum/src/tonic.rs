@@ -42,7 +42,7 @@ fn internal_error<E: std::fmt::Display>(err: E) -> AxumResponse {
 ///
 /// This allows serving both Tonic gRPC and Connect/Axum routes on the same port.
 /// Previously named `TonicCompatible`.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ContentTypeSwitch<G, H> {
     grpc: G,
     http: H,

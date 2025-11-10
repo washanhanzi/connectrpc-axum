@@ -57,6 +57,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                 );
                 let stream_assoc = format_ident!("{}Stream", method.proto_name);
                 let is_server_streaming = method.server_streaming;
+                let is_client_streaming = method.client_streaming;
                 (
                     method_name,
                     request_type,
@@ -64,25 +65,52 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                     path,
                     stream_assoc,
                     is_server_streaming,
+                    is_client_streaming,
                 )
             })
             .collect();
 
         // Generate Connect-only builder methods
+        // Skip client streaming and bidirectional streaming methods (not supported by Connect)
         let connect_builder_methods: Vec<_> = method_info
             .iter()
-            .map(|(method_name, _request_type, _response_type, path, _assoc, _ss)| {
-                quote! {
-                    /// Register a handler for this RPC method
-                    pub fn #method_name<F, T>(self, handler: F) -> #service_builder_name<S>
-                    where
-                        connectrpc_axum::handler::ConnectHandlerWrapper<F>: axum::handler::Handler<T, S>,
-                        F: Clone + Send + Sync + 'static,
-                        T: 'static,
-                    {
-                        let method_router = connectrpc_axum::handler::post_connect(handler);
-                        #service_builder_name {
-                            router: self.router.route(#path, method_router),
+            .filter(|(_method_name, _request_type, _response_type, _path, _assoc, _ss, is_cs)| {
+                // Only include methods that are NOT client streaming
+                // (unary and server-streaming are supported by Connect)
+                !is_cs
+            })
+            .map(|(method_name, _request_type, _response_type, path, _assoc, is_ss, _is_cs)| {
+                // Different signatures for streaming vs unary
+                if *is_ss {
+                    // Server streaming - use ConnectStreamHandlerWrapper
+                    quote! {
+                        /// Register a handler for this RPC method (server streaming)
+                        pub fn #method_name<F, T>(self, handler: F) -> #service_builder_name<S>
+                        where
+                            connectrpc_axum::handler::ConnectStreamHandlerWrapper<F>: axum::handler::Handler<T, S>,
+                            F: Clone + Send + Sync + 'static,
+                            T: 'static,
+                        {
+                            let method_router = connectrpc_axum::handler::post_connect_stream(handler);
+                            #service_builder_name {
+                                router: self.router.route(#path, method_router),
+                            }
+                        }
+                    }
+                } else {
+                    // Unary - use ConnectHandlerWrapper
+                    quote! {
+                        /// Register a handler for this RPC method (unary)
+                        pub fn #method_name<F, T>(self, handler: F) -> #service_builder_name<S>
+                        where
+                            connectrpc_axum::handler::ConnectHandlerWrapper<F>: axum::handler::Handler<T, S>,
+                            F: Clone + Send + Sync + 'static,
+                            T: 'static,
+                        {
+                            let method_router = connectrpc_axum::handler::post_connect(handler);
+                            #service_builder_name {
+                                router: self.router.route(#path, method_router),
+                            }
                         }
                     }
                 }
@@ -92,42 +120,76 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
         // Generate field names for tonic builder field assignments
         let field_names: Vec<_> = method_info
             .iter()
-            .map(|(name, _, _, _, _, _)| name)
+            .map(|(name, _, _, _, _, _, _)| name)
             .collect();
 
         // Generate Tonic-compatible builder methods
+        // Note: these are only generated if there's no client streaming in the service (checked later)
         let tonic_builder_methods: Vec<_> = method_info
             .iter()
-            .map(|(method_name, request_type, response_type, path, _assoc, _ss)| {
+            .map(|(method_name, request_type, response_type, path, _assoc, is_ss, _is_cs)| {
                 let field_assignments: Vec<_> = field_names.iter().map(|field_name| {
                     quote! { #field_name: self.#field_name }
                 }).collect();
 
-                quote! {
-                    /// Register a handler for this RPC method (only Tonic-compatible extractors/responses allowed)
-                    pub fn #method_name<F, T>(mut self, handler: F) -> #tonic_builder_name<S>
-                    where
-                        connectrpc_axum::handler::TonicCompatibleHandlerWrapper<F>:
-                            axum::handler::Handler<T, S>
-                            + connectrpc_axum::handler::IntoFactory<T, #request_type, #response_type, S>,
-                        F: Clone + Send + Sync + 'static,
-                        T: 'static,
-                    {
-                        // Add route to router progressively
-                        let method_router = connectrpc_axum::handler::post_connect_tonic(handler.clone());
+                if *is_ss {
+                    // Server streaming - use TonicCompatibleStreamHandlerWrapper
+                    quote! {
+                        /// Register a handler for this RPC method (server streaming, only Tonic-compatible extractors/responses allowed)
+                        pub fn #method_name<F, T>(mut self, handler: F) -> #tonic_builder_name<S>
+                        where
+                            connectrpc_axum::handler::TonicCompatibleStreamHandlerWrapper<F>:
+                                axum::handler::Handler<T, S>
+                                + connectrpc_axum::handler::IntoStreamFactory<T, #request_type, #response_type, S>,
+                            F: Clone + Send + Sync + 'static,
+                            T: 'static,
+                        {
+                            // Add route to router progressively
+                            let method_router = connectrpc_axum::handler::post_connect_tonic_stream(handler.clone());
 
-                        // Store factory (needs &S later to materialize the boxed call)
-                        let wrapper = connectrpc_axum::handler::TonicCompatibleHandlerWrapper(handler);
-                        let factory = <connectrpc_axum::handler::TonicCompatibleHandlerWrapper<F> as
-                            connectrpc_axum::handler::IntoFactory<
-                                T, #request_type, #response_type, S
-                            >>::into_factory(wrapper);
-                        self.#method_name = Some(factory);
-                        self.router = self.router.route(#path, method_router);
+                            // Store factory (needs &S later to materialize the boxed stream call)
+                            let wrapper = connectrpc_axum::handler::TonicCompatibleStreamHandlerWrapper(handler);
+                            let factory = <connectrpc_axum::handler::TonicCompatibleStreamHandlerWrapper<F> as
+                                connectrpc_axum::handler::IntoStreamFactory<
+                                    T, #request_type, #response_type, S
+                                >>::into_stream_factory(wrapper);
+                            self.#method_name = Some(factory);
+                            self.router = self.router.route(#path, method_router);
 
-                        #tonic_builder_name {
-                            #(#field_assignments,)*
-                            router: self.router,
+                            #tonic_builder_name {
+                                #(#field_assignments,)*
+                                router: self.router,
+                            }
+                        }
+                    }
+                } else {
+                    // Unary - use TonicCompatibleHandlerWrapper
+                    quote! {
+                        /// Register a handler for this RPC method (unary, only Tonic-compatible extractors/responses allowed)
+                        pub fn #method_name<F, T>(mut self, handler: F) -> #tonic_builder_name<S>
+                        where
+                            connectrpc_axum::handler::TonicCompatibleHandlerWrapper<F>:
+                                axum::handler::Handler<T, S>
+                                + connectrpc_axum::handler::IntoFactory<T, #request_type, #response_type, S>,
+                            F: Clone + Send + Sync + 'static,
+                            T: 'static,
+                        {
+                            // Add route to router progressively
+                            let method_router = connectrpc_axum::handler::post_connect_tonic(handler.clone());
+
+                            // Store factory (needs &S later to materialize the boxed call)
+                            let wrapper = connectrpc_axum::handler::TonicCompatibleHandlerWrapper(handler);
+                            let factory = <connectrpc_axum::handler::TonicCompatibleHandlerWrapper<F> as
+                                connectrpc_axum::handler::IntoFactory<
+                                    T, #request_type, #response_type, S
+                                >>::into_factory(wrapper);
+                            self.#method_name = Some(factory);
+                            self.router = self.router.route(#path, method_router);
+
+                            #tonic_builder_name {
+                                #(#field_assignments,)*
+                                router: self.router,
+                            }
                         }
                     }
                 }
@@ -137,11 +199,19 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
         // Generate tonic service handler fields
         let tonic_handler_fields: Vec<_> = method_info
             .iter()
-            .map(|(method_name, request_type, response_type, _path, _assoc, _ss)| {
-                quote! {
-                    pub #method_name: Option<
-                        Box<dyn Fn(&S) -> BoxedCall<#request_type, #response_type> + Send + Sync>
-                    >
+            .map(|(method_name, request_type, response_type, _path, _assoc, is_ss, _is_cs)| {
+                if *is_ss {
+                    quote! {
+                        pub #method_name: Option<
+                            Box<dyn Fn(&S) -> BoxedStreamCall<#request_type, #response_type> + Send + Sync>
+                        >
+                    }
+                } else {
+                    quote! {
+                        pub #method_name: Option<
+                            Box<dyn Fn(&S) -> BoxedCall<#request_type, #response_type> + Send + Sync>
+                        >
+                    }
                 }
             })
             .collect();
@@ -150,9 +220,15 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
         let tonic_server_handler_fields: Vec<_> = method_info
             .iter()
             .map(
-                |(method_name, request_type, response_type, _path, _assoc, _ss)| {
-                    quote! {
-                        pub #method_name: Option<BoxedCall<#request_type, #response_type>>
+                |(method_name, request_type, response_type, _path, _assoc, is_ss, _is_cs)| {
+                    if *is_ss {
+                        quote! {
+                            pub #method_name: Option<BoxedStreamCall<#request_type, #response_type>>
+                        }
+                    } else {
+                        quote! {
+                            pub #method_name: Option<BoxedCall<#request_type, #response_type>>
+                        }
                     }
                 },
             )
@@ -161,39 +237,28 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
         // Generate final tonic service handler fields
         let tonic_service_handler_fields: Vec<_> = method_info
             .iter()
-            .map(|(method_name, request_type, response_type, _path, _assoc, _ss)| {
-                quote! {
-                    #method_name: connectrpc_axum::handler::BoxedCall<#request_type, #response_type>
+            .map(|(method_name, request_type, response_type, _path, _assoc, is_ss, _is_cs)| {
+                if *is_ss {
+                    quote! {
+                        #method_name: connectrpc_axum::handler::BoxedStreamCall<#request_type, #response_type>
+                    }
+                } else {
+                    quote! {
+                        #method_name: connectrpc_axum::handler::BoxedCall<#request_type, #response_type>
+                    }
                 }
             })
             .collect();
 
-        // Generate tonic service handler methods
-        let tonic_service_methods: Vec<_> = method_info
-            .iter()
-            .map(
-                |(method_name, request_type, response_type, _path, _assoc, _ss)| {
-                    quote! {
-                        /// Call the #method_name handler
-                        pub async fn #method_name(
-                            &self,
-                            request: connectrpc_axum::request::ConnectRequest<#request_type>,
-                        ) -> Result<
-                            connectrpc_axum::response::ConnectResponse<#response_type>,
-                            connectrpc_axum::error::ConnectError,
-                        > {
-                            (self.#method_name)(request).await
-                        }
-                    }
-                },
-            )
-            .collect();
+        // Note: We no longer generate intermediate wrapper methods on the service struct.
+        // The Tonic trait implementation directly calls the boxed handlers, which is more
+        // idiomatic and matches Tonic's approach of using the trait as the interface.
 
         // Generate field initializers for tonic builders
         let tonic_field_init: Vec<_> = method_info
             .iter()
             .map(
-                |(method_name, _request_type, _response_type, _path, _assoc, _ss)| {
+                |(method_name, _request_type, _response_type, _path, _assoc, _ss, _is_cs)| {
                     quote! { #method_name: None }
                 },
             )
@@ -203,12 +268,21 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
         let tonic_build_handlers_no_state: Vec<_> = method_info
             .iter()
             .map(
-                |(method_name, request_type, response_type, _path, _assoc, _ss)| {
-                    quote! {
-                        let #method_name: BoxedCall<#request_type, #response_type> =
-                            self.#method_name
-                                .map(|mk| mk(&()))
-                                .unwrap_or_else(|| unimplemented_boxed_call());
+                |(method_name, request_type, response_type, _path, _assoc, is_ss, _is_cs)| {
+                    if *is_ss {
+                        quote! {
+                            let #method_name: BoxedStreamCall<#request_type, #response_type> =
+                                self.#method_name
+                                    .map(|mk| mk(&()))
+                                    .unwrap_or_else(|| unimplemented_boxed_stream_call());
+                        }
+                    } else {
+                        quote! {
+                            let #method_name: BoxedCall<#request_type, #response_type> =
+                                self.#method_name
+                                    .map(|mk| mk(&()))
+                                    .unwrap_or_else(|| unimplemented_boxed_call());
+                        }
                     }
                 },
             )
@@ -218,11 +292,19 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
         let tonic_build_handlers_with_state: Vec<_> = method_info
             .iter()
             .map(
-                |(method_name, request_type, response_type, _path, _assoc, _ss)| {
-                    quote! {
-                        let #method_name: BoxedCall<#request_type, #response_type> =
-                            self.#method_name
-                                .unwrap_or_else(|| unimplemented_boxed_call());
+                |(method_name, request_type, response_type, _path, _assoc, is_ss, _is_cs)| {
+                    if *is_ss {
+                        quote! {
+                            let #method_name: BoxedStreamCall<#request_type, #response_type> =
+                                self.#method_name
+                                    .unwrap_or_else(|| unimplemented_boxed_stream_call());
+                        }
+                    } else {
+                        quote! {
+                            let #method_name: BoxedCall<#request_type, #response_type> =
+                                self.#method_name
+                                    .unwrap_or_else(|| unimplemented_boxed_call());
+                        }
                     }
                 },
             )
@@ -232,7 +314,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
         let with_state_field_mapping: Vec<_> = method_info
             .iter()
             .map(
-                |(method_name, _request_type, _response_type, _path, _assoc, _ss)| {
+                |(method_name, _request_type, _response_type, _path, _assoc, _ss, _is_cs)| {
                     quote! { #method_name: self.#method_name.map(|mk| mk(&state)) }
                 },
             )
@@ -242,19 +324,20 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
         let service_field_names: Vec<_> = method_info
             .iter()
             .map(
-                |(method_name, _request_type, _response_type, _path, _assoc, _ss)| {
+                |(method_name, _request_type, _response_type, _path, _assoc, _ss, _is_cs)| {
                     quote! { #method_name }
                 },
             )
             .collect();
 
         // Generate tonic trait associated types for server-streaming methods
+        // Note: we only generate these if there's no client streaming (checked above)
         let tonic_assoc_types: Vec<_> = method_info
             .iter()
-            .filter_map(|(_method_name, _req, resp, _path, assoc, is_ss)| {
+            .filter_map(|(_method_name, _req, resp, _path, assoc, is_ss, _is_cs)| {
                 if *is_ss {
                     Some(quote! {
-                        type #assoc = ::tokio_stream::wrappers::ReceiverStream<Result<#resp, ::tonic::Status>>;
+                        type #assoc = std::pin::Pin<Box<dyn ::futures::Stream<Item = Result<#resp, ::tonic::Status>> + Send + 'static>>;
                     })
                 } else {
                     None
@@ -263,26 +346,31 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             .collect();
 
         // Generate tonic trait method impls (unary and server-streaming both call the same boxed handler)
+        // Note: we only generate these if there's no client streaming (checked above)
         let tonic_trait_methods: Vec<_> = method_info
             .iter()
-            .map(|(method_name, request_type, response_type, _path, assoc, is_ss)| {
+            .map(|(method_name, request_type, response_type, _path, assoc, is_ss, _is_cs)| {
                 if *is_ss {
                     quote! {
                         async fn #method_name(
                             &self,
                             request: ::tonic::Request<#request_type>,
                         ) -> Result<::tonic::Response<Self::#assoc>, ::tonic::Status> {
-                            let (tx, rx) = ::tokio::sync::mpsc::channel(1);
                             let req = connectrpc_axum::request::ConnectRequest(request.into_inner());
                             match (self.#method_name)(req).await {
-                                Ok(connectrpc_axum::response::ConnectResponse(resp)) => {
-                                    let _ = tx.send(Ok(resp)).await;
+                                Ok(response) => {
+                                    // Extract the stream from StreamBody
+                                    let stream = response.into_inner().into_inner();
+                                    // Map ConnectError to tonic::Status and box the stream
+                                    let mapped_stream = ::futures::StreamExt::map(
+                                        stream,
+                                        |result| result.map_err(|e| e.into())
+                                    );
+                                    let boxed_stream: Self::#assoc = Box::pin(mapped_stream);
+                                    Ok(::tonic::Response::new(boxed_stream))
                                 }
-                                Err(err) => {
-                                    let _ = tx.send(Err(err.into())).await;
-                                }
+                                Err(err) => Err(err.into()),
                             }
-                            Ok(::tonic::Response::new(::tokio_stream::wrappers::ReceiverStream::new(rx)))
                         }
                     }
                 } else {
@@ -302,7 +390,12 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             })
             .collect();
 
-        let tonic_module_bits = if self.include_tonic {
+        // Check if service has any client streaming or bidirectional streaming methods
+        let has_client_streaming = method_info.iter().any(|(_, _, _, _, _, _, is_cs)| *is_cs);
+
+        // Only generate Tonic-compatible builder if there's no client streaming
+        // (client/bidi streaming require different handler signatures that don't fit the builder pattern)
+        let tonic_module_bits = if self.include_tonic && !has_client_streaming {
             let tonic_builder_structs = quote! {
                 /// TonicCompatibleBuilder has individual handler factories and progressive router
                 pub struct #tonic_builder_name<S = ()> {
@@ -373,6 +466,8 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             quote! {
                 // Local aliases to reduce fully-qualified verbosity in generated code
                 type BoxedCall<Req, Resp> = connectrpc_axum::handler::BoxedCall<Req, Resp>;
+                type BoxedStreamCall<Req, Resp> = connectrpc_axum::handler::BoxedStreamCall<Req, Resp>;
+
                 fn unimplemented_boxed_call<Req, Resp>() -> BoxedCall<Req, Resp>
                 where
                     Req: Send + Sync + 'static,
@@ -381,24 +476,33 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                     connectrpc_axum::handler::unimplemented_boxed_call::<Req, Resp>()
                 }
 
+                fn unimplemented_boxed_stream_call<Req, Resp>() -> BoxedStreamCall<Req, Resp>
+                where
+                    Req: Send + Sync + 'static,
+                    Resp: Send + Sync + 'static,
+                {
+                    connectrpc_axum::handler::unimplemented_boxed_stream_call::<Req, Resp>()
+                }
+
                 #tonic_builder_structs
             }
         } else {
             quote! {}
         };
 
-        let tonic_out_of_module = if self.include_tonic {
+        // Only generate the Tonic service implementation if there's no client streaming
+        let tonic_out_of_module = if self.include_tonic && !has_client_streaming {
             quote! {
-                /// Generated Tonic-compatible service that holds boxed calls
+                /// Generated Tonic-compatible service that holds boxed calls.
+                /// This struct directly implements the Tonic trait, following Tonic's idiomatic
+                /// approach where the trait serves as the primary interface.
                 pub struct #tonic_service_name {
                     #(#tonic_service_handler_fields,)*
                 }
 
-                impl #tonic_service_name {
-                    #(#tonic_service_methods)*
-                }
-
-                // Implement the tonic service trait for the generated boxed service
+                // Implement the tonic service trait for the generated boxed service.
+                // The trait implementation directly calls the boxed handlers, avoiding
+                // unnecessary intermediate wrapper methods.
                 #[::tonic::async_trait]
                 impl #server_mod_name::#tonic_trait_ident for #tonic_service_name {
                     #(#tonic_assoc_types)*

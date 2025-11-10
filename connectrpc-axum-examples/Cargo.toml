@@ -4,6 +4,17 @@ version = "0.3.0"
 edition = "2024"
 publish = false
 
+[[bin]]
+name = "connect-only"
+path = "src/bin/connect-only.rs"
+
+[[bin]]
+name = "connect-tonic"
+path = "src/bin/connect-tonic.rs"
+
+[[bin]]
+name = "connect-tonic-bidi-stream"
+path = "src/bin/connect-tonic-bidi-stream.rs"
 
 [dependencies]
 axum = "0.8.0"
@@ -29,3 +40,5 @@ anyhow = "1"
 connectrpc-axum-build = { path = "../connectrpc-axum-build", features = [
   "tonic",
 ] }
+tonic-build = "0.14"
+prost-build = { workspace = true }

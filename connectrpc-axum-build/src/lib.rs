@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 mod r#gen;
 
 // Re-export build-time deps so consumers don't need to depend on them directly
-pub use prost_build as prost_build;
+pub use prost_build;
 #[cfg(feature = "tonic")]
-pub use tonic_prost_build as tonic_prost_build;
+pub use tonic_prost_build;
 
 /// Builder for compiling proto files with optional configuration.
 pub struct CompileBuilder {
@@ -33,6 +33,7 @@ impl CompileBuilder {
     }
 
     /// Enable generating tonic gRPC server stubs (second pass) + tonic-compatible helpers in first pass.
+    #[cfg(feature = "tonic")]
     pub fn with_tonic(mut self) -> Self {
         self.grpc = true;
         self
@@ -41,19 +42,18 @@ impl CompileBuilder {
     /// Execute code generation.
     pub fn compile(self) -> Result<()> {
         // -------- Pass 1: prost + connect (always) --------
-        let mut config = self.config.unwrap_or_else(|| {
-            let mut cfg = prost_build::Config::new();
-            cfg.type_attribute(".", "#[derive(::serde::Serialize, ::serde::Deserialize)]");
-            cfg.type_attribute(".", "#[serde(rename_all = \"camelCase\")]");
-            cfg.type_attribute(".", "#[serde(default)]");
-            // Only need descriptor set if we will run second pass (tonic)
-            if cfg!(feature = "tonic") && self.grpc {
-                if let Ok(out_dir) = std::env::var("OUT_DIR") {
-                    cfg.file_descriptor_set_path(format!("{}/descriptor.bin", out_dir));
-                }
-            }
-            cfg
-        });
+        let mut config = self.config.unwrap_or_default();
+        // Apply baseline attributes regardless of whether user provided a config
+        config.type_attribute(".", "#[derive(::serde::Serialize, ::serde::Deserialize)]");
+        config.type_attribute(".", "#[serde(rename_all = \"camelCase\")]");
+        config.type_attribute(".", "#[serde(default)]");
+        // Configure descriptor set if we will run second pass (tonic)
+        if cfg!(feature = "tonic")
+            && self.grpc
+            && let Ok(out_dir) = std::env::var("OUT_DIR")
+        {
+            config.file_descriptor_set_path(format!("{}/descriptor.bin", out_dir));
+        }
 
         let mut proto_files = Vec::new();
         discover_proto_files(&self.includes_dir, &mut proto_files)?;
@@ -139,9 +139,7 @@ fn collect_type_refs(fds: &prost_types::FileDescriptorSet) -> Vec<TypeRef> {
     let mut out = Vec::new();
     for file in &fds.file {
         let pkg = file.package.clone().unwrap_or_default();
-        if pkg.is_empty() {
-            continue;
-        }
+        // Process all files, including those without package declarations
         for msg in &file.message_type {
             recurse_message(&pkg, msg, &[], &mut out);
         }
@@ -161,16 +159,31 @@ fn recurse_message(
 ) {
     let name = msg.name.as_deref().unwrap_or("").to_string();
     if !name.is_empty() {
-        let full_proto = format!(
-            ".{}.{}{}",
-            pkg,
-            if parents.is_empty() {
-                String::new()
-            } else {
-                format!("{}.", parents.join("."))
-            },
-            name
-        );
+        // Generate protobuf fully-qualified name, handling empty packages
+        let full_proto = if pkg.is_empty() {
+            // No package: .TypeName or .Parent.TypeName
+            format!(
+                ".{}{}",
+                if parents.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}.", parents.join("."))
+                },
+                name
+            )
+        } else {
+            // Has package: .pkg.TypeName or .pkg.Parent.TypeName
+            format!(
+                ".{}.{}{}",
+                pkg,
+                if parents.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}.", parents.join("."))
+                },
+                name
+            )
+        };
         // Prost flattens nested types by prefixing parent names with underscores; we mimic by joining with '_' for nested mapping.
         let rust_ident = if parents.is_empty() {
             name.clone()
@@ -203,16 +216,31 @@ fn recurse_enum(
 ) {
     let name = en.name.as_deref().unwrap_or("").to_string();
     if !name.is_empty() {
-        let full_proto = format!(
-            ".{}.{}{}",
-            pkg,
-            if parents.is_empty() {
-                String::new()
-            } else {
-                format!("{}.", parents.join("."))
-            },
-            name
-        );
+        // Generate protobuf fully-qualified name, handling empty packages
+        let full_proto = if pkg.is_empty() {
+            // No package: .TypeName or .Parent.TypeName
+            format!(
+                ".{}{}",
+                if parents.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}.", parents.join("."))
+                },
+                name
+            )
+        } else {
+            // Has package: .pkg.TypeName or .pkg.Parent.TypeName
+            format!(
+                ".{}.{}{}",
+                pkg,
+                if parents.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}.", parents.join("."))
+                },
+                name
+            )
+        };
         let rust_ident = if parents.is_empty() {
             name.clone()
         } else {
