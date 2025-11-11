@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "connectrpc-axum"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "axum",
  "axum-core",
@@ -279,7 +279,7 @@ dependencies = [
 
 [[package]]
 name = "connectrpc-axum-build"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "anyhow",
  "convert_case",

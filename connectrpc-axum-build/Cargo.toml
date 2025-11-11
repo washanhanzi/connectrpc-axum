@@ -1,6 +1,6 @@
 [package]
 name = "connectrpc-axum-build"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2024"
 description = "Code generation for connectrpc-axum"
 readme = "../README.md"
@@ -24,4 +24,3 @@ tonic-prost-build = { workspace = true, optional = true }
 [features]
 default = []
 tonic = ["dep:tonic-prost-build"]
-
