@@ -105,11 +105,18 @@ impl CompileBuilder {
             )?;
 
             // Append server code to first-pass files
-            for pf in &proto_files {
-                let stem = pf.file_stem().unwrap().to_str().unwrap();
-                let first_pass_file = format!("{}/{}.rs", out_dir, stem);
-                let tonic_file = format!("{}/{}.rs", temp_out_dir, stem);
-                if std::path::Path::new(&tonic_file).exists() {
+            // Iterate generated files in tonic_server/ instead of proto_files
+            // because prost-build generates one file per package, not per proto file
+            for entry in fs::read_dir(&temp_out_dir)? {
+                let entry = entry?;
+                let tonic_file = entry.path();
+
+                // Only process .rs files
+                if tonic_file.extension().and_then(|s| s.to_str()) == Some("rs") {
+                    let filename = tonic_file.file_name().unwrap().to_str().unwrap();
+                    let first_pass_file = format!("{}/{}", out_dir, filename);
+
+                    // Append tonic server code to first-pass file
                     let mut content = fs::read_to_string(&first_pass_file).unwrap_or_default();
                     content.push_str(
                         "\n// --- Tonic gRPC server stubs (extern_path reused messages) ---\n",
