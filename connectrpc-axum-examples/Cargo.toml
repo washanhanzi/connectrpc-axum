@@ -20,6 +20,8 @@ path = "src/bin/connect-tonic-bidi-stream.rs"
 axum = "0.8.0"
 connectrpc-axum = { path = "../connectrpc-axum" }
 prost = { workspace = true }
+pbjson = { workspace = true }
+pbjson-types = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.47", features = ["full"] }
 tower-http = { version = "0.6", features = ["cors"] }

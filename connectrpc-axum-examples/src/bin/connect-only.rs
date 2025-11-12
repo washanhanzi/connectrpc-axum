@@ -9,6 +9,7 @@ async fn say_hello(
 ) -> Result<ConnectResponse<HelloResponse>, ConnectError> {
     Ok(ConnectResponse(HelloResponse {
         message: format!("Hello, {}!", req.name.unwrap_or_default()),
+        response_type: None,  // oneof field - set to None for now
     }))
 }
 
@@ -27,6 +28,7 @@ async fn say_hello_stream(
         // First greeting
         yield Ok(HelloResponse {
             message: format!("Hello, {}! Starting stream...", name),
+            response_type: None,
         });
 
         // If there are hobbies, greet each one
@@ -34,6 +36,7 @@ async fn say_hello_stream(
             for (idx, hobby) in hobbies.iter().enumerate() {
                 yield Ok(HelloResponse {
                     message: format!("Hobby #{}: {} - that's interesting!", idx + 1, hobby),
+                    response_type: None,
                 });
             }
         } else {
@@ -41,6 +44,7 @@ async fn say_hello_stream(
             for i in 1..=3 {
                 yield Ok(HelloResponse {
                     message: format!("Stream message #{} for {}", i, name),
+                    response_type: None,
                 });
             }
         }
@@ -48,6 +52,7 @@ async fn say_hello_stream(
         // Final message
         yield Ok(HelloResponse {
             message: format!("Stream complete for {}. Goodbye!", name),
+            response_type: None,
         });
     };
 

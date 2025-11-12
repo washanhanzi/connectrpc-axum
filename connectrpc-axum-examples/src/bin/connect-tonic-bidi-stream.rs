@@ -27,6 +27,7 @@ async fn say_hello(
     let count = state.counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     Ok(ConnectResponse(HelloResponse {
         message: format!("Hello #{}, {}!", count, req.name.unwrap_or_default()),
+        response_type: None,
     }))
 }
 
@@ -41,18 +42,21 @@ async fn say_hello_stream(
         let count = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         yield Ok(HelloResponse {
             message: format!("Stream #{}: Hello, {}!", count, name),
+            response_type: None,
         });
 
         for i in 1..=3 {
             let count = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             yield Ok(HelloResponse {
                 message: format!("Stream #{}: Message {} for {}", count, i, name),
+                response_type: None,
             });
         }
 
         let count = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         yield Ok(HelloResponse {
             message: format!("Stream #{}: Goodbye, {}!", count, name),
+            response_type: None,
         });
     };
 

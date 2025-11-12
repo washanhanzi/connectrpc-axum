@@ -41,19 +41,19 @@ impl CompileBuilder {
 
     /// Execute code generation.
     pub fn compile(self) -> Result<()> {
+        let out_dir = std::env::var("OUT_DIR")
+            .map_err(|e| std::io::Error::other(format!("OUT_DIR not set: {e}")))?;
+        let descriptor_path = format!("{}/descriptor.bin", out_dir);
+
         // -------- Pass 1: prost + connect (always) --------
         let mut config = self.config.unwrap_or_default();
-        // Apply baseline attributes regardless of whether user provided a config
-        config.type_attribute(".", "#[derive(::serde::Serialize, ::serde::Deserialize)]");
-        config.type_attribute(".", "#[serde(rename_all = \"camelCase\")]");
-        config.type_attribute(".", "#[serde(default)]");
-        // Configure descriptor set if we will run second pass (tonic)
-        if cfg!(feature = "tonic")
-            && self.grpc
-            && let Ok(out_dir) = std::env::var("OUT_DIR")
-        {
-            config.file_descriptor_set_path(format!("{}/descriptor.bin", out_dir));
-        }
+
+        // Always generate descriptor set for pbjson-build
+        config.file_descriptor_set_path(&descriptor_path);
+
+        // Configure well-known types for proper pbjson integration
+        config.compile_well_known_types();
+        config.extern_path(".google.protobuf", "::pbjson_types");
 
         let mut proto_files = Vec::new();
         discover_proto_files(&self.includes_dir, &mut proto_files)?;
@@ -71,6 +71,44 @@ impl CompileBuilder {
         let service_generator = AxumConnectServiceGenerator::with_tonic(self.grpc);
         config.service_generator(Box::new(service_generator));
         config.compile_protos(&proto_files, &[&self.includes_dir])?;
+
+        // -------- Pass 1.5: pbjson serde implementations (always) --------
+        // Use pbjson-build to generate proper serde implementations that handle oneof correctly
+        use std::fs;
+        let descriptor_bytes = fs::read(&descriptor_path)
+            .map_err(|e| std::io::Error::other(format!("read descriptor: {e}")))?;
+
+        pbjson_build::Builder::new()
+            .register_descriptors(&descriptor_bytes)
+            .map_err(|e| std::io::Error::other(format!("register descriptors: {e}")))?
+            .preserve_proto_field_names() // Keep original proto field names
+            .build(&["."])  // Generate for all packages
+            .map_err(|e| std::io::Error::other(format!("pbjson build: {e}")))?;
+
+        // Append pbjson serde implementations to main generated files
+        // pbjson-build generates {package}.serde.rs files that need to be included
+        for entry in fs::read_dir(&out_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                if file_name.ends_with(".serde.rs") {
+                    // Get the base name (e.g., "hello" from "hello.serde.rs")
+                    let base_name = file_name.strip_suffix(".serde.rs").unwrap();
+                    let main_file = format!("{}/{}.rs", out_dir, base_name);
+
+                    if std::path::Path::new(&main_file).exists() {
+                        // Append serde implementations to the main file
+                        let mut content = fs::read_to_string(&main_file)?;
+                        content.push_str("\n// --- pbjson serde implementations ---\n");
+                        content.push_str(&fs::read_to_string(&path)?);
+                        fs::write(&main_file, content)?;
+
+                        // Remove the separate .serde.rs file
+                        let _ = fs::remove_file(&path);
+                    }
+                }
+            }
+        }
 
         // -------- Pass 2: tonic server-only (feature + user requested) --------
         #[cfg(feature = "tonic")]
@@ -126,10 +164,12 @@ impl CompileBuilder {
                 }
             }
 
-            // Clean up temporary artifacts so include!(concat!(env!("OUT_DIR"), "/<file>.rs")) users don't see extras.
-            let _ = fs::remove_file(&descriptor_path);
+            // Clean up temporary tonic artifacts so include!(concat!(env!("OUT_DIR"), "/<file>.rs")) users don't see extras.
             let _ = fs::remove_dir_all(&temp_out_dir);
         }
+
+        // Clean up descriptor file after all passes complete
+        let _ = std::fs::remove_file(&descriptor_path);
 
         Ok(())
     }

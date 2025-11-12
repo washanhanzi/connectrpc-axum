@@ -309,6 +309,8 @@ dependencies = [
  "http-body",
  "http-body-util",
  "hyper",
+ "pbjson",
+ "pbjson-types",
  "prost",
  "prost-build",
  "serde",

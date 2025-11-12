@@ -5,10 +5,25 @@ package hello;
 message HelloRequest {
   optional string name = 1;
   repeated string hobbies = 2;
+  // Test oneof serialization
+  oneof greeting_type {
+    string formal_greeting = 3;
+    string casual_greeting = 4;
+  }
 }
 
 message HelloResponse {
   string message = 1;
+  // Test oneof serialization
+  oneof response_type {
+    ResponseDetails details = 2;
+    string simple_text = 3;
+  }
+}
+
+message ResponseDetails {
+  string timestamp = 1;
+  int32 request_count = 2;
 }
 
 service HelloWorldService {
