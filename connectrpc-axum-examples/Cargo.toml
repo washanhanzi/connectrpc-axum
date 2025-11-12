@@ -17,31 +17,45 @@ name = "connect-tonic-bidi-stream"
 path = "src/bin/connect-tonic-bidi-stream.rs"
 
 [dependencies]
+# Application dependency for error handling
 anyhow = "1"
+# Application dependency for creating async streams
 async-stream = "0.3.5"
 # Required: Used by generated service builders
 axum = "0.8.0"
+# Application dependency for byte buffer handling
 bytes = "1"
+# Required: Core ConnectRPC runtime
 connectrpc-axum = { path = "../connectrpc-axum" }
 # Required: Used by generated code for async streams
 futures = "0.3.31"
+# Required: Used by generated code for HTTP body handling
 http-body = "1"
+# Application dependency for HTTP body utilities
 http-body-util = "0.1"
+# Application dependency for HTTP server
 hyper = "1.8"
 # Required: Used by generated code for JSON serialization
 pbjson = { workspace = true }
+# Required: Used by generated code for well-known types JSON serialization
 pbjson-types = { workspace = true }
 # Required: Used by generated code for message types
 prost = { workspace = true }
+# Required: Used by generated code for serialization
 serde = { version = "1.0", features = ["derive"] }
+# Application dependency for JSON handling
 serde_json = "1"
-# Application dependencies (not required by generated code)
+# Application dependency for async runtime
 tokio = { version = "1.47", features = ["full"] }
+# Required: Used by generated code for streaming support
 tokio-stream = "0.1"
 # Required when using tonic feature: Used by generated gRPC server code
 tonic = "0.14"
+# Required when using tonic feature: Used by generated Tonic code
 tonic-prost = { workspace = true }
+# Required: Used by generated service code
 tower = { workspace = true }
+# Application dependency for HTTP middleware
 tower-http = { version = "0.6", features = ["cors"] }
 
 [build-dependencies]

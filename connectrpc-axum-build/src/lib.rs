@@ -232,9 +232,13 @@ fn recurse_message(
         } else {
             format!("{}_{}", parents.join("_"), name)
         };
+        // Don't use crate:: or super:: prefix because tonic will add `super::` when generating
+        // code inside the service module. Since the types are at the file root and the trait
+        // is inside a nested module (e.g., hello_world_service_server), tonic will correctly
+        // reference them as `super::TypeName` from inside the module.
         out.push(TypeRef {
             full: full_proto,
-            rust: format!("crate::{}", rust_ident),
+            rust: rust_ident,
         });
     }
     let mut new_parents = parents.to_vec();
@@ -288,9 +292,13 @@ fn recurse_enum(
         } else {
             format!("{}_{}", parents.join("_"), name)
         };
+        // Don't use crate:: or super:: prefix because tonic will add `super::` when generating
+        // code inside the service module. Since the types are at the file root and the trait
+        // is inside a nested module (e.g., hello_world_service_server), tonic will correctly
+        // reference them as `super::TypeName` from inside the module.
         out.push(TypeRef {
             full: full_proto,
-            rust: format!("crate::{}", rust_ident),
+            rust: rust_ident,
         });
     }
 }
