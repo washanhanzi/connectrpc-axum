@@ -1,6 +1,6 @@
 [package]
 name = "connectrpc-axum-examples"
-version = "0.3.0"
+version = "0.1.0"
 edition = "2024"
 publish = false
 
@@ -17,30 +17,34 @@ name = "connect-tonic-bidi-stream"
 path = "src/bin/connect-tonic-bidi-stream.rs"
 
 [dependencies]
-axum = "0.8.0"
-connectrpc-axum = { path = "../connectrpc-axum" }
-prost = { workspace = true }
-pbjson = { workspace = true }
-pbjson-types = { workspace = true }
-serde = { version = "1.0", features = ["derive"] }
-tokio = { version = "1.47", features = ["full"] }
-tower-http = { version = "0.6", features = ["cors"] }
-futures = "0.3.31"
+anyhow = "1"
 async-stream = "0.3.5"
-tonic = "0.14"
-tower = { workspace = true }
-hyper = "1.7"
-tokio-stream = "0.1"
-tonic-prost = { workspace = true }
-serde_json = "1"
+# Required: Used by generated service builders
+axum = "0.8.0"
 bytes = "1"
+connectrpc-axum = { path = "../connectrpc-axum" }
+# Required: Used by generated code for async streams
+futures = "0.3.31"
 http-body = "1"
 http-body-util = "0.1"
-anyhow = "1"
+hyper = "1.8"
+# Required: Used by generated code for JSON serialization
+pbjson = { workspace = true }
+pbjson-types = { workspace = true }
+# Required: Used by generated code for message types
+prost = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
+# Application dependencies (not required by generated code)
+tokio = { version = "1.47", features = ["full"] }
+tokio-stream = "0.1"
+# Required when using tonic feature: Used by generated gRPC server code
+tonic = "0.14"
+tonic-prost = { workspace = true }
+tower = { workspace = true }
+tower-http = { version = "0.6", features = ["cors"] }
 
 [build-dependencies]
 connectrpc-axum-build = { path = "../connectrpc-axum-build", features = [
   "tonic",
 ] }
-tonic-build = "0.14"
-prost-build = { workspace = true }

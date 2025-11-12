@@ -1,6 +1,6 @@
 [package]
 name = "connectrpc-axum"
-version = "0.0.5"
+version = "0.0.6"
 edition = "2024"
 description = "Axum-style Connect RPC server"
 readme = "../README.md"
@@ -28,7 +28,7 @@ serde_qs = { workspace = true }
 tokio = { workspace = true, optional = true }
 tokio-stream = { workspace = true, optional = true }
 tokio-util = { workspace = true, features = ["io"] }
-tonic = { version = "0.14", optional = true }
+tonic = { workspace = true, optional = true }
 tonic-prost = { workspace = true, optional = true }
 tower = { workspace = true, features = ["full"] }
 tower-http = { workspace = true, features = ["cors"] }

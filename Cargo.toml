@@ -12,7 +12,7 @@ repository = "https://github.com/washanhanzi/connectrpc-axum"
 
 [workspace.dependencies]
 anyhow = "1.0"
-axum = { version = "0.8" }
+axum = "0.8"
 axum-core = "0.5"
 axum-extra = "0.12"
 base64 = "0.22.1"
@@ -41,6 +41,8 @@ syn = "2.0"
 tokio = { version = "1", features = ["sync"] }
 tokio-stream = "0.1"
 tokio-util = "0.7"
+tonic = "0.14"
+tonic-build = "0.14"
 tonic-prost = "0.14"
 tonic-prost-build = "0.14"
 tower = "0.5"
