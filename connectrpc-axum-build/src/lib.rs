@@ -76,7 +76,6 @@ impl CompileBuilder {
         pbjson_build::Builder::new()
             .register_descriptors(&descriptor_bytes)
             .map_err(|e| std::io::Error::other(format!("register descriptors: {e}")))?
-            .preserve_proto_field_names() // Keep original proto field names
             .build(&["."])  // Generate for all packages
             .map_err(|e| std::io::Error::other(format!("pbjson build: {e}")))?;
 
