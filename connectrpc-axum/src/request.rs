@@ -75,12 +75,11 @@ where
         .unwrap_or("");
     let content_type = content_type.to_string();
 
-    println!("📥 Incoming request Content-Type: {}", content_type);
-
     // Determine the format and store it in thread-local storage
     let format = if content_type.starts_with(APPLICATION_PROTO)
         || content_type.starts_with(APPLICATION_CONNECT_PROTO)
-        || content_type.starts_with("application/grpc") {
+        || content_type.starts_with("application/grpc")
+    {
         ContentFormat::Proto
     } else {
         ContentFormat::Json
@@ -91,10 +90,6 @@ where
         .await
         .map_err(|err| ConnectError::new(Code::Internal, err.to_string()))?;
 
-    println!("📦 Raw bytes received: length={}, first_bytes={:?}",
-        bytes.len(),
-        &bytes[..bytes.len().min(10)]);
-
     // For Connect streaming content types AND gRPC, unwrap the 5-byte frame envelope
     // Both protocols use the same frame format: [flags:1][length:4][payload:length]
     let is_connect_streaming = content_type.starts_with(APPLICATION_CONNECT_PROTO)
@@ -103,50 +98,49 @@ where
     let needs_frame_unwrap = is_connect_streaming || is_grpc;
 
     if needs_frame_unwrap && bytes.len() >= 5 {
-        println!("📦 Unwrapping frame envelope (protocol: {})",
-            if is_grpc { "gRPC" } else { "Connect" });
         // Frame format: [flags:1][length:4][payload:length]
         let flags = bytes[0];
         let length = u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]) as usize;
-        println!("  Flags: 0x{:02X}, Length: {}", flags, length);
 
         // Validate compression flag for gRPC
         if is_grpc && flags > 1 {
             return Err(ConnectError::new(
                 Code::InvalidArgument,
-                format!("invalid gRPC compression flag: {} (valid flags are 0 and 1)", flags),
+                format!(
+                    "invalid gRPC compression flag: {} (valid flags are 0 and 1)",
+                    flags
+                ),
             ));
         }
 
         // Extract the actual payload
         if bytes.len() >= 5 + length {
             bytes = bytes.slice(5..5 + length);
-            println!("  Unwrapped payload length: {}", bytes.len());
         } else {
             return Err(ConnectError::new(
                 Code::InvalidArgument,
-                format!("incomplete frame: expected {} bytes, got {}", 5 + length, bytes.len()),
+                format!(
+                    "incomplete frame: expected {} bytes, got {}",
+                    5 + length,
+                    bytes.len()
+                ),
             ));
         }
     } else if needs_frame_unwrap {
-        println!("⚠️  Content-Type indicates framing but bytes.len()={} < 5, skipping frame unwrap", bytes.len());
-    } else {
-        println!("📦 Not a framed request, using raw bytes");
     }
 
     if content_type.starts_with(APPLICATION_PROTO)
         || content_type.starts_with(APPLICATION_CONNECT_PROTO)
-        || content_type.starts_with("application/grpc") {
-        println!("📦 Decoding protobuf, bytes length: {}", bytes.len());
+        || content_type.starts_with("application/grpc")
+    {
         let message = T::decode(bytes)
             .map_err(|err| ConnectError::new(Code::InvalidArgument, err.to_string()))?;
-        println!("✅ Protobuf decode successful");
         Ok(ConnectRequest(message))
-    } else if content_type.starts_with(APPLICATION_JSON) || content_type.starts_with(APPLICATION_CONNECT_JSON) {
-        println!("📦 Decoding JSON, bytes length: {}", bytes.len());
+    } else if content_type.starts_with(APPLICATION_JSON)
+        || content_type.starts_with(APPLICATION_CONNECT_JSON)
+    {
         let message: T = serde_json::from_slice(&bytes)
             .map_err(|err| ConnectError::new(Code::InvalidArgument, err.to_string()))?;
-        println!("✅ JSON decode successful");
         Ok(ConnectRequest(message))
     } else {
         Err(ConnectError::new(

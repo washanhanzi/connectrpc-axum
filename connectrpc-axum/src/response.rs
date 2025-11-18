@@ -35,8 +35,6 @@ where
         let format = get_request_format();
         let use_proto = format == ContentFormat::Proto;
 
-        println!("📤 Encoding response: format={:?}", format);
-
         let (body, content_type) = if use_proto {
             // Encode as protobuf with gRPC frame envelope
             // Frame format: [flags:1][length:4][payload:length]
@@ -44,12 +42,10 @@ where
             self.0.encode(&mut buf).unwrap();
             let payload_len = (buf.len() - 5) as u32;
             buf[1..5].copy_from_slice(&payload_len.to_be_bytes());
-            println!("  Protobuf encoded: {} bytes (+ 5 byte frame header)", payload_len);
             (buf, "application/grpc+proto")
         } else {
             // Encode as JSON (no frame envelope for unary Connect JSON)
             let body = serde_json::to_vec(&self.0).unwrap();
-            println!("  JSON encoded: {} bytes", body.len());
             (body, APPLICATION_JSON)
         };
 
@@ -108,8 +104,6 @@ where
         let format = get_request_format();
         let use_proto = format == ContentFormat::Proto;
 
-        println!("📤 Starting streaming response: format={:?}", format);
-
         // gRPC streaming: Just send message frames, no EndStreamResponse
         // Connect streaming: Send message frames + EndStreamResponse with flag 0x02
         // For now, since we detected gRPC by content-type, let's not send EndStreamResponse for gRPC
@@ -128,14 +122,12 @@ where
                     }
                     let len = (buf.len() - 5) as u32;
                     buf[1..5].copy_from_slice(&len.to_be_bytes());
-                    println!("  Sending message frame: {} bytes", buf.len());
                     Ok(Bytes::from(buf))
                 }
                 Err(err) => {
                     // For gRPC: errors should be sent as trailers, not in-stream
                     // For Connect: send Error EndStreamResponse with flags=0x02
                     // For simplicity, we'll send Connect-style error for now
-                    println!("  Stream error: {:?}", err);
                     let mut buf = vec![0b0000_0010u8, 0, 0, 0, 0];
                     let json = serde_json::json!({ "error": err });
                     serde_json::to_writer(&mut buf, &json).unwrap();
@@ -171,8 +163,6 @@ where
         } else {
             APPLICATION_CONNECT_JSON
         };
-
-        println!("  Response Content-Type: {}", content_type);
 
         Response::builder()
             .status(StatusCode::OK)
