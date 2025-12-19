@@ -8,6 +8,7 @@ mod r#gen;
 pub struct CompileBuilder {
     includes_dir: PathBuf,
     config: Option<prost_build::Config>,
+    prost_config: Option<Box<dyn FnOnce(prost_build::Config) -> prost_build::Config>>,
     grpc: bool,
     #[cfg(feature = "tonic")]
     tonic_config: Option<Box<dyn FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder>>,
@@ -19,15 +20,47 @@ impl CompileBuilder {
         Self {
             includes_dir: includes_dir.as_ref().to_path_buf(),
             config: None,
+            prost_config: None,
             grpc: false,
             #[cfg(feature = "tonic")]
             tonic_config: None,
         }
     }
 
-    /// Provide a custom prost_build::Config (still augmented with serde + default attributes).
+    /// Provide a custom base prost_build::Config.
+    ///
+    /// Use `with_prost_config` to further customize the config after defaults are applied.
     pub fn with_config(mut self, config: prost_build::Config) -> Self {
         self.config = Some(config);
+        self
+    }
+
+    /// Customize the prost builder with a configuration closure.
+    ///
+    /// The closure receives a `prost_build::Config` (either the one provided via `with_config`
+    /// or a default one) after the file descriptor set path has been configured.
+    ///
+    /// Use this to enable well-known types compilation if your protos use Google protobuf types.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     connectrpc_axum_build::compile_dir("proto")
+    ///         .with_prost_config(|config| {
+    ///             config
+    ///                 .compile_well_known_types()
+    ///                 .extern_path(".google.protobuf", "::pbjson_types")
+    ///         })
+    ///         .compile()?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn with_prost_config<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(prost_build::Config) -> prost_build::Config + 'static,
+    {
+        self.prost_config = Some(Box::new(f));
         self
     }
 
@@ -84,9 +117,10 @@ impl CompileBuilder {
         // Always generate descriptor set for pbjson-build
         config.file_descriptor_set_path(&descriptor_path);
 
-        // Configure well-known types for proper pbjson integration
-        config.compile_well_known_types();
-        config.extern_path(".google.protobuf", "::pbjson_types");
+        // Apply user's prost configuration if provided
+        if let Some(config_fn) = self.prost_config {
+            config = config_fn(config);
+        }
 
         let mut proto_files = Vec::new();
         discover_proto_files(&self.includes_dir, &mut proto_files)?;
@@ -114,7 +148,7 @@ impl CompileBuilder {
         pbjson_build::Builder::new()
             .register_descriptors(&descriptor_bytes)
             .map_err(|e| std::io::Error::other(format!("register descriptors: {e}")))?
-            .build(&["."])  // Generate for all packages
+            .build(&["."]) // Generate for all packages
             .map_err(|e| std::io::Error::other(format!("pbjson build: {e}")))?;
 
         // Append pbjson serde implementations to main generated files
