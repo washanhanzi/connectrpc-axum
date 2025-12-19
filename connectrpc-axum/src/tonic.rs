@@ -13,7 +13,6 @@ use http_body::Body as HttpBody;
 use http_body_util::BodyExt as _;
 use hyper::http::header::CONTENT_TYPE;
 use hyper::http::{Request, Response, StatusCode};
-use tower::ServiceExt as _;
 
 /// Returns true if the request looks like a gRPC (Tonic) call based on `content-type`.
 fn is_grpc(req: &Request<AxumBody>) -> bool {

@@ -11,9 +11,9 @@
 //! ```rust,no_run
 //! use connectrpc_axum::MakeServiceBuilder;
 //! # use axum::Router;
-//! # let hello_router = Router::new();
-//! # let user_router = Router::new();
-//! # let team_router = Router::new();
+//! # let hello_router: Router<()> = Router::new();
+//! # let user_router: Router<()> = Router::new();
+//! # let team_router: Router<()> = Router::new();
 //!
 //! let app = MakeServiceBuilder::new()
 //!     .add_router(hello_router)
@@ -25,19 +25,9 @@
 //!
 //! Combine Connect routers and multiple gRPC services:
 //!
-//! ```rust,no_run
-//! # #[cfg(feature = "tonic")]
-//! # {
+//! ```rust,ignore
 //! use connectrpc_axum::MakeServiceBuilder;
-//! # use axum::Router;
-//! # let hello_router = Router::new();
-//! # let user_router = Router::new();
-//! # struct HelloGrpcSvc;
-//! # struct UserGrpcSvc;
-//! # struct TeamGrpcSvc;
-//! # let hello_grpc_svc = HelloGrpcSvc;
-//! # let user_grpc_svc = UserGrpcSvc;
-//! # let team_grpc_svc = TeamGrpcSvc;
+//! use axum::Router;
 //!
 //! let dispatch = MakeServiceBuilder::new()
 //!     .add_routers(vec![hello_router, user_router])
@@ -45,7 +35,6 @@
 //!     .add_grpc_service(user_grpc_svc)
 //!     .add_grpc_service(team_grpc_svc)
 //!     .build();
-//! # }
 //! ```
 //!
 //! **Note:** gRPC services are routed by their service name (from `NamedService::NAME`).
@@ -72,8 +61,8 @@ use crate::tonic::ContentTypeSwitch;
 /// ```rust,no_run
 /// use connectrpc_axum::MakeServiceBuilder;
 /// # use axum::Router;
-/// # let router1 = Router::new();
-/// # let router2 = Router::new();
+/// # let router1: Router<()> = Router::new();
+/// # let router2: Router<()> = Router::new();
 ///
 /// // Connect-only
 /// let app = MakeServiceBuilder::new()
@@ -82,14 +71,9 @@ use crate::tonic::ContentTypeSwitch;
 ///     .build();
 /// ```
 ///
-/// ```rust,no_run
-/// # #[cfg(feature = "tonic")]
-/// # {
+/// ```rust,ignore
 /// use connectrpc_axum::MakeServiceBuilder;
-/// # use axum::Router;
-/// # let router1 = Router::new();
-/// # struct Grpc1; struct Grpc2;
-/// # let grpc1 = Grpc1; let grpc2 = Grpc2;
+/// use axum::Router;
 ///
 /// // Connect + multiple gRPC services
 /// let app = MakeServiceBuilder::new()
@@ -97,7 +81,6 @@ use crate::tonic::ContentTypeSwitch;
 ///     .add_grpc_service(grpc1)
 ///     .add_grpc_service(grpc2)
 ///     .build();
-/// # }
 /// ```
 pub struct MakeServiceBuilder<S = ()> {
     connect_router: Router<S>,
@@ -125,7 +108,7 @@ where
     /// ```rust
     /// use connectrpc_axum::MakeServiceBuilder;
     ///
-    /// let builder = MakeServiceBuilder::new();
+    /// let builder: MakeServiceBuilder<()> = MakeServiceBuilder::new();
     /// ```
     pub fn new() -> Self {
         Self {
@@ -145,7 +128,7 @@ where
     /// ```rust,no_run
     /// use connectrpc_axum::MakeServiceBuilder;
     /// # use axum::Router;
-    /// # let hello_router = Router::new();
+    /// # let hello_router: Router<()> = Router::new();
     ///
     /// let builder = MakeServiceBuilder::new()
     ///     .add_router(hello_router);
@@ -164,9 +147,9 @@ where
     /// ```rust,no_run
     /// use connectrpc_axum::MakeServiceBuilder;
     /// # use axum::Router;
-    /// # let router1 = Router::new();
-    /// # let router2 = Router::new();
-    /// # let router3 = Router::new();
+    /// # let router1: Router<()> = Router::new();
+    /// # let router2: Router<()> = Router::new();
+    /// # let router3: Router<()> = Router::new();
     ///
     /// let builder = MakeServiceBuilder::new()
     ///     .add_routers(vec![router1, router2, router3]);
@@ -192,22 +175,14 @@ where
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
-    /// # #[cfg(feature = "tonic")]
-    /// # {
+    /// ```rust,ignore
     /// use connectrpc_axum::MakeServiceBuilder;
-    /// # use axum::Router;
-    /// # let hello_router = Router::new();
-    /// # struct HelloGrpcSvc;
-    /// # struct UserGrpcSvc;
-    /// # let hello_grpc_svc = HelloGrpcSvc;
-    /// # let user_grpc_svc = UserGrpcSvc;
+    /// use axum::Router;
     ///
     /// let builder = MakeServiceBuilder::new()
     ///     .add_router(hello_router)
     ///     .add_grpc_service(hello_grpc_svc)
     ///     .add_grpc_service(user_grpc_svc);
-    /// # }
     /// ```
     pub fn add_grpc_service<G>(mut self, svc: G) -> Self
     where
@@ -235,17 +210,9 @@ where
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
-    /// # #[cfg(feature = "tonic")]
-    /// # {
+    /// ```rust,ignore
     /// use connectrpc_axum::MakeServiceBuilder;
-    /// # use axum::Router;
-    /// # let hello_router = Router::new();
-    /// # let user_router = Router::new();
-    /// # struct HelloGrpcSvc;
-    /// # struct UserGrpcSvc;
-    /// # let hello_grpc_svc = HelloGrpcSvc;
-    /// # let user_grpc_svc = UserGrpcSvc;
+    /// use axum::Router;
     ///
     /// let dispatch = MakeServiceBuilder::new()
     ///     .add_routers(vec![hello_router, user_router])
@@ -254,11 +221,8 @@ where
     ///     .build();
     ///
     /// // Serve with axum
-    /// # async {
-    /// # let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    /// axum::serve(listener, tower::make::Shared::new(dispatch)).await
-    /// # };
-    /// # }
+    /// let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+    /// axum::serve(listener, tower::make::Shared::new(dispatch)).await?;
     /// ```
     pub fn build(self) -> ContentTypeSwitch<tonic::service::Routes, Router<S>> {
         let grpc_service = self.grpc_routes.prepare();
@@ -283,8 +247,8 @@ where
     /// ```rust,no_run
     /// use connectrpc_axum::MakeServiceBuilder;
     /// # use axum::Router;
-    /// # let router1 = Router::new();
-    /// # let router2 = Router::new();
+    /// # let router1: Router<()> = Router::new();
+    /// # let router2: Router<()> = Router::new();
     ///
     /// let app = MakeServiceBuilder::new()
     ///     .add_router(router1)

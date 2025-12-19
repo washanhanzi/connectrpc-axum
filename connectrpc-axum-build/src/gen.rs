@@ -8,12 +8,6 @@ pub struct AxumConnectServiceGenerator {
 }
 
 impl AxumConnectServiceGenerator {
-    pub fn new() -> Self {
-        Self {
-            include_tonic: false,
-        }
-    }
-
     pub fn with_tonic(include_tonic: bool) -> Self {
         Self { include_tonic }
     }

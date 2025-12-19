@@ -50,7 +50,7 @@ impl CompileBuilder {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     connectrpc_axum_build::compile_dir("proto")
     ///         .with_tonic()
@@ -380,8 +380,8 @@ fn recurse_enum(
 /// }
 /// ```
 ///
-/// With gRPC support:
-/// ```rust,no_run
+/// With gRPC support (requires `tonic` feature):
+/// ```rust,ignore
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     connectrpc_axum_build::compile_dir("proto")
 ///         .with_tonic()  // Enable Tonic gRPC code generation

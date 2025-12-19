@@ -12,7 +12,7 @@ use serde::Serialize;
 
 const APPLICATION_JSON: &str = "application/json";
 const APPLICATION_CONNECT_JSON: &str = "application/connect+json";
-const APPLICATION_CONNECT_PROTO: &str = "application/connect+proto";
+const _APPLICATION_CONNECT_PROTO: &str = "application/connect+proto";
 
 #[derive(Debug, Clone)]
 pub struct ConnectResponse<T>(pub T);
