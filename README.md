@@ -26,14 +26,14 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-connectrpc-axum = "0.0.4"
+connectrpc-axum = "*"
 axum = "0.8"
 prost = "0.14"
 pbjson = "0.8"
 tokio = { version = "1", features = ["full"] }
 
 [build-dependencies]
-connectrpc-axum-build = "0.0.4"
+connectrpc-axum-build = "*"
 ```
 
 ### 1. Code Generation (build.rs)
@@ -291,7 +291,6 @@ See the [examples README](./connectrpc-axum-examples/README.md) for detailed doc
 
 If you see errors like "cannot find type `TypeName` in crate root":
 
-- Ensure you're using version `0.0.4` or later
 - The generated code now uses `super::` to reference types
 - You can include generated code in any module without crate-level re-exports
 

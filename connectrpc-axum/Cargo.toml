@@ -34,5 +34,4 @@ tower = { workspace = true, features = ["full"] }
 tower-http = { workspace = true, features = ["cors"] }
 
 [features]
-default = ["tonic"]
 tonic = ["dep:tokio", "dep:tokio-stream", "dep:tonic", "dep:tonic-prost"]

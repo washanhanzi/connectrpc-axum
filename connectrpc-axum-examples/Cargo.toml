@@ -4,6 +4,15 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+default = ["tonic"]
+tonic = [
+  "connectrpc-axum/tonic",
+  "connectrpc-axum-build/tonic",
+  "dep:tonic",
+  "dep:tonic-prost",
+]
+
 [[bin]]
 name = "connect-only"
 path = "src/bin/connect-only.rs"
@@ -11,10 +20,12 @@ path = "src/bin/connect-only.rs"
 [[bin]]
 name = "connect-tonic"
 path = "src/bin/connect-tonic.rs"
+required-features = ["tonic"]
 
 [[bin]]
 name = "connect-tonic-bidi-stream"
 path = "src/bin/connect-tonic-bidi-stream.rs"
+required-features = ["tonic"]
 
 [dependencies]
 # Application dependency for error handling
@@ -50,15 +61,13 @@ tokio = { version = "1.47", features = ["full"] }
 # Required: Used by generated code for streaming support
 tokio-stream = "0.1"
 # Required when using tonic feature: Used by generated gRPC server code
-tonic = "0.14"
+tonic = { version = "0.14", optional = true }
 # Required when using tonic feature: Used by generated Tonic code
-tonic-prost = { workspace = true }
+tonic-prost = { workspace = true, optional = true }
 # Required: Used by generated service code
 tower = { workspace = true }
 # Application dependency for HTTP middleware
 tower-http = { version = "0.6", features = ["cors"] }
 
 [build-dependencies]
-connectrpc-axum-build = { path = "../connectrpc-axum-build", features = [
-  "tonic",
-] }
+connectrpc-axum-build = { path = "../connectrpc-axum-build" }

@@ -2,13 +2,13 @@ use r#gen::AxumConnectServiceGenerator;
 use std::io::Result;
 use std::path::{Path, PathBuf};
 
-mod r#gen;
+/// Code generation module for service builders.
+pub mod r#gen;
 
 /// Builder for compiling proto files with optional configuration.
 pub struct CompileBuilder {
     includes_dir: PathBuf,
-    config: Option<prost_build::Config>,
-    prost_config: Option<Box<dyn FnOnce(prost_build::Config) -> prost_build::Config>>,
+    prost_config: Option<Box<dyn FnOnce(&mut prost_build::Config)>>,
     grpc: bool,
     #[cfg(feature = "tonic")]
     tonic_config: Option<Box<dyn FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder>>,
@@ -19,7 +19,6 @@ impl CompileBuilder {
     pub fn new(includes_dir: impl AsRef<Path>) -> Self {
         Self {
             includes_dir: includes_dir.as_ref().to_path_buf(),
-            config: None,
             prost_config: None,
             grpc: false,
             #[cfg(feature = "tonic")]
@@ -27,20 +26,13 @@ impl CompileBuilder {
         }
     }
 
-    /// Provide a custom base prost_build::Config.
-    ///
-    /// Use `with_prost_config` to further customize the config after defaults are applied.
-    pub fn with_config(mut self, config: prost_build::Config) -> Self {
-        self.config = Some(config);
-        self
-    }
-
     /// Customize the prost builder with a configuration closure.
     ///
-    /// The closure receives a `prost_build::Config` (either the one provided via `with_config`
-    /// or a default one) after the file descriptor set path has been configured.
+    /// The closure receives a mutable reference to `prost_build::Config` and is applied
+    /// before the required internal configuration. Internal settings (like file descriptor
+    /// set path) will be applied after and take precedence.
     ///
-    /// Use this to enable well-known types compilation if your protos use Google protobuf types.
+    /// Use this to add type attributes, extern paths, or other prost configuration.
     ///
     /// # Example
     ///
@@ -48,9 +40,7 @@ impl CompileBuilder {
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     connectrpc_axum_build::compile_dir("proto")
     ///         .with_prost_config(|config| {
-    ///             config
-    ///                 .compile_well_known_types()
-    ///                 .extern_path(".google.protobuf", "::pbjson_types")
+    ///             config.extern_path(".google.protobuf", "::pbjson_types");
     ///         })
     ///         .compile()?;
     ///     Ok(())
@@ -58,7 +48,7 @@ impl CompileBuilder {
     /// ```
     pub fn with_prost_config<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(prost_build::Config) -> prost_build::Config + 'static,
+        F: FnOnce(&mut prost_build::Config) + 'static,
     {
         self.prost_config = Some(Box::new(f));
         self
@@ -71,15 +61,13 @@ impl CompileBuilder {
         self
     }
 
-    /// Customize the tonic builder with a configuration closure.
+    /// Customize the tonic prost builder with a configuration closure.
     ///
-    /// The closure receives a pre-configured `tonic_prost_build::Builder` with:
-    /// - `build_client(false)` - client generation disabled
-    /// - `build_server(true)` - server generation enabled
-    /// - `out_dir` set to a temporary directory
+    /// The closure is applied before the required internal configuration. Internal settings
+    /// (like `build_client(false)`, `build_server(true)`, `out_dir`, and `extern_path` mappings)
+    /// will be applied after and take precedence.
     ///
-    /// You can add additional configuration like `compile_well_known_types(true)`,
-    /// custom `extern_path` mappings, attributes, etc.
+    /// Use this to add attributes or other tonic configuration.
     ///
     /// # Example
     ///
@@ -87,17 +75,17 @@ impl CompileBuilder {
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     connectrpc_axum_build::compile_dir("proto")
     ///         .with_tonic()
-    ///         .with_tonic_config(|builder| {
+    ///         .with_tonic_prost_config(|builder| {
     ///             builder
-    ///                 .compile_well_known_types(true)
-    ///                 .extern_path(".google.protobuf", "::pbjson_types")
+    ///                 .type_attribute("MyMessage", "#[derive(Hash)]")
+    ///                 .field_attribute("MyMessage.my_field", "#[serde(skip)]")
     ///         })
     ///         .compile()?;
     ///     Ok(())
     /// }
     /// ```
     #[cfg(feature = "tonic")]
-    pub fn with_tonic_config<F>(mut self, f: F) -> Self
+    pub fn with_tonic_prost_config<F>(mut self, f: F) -> Self
     where
         F: FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder + 'static,
     {
@@ -112,15 +100,15 @@ impl CompileBuilder {
         let descriptor_path = format!("{}/descriptor.bin", out_dir);
 
         // -------- Pass 1: prost + connect (always) --------
-        let mut config = self.config.unwrap_or_default();
+        let mut config = prost_build::Config::default();
 
-        // Always generate descriptor set for pbjson-build
-        config.file_descriptor_set_path(&descriptor_path);
-
-        // Apply user's prost configuration if provided
+        // Apply user's prost configuration first
         if let Some(config_fn) = self.prost_config {
-            config = config_fn(config);
+            config_fn(&mut config);
         }
+
+        // Always generate descriptor set for pbjson-build (internal config takes precedence)
+        config.file_descriptor_set_path(&descriptor_path);
 
         let mut proto_files = Vec::new();
         discover_proto_files(&self.includes_dir, &mut proto_files)?;
@@ -195,15 +183,17 @@ impl CompileBuilder {
             let temp_out_dir = format!("{}/tonic_server", out_dir);
             fs::create_dir_all(&temp_out_dir)?;
             let mut builder = tonic_prost_build::configure();
+
+            // Apply user's tonic configuration first
+            if let Some(config_fn) = self.tonic_config {
+                builder = config_fn(builder);
+            }
+
+            // Apply internal config (takes precedence)
             builder = builder
                 .build_client(false)
                 .build_server(true)
                 .out_dir(&temp_out_dir);
-
-            // Apply user's tonic configuration if provided
-            if let Some(config_fn) = self.tonic_config {
-                builder = config_fn(builder);
-            }
 
             // Add extern_path mappings for generated types
             for tr in &type_refs {
@@ -387,7 +377,7 @@ fn recurse_enum(
 /// and compiles them with a default or custom configuration.
 ///
 /// This provides the best developer experience by only requiring the includes path.
-/// Use `.with_config()` if you need custom configuration.
+/// Use `.with_prost_config()` if you need custom configuration.
 ///
 /// # Examples
 ///
@@ -401,14 +391,11 @@ fn recurse_enum(
 ///
 /// With custom configuration:
 /// ```rust,no_run
-/// use prost_build::Config;
-///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let mut config = Config::new();
-///     config.type_attribute(".", "#[derive(Debug)]");
-///
 ///     connectrpc_axum_build::compile_dir("proto")
-///         .with_config(config)
+///         .with_prost_config(|config| {
+///             config.type_attribute(".", "#[derive(Debug)]");
+///         })
 ///         .compile()?;
 ///     Ok(())
 /// }
