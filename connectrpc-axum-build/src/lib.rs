@@ -9,6 +9,8 @@ pub struct CompileBuilder {
     includes_dir: PathBuf,
     config: Option<prost_build::Config>,
     grpc: bool,
+    #[cfg(feature = "tonic")]
+    tonic_config: Option<Box<dyn FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder>>,
 }
 
 impl CompileBuilder {
@@ -18,6 +20,8 @@ impl CompileBuilder {
             includes_dir: includes_dir.as_ref().to_path_buf(),
             config: None,
             grpc: false,
+            #[cfg(feature = "tonic")]
+            tonic_config: None,
         }
     }
 
@@ -31,6 +35,40 @@ impl CompileBuilder {
     #[cfg(feature = "tonic")]
     pub fn with_tonic(mut self) -> Self {
         self.grpc = true;
+        self
+    }
+
+    /// Customize the tonic builder with a configuration closure.
+    ///
+    /// The closure receives a pre-configured `tonic_prost_build::Builder` with:
+    /// - `build_client(false)` - client generation disabled
+    /// - `build_server(true)` - server generation enabled
+    /// - `out_dir` set to a temporary directory
+    ///
+    /// You can add additional configuration like `compile_well_known_types(true)`,
+    /// custom `extern_path` mappings, attributes, etc.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     connectrpc_axum_build::compile_dir("proto")
+    ///         .with_tonic()
+    ///         .with_tonic_config(|builder| {
+    ///             builder
+    ///                 .compile_well_known_types(true)
+    ///                 .extern_path(".google.protobuf", "::pbjson_types")
+    ///         })
+    ///         .compile()?;
+    ///     Ok(())
+    /// }
+    /// ```
+    #[cfg(feature = "tonic")]
+    pub fn with_tonic_config<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder + 'static,
+    {
+        self.tonic_config = Some(Box::new(f));
         self
     }
 
@@ -127,6 +165,13 @@ impl CompileBuilder {
                 .build_client(false)
                 .build_server(true)
                 .out_dir(&temp_out_dir);
+
+            // Apply user's tonic configuration if provided
+            if let Some(config_fn) = self.tonic_config {
+                builder = config_fn(builder);
+            }
+
+            // Add extern_path mappings for generated types
             for tr in &type_refs {
                 builder = builder.extern_path(&tr.full, &tr.rust);
             }
