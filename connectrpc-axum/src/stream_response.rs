@@ -6,6 +6,7 @@
 //! the idiomatic way to handle streaming responses in Axum.
 
 use crate::error::ConnectError;
+use crate::protocol::get_request_protocol;
 use axum::{
     body::{Body, Bytes},
     http::{HeaderValue, header},
@@ -18,7 +19,8 @@ use serde::Serialize;
 /// A response wrapper for server-streaming handlers.
 ///
 /// This wrapper takes a stream of messages and encodes them according to the
-/// Connect protocol for server streams. It defaults to JSON encoding.
+/// Connect protocol for server streams. The encoding format (JSON or protobuf)
+/// is determined by the incoming request's Content-Type.
 #[derive(Debug)]
 pub struct ConnectStreamResponse<S> {
     stream: S,
@@ -47,69 +49,84 @@ where
     fn into_response(self) -> Response {
         use axum::http::StatusCode;
         use futures::StreamExt;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
 
-        // Track whether an error occurred to determine the final EndStreamResponse
+        // Get protocol from task-local (set by ConnectLayer middleware)
+        let protocol = get_request_protocol();
+        let use_proto = protocol.is_proto();
+
+        // Connect streaming: Send message frames + EndStreamResponse with flag 0x02
+        // Note: gRPC is handled by Tonic via ContentTypeSwitch
+
+        // Track if an error was sent (for EndStream handling)
+        let error_sent = Arc::new(AtomicBool::new(false));
+        let error_sent_clone = error_sent.clone();
+
         let body_stream = self
             .stream
-            .map(|result| match result {
+            .map(move |result| match result {
                 Ok(msg) => {
                     // Regular message frame with flags=0x00
                     let mut buf = vec![0u8; 5];
-                    serde_json::to_writer(&mut buf, &msg).unwrap();
+                    if use_proto {
+                        msg.encode(&mut buf).expect("protobuf encode failed");
+                    } else {
+                        serde_json::to_writer(&mut buf, &msg).expect("json encode failed");
+                    }
                     let len = (buf.len() - 5) as u32;
                     buf[1..5].copy_from_slice(&len.to_be_bytes());
-                    Ok(Bytes::from(buf))
+                    (Bytes::from(buf), false)
                 }
                 Err(err) => {
                     // Error EndStreamResponse with flags=0x02 (EndStream)
                     let mut buf = vec![0b0000_0010u8, 0, 0, 0, 0];
                     let json = serde_json::json!({ "error": err });
-                    serde_json::to_writer(&mut buf, &json).unwrap();
+                    serde_json::to_writer(&mut buf, &json).expect("json encode failed");
                     let len = (buf.len() - 5) as u32;
                     buf[1..5].copy_from_slice(&len.to_be_bytes());
-                    Err(Bytes::from(buf)) // Mark as error to prevent success EndStream
+                    (Bytes::from(buf), true) // Mark as error
                 }
             })
-            .chain(futures::stream::once(async {
-                // Success EndStreamResponse with flags=0x02 (EndStream)
-                // This is sent only if no error occurred (handled by scan below)
-                let mut buf = vec![0b0000_0010u8, 0, 0, 0, 0];
-                let json = serde_json::json!({});
-                serde_json::to_writer(&mut buf, &json).unwrap();
-                let len = (buf.len() - 5) as u32;
-                buf[1..5].copy_from_slice(&len.to_be_bytes());
-                Ok(Bytes::from(buf))
-            }))
-            // Take messages while they're Ok, stop after first Err (which contains the error EndStream)
-            .scan(false, |error_seen, item| {
+            // Take all messages, stop after error
+            .scan(false, move |error_seen, (bytes, is_error)| {
                 if *error_seen {
                     futures::future::ready(None)
+                } else if is_error {
+                    *error_seen = true;
+                    error_sent.store(true, Ordering::SeqCst);
+                    futures::future::ready(Some(bytes))
                 } else {
-                    match item {
-                        Err(_) => {
-                            *error_seen = true;
-                            futures::future::ready(Some(item))
-                        }
-                        Ok(_) => futures::future::ready(Some(item)),
-                    }
+                    futures::future::ready(Some(bytes))
                 }
             })
-            // Convert Result<Bytes, Bytes> to Result<Bytes, Infallible>
-            .map(|item| match item {
-                Ok(bytes) => Ok::<_, std::convert::Infallible>(bytes),
-                Err(bytes) => Ok::<_, std::convert::Infallible>(bytes),
-            });
+            // Append success EndStreamResponse if no error was sent
+            .chain(futures::stream::once(async move {
+                if error_sent_clone.load(Ordering::SeqCst) {
+                    // Error already sent EndStream
+                    None
+                } else {
+                    // Connect streaming: append success EndStreamResponse
+                    let mut buf = vec![0b0000_0010u8, 0, 0, 0, 0];
+                    serde_json::to_writer(&mut buf, &serde_json::json!({}))
+                        .expect("json encode failed");
+                    let len = (buf.len() - 5) as u32;
+                    buf[1..5].copy_from_slice(&len.to_be_bytes());
+                    Some(Bytes::from(buf))
+                }
+            }).filter_map(|x| async { x }))
+            // Wrap in Result for Body::from_stream
+            .map(|bytes| Ok::<_, std::convert::Infallible>(bytes));
 
-        // Convert the stream directly to Body
         let body = Body::from_stream(body_stream);
 
         Response::builder()
             .status(StatusCode::OK)
             .header(
                 header::CONTENT_TYPE,
-                HeaderValue::from_static("application/connect+json"),
+                HeaderValue::from_static(protocol.response_content_type()),
             )
             .body(body)
-            .unwrap()
+            .expect("response build failed")
     }
 }

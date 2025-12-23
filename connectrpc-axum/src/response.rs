@@ -1,6 +1,6 @@
 //! Response types for Connect.
 use crate::error::ConnectError;
-use crate::request::{ContentFormat, get_request_format};
+use crate::protocol::get_request_protocol;
 use axum::{
     body::{Body, Bytes},
     http::{HeaderValue, StatusCode, header},
@@ -9,10 +9,6 @@ use axum::{
 use futures::Stream;
 use prost::Message;
 use serde::Serialize;
-
-const APPLICATION_JSON: &str = "application/json";
-const APPLICATION_CONNECT_JSON: &str = "application/connect+json";
-const _APPLICATION_CONNECT_PROTO: &str = "application/connect+proto";
 
 #[derive(Debug, Clone)]
 pub struct ConnectResponse<T>(pub T);
@@ -31,32 +27,25 @@ where
     T: Message + Serialize,
 {
     fn into_response(self) -> Response {
-        // Use the format from the request (set during ConnectRequest extraction)
-        let format = get_request_format();
-        let use_proto = format == ContentFormat::Proto;
+        // Get protocol from task-local (set by ConnectLayer middleware)
+        let protocol = get_request_protocol();
 
-        let (body, content_type) = if use_proto {
-            // Encode as protobuf with gRPC frame envelope
-            // Frame format: [flags:1][length:4][payload:length]
-            let mut buf = vec![0u8; 5]; // Start with 5-byte header (compression flag + length)
-            self.0.encode(&mut buf).unwrap();
-            let payload_len = (buf.len() - 5) as u32;
-            buf[1..5].copy_from_slice(&payload_len.to_be_bytes());
-            (buf, "application/grpc+proto")
+        let body = if protocol.is_proto() {
+            // Connect unary proto: raw bytes, no frame envelope
+            self.0.encode_to_vec()
         } else {
-            // Encode as JSON (no frame envelope for unary Connect JSON)
-            let body = serde_json::to_vec(&self.0).unwrap();
-            (body, APPLICATION_JSON)
+            // Connect unary JSON: raw JSON, no frame envelope
+            serde_json::to_vec(&self.0).expect("json encode failed")
         };
 
         Response::builder()
             .status(StatusCode::OK)
             .header(
                 header::CONTENT_TYPE,
-                HeaderValue::from_static(content_type),
+                HeaderValue::from_static(protocol.response_content_type()),
             )
             .body(Body::from(body))
-            .unwrap()
+            .expect("response build failed")
     }
 }
 
@@ -100,13 +89,19 @@ where
 {
     fn into_response(self) -> Response {
         use futures::StreamExt;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
 
-        let format = get_request_format();
-        let use_proto = format == ContentFormat::Proto;
+        // Get protocol from task-local (set by ConnectLayer middleware)
+        let protocol = get_request_protocol();
+        let use_proto = protocol.is_proto();
 
-        // gRPC streaming: Just send message frames, no EndStreamResponse
         // Connect streaming: Send message frames + EndStreamResponse with flag 0x02
-        // For now, since we detected gRPC by content-type, let's not send EndStreamResponse for gRPC
+        // Note: gRPC is handled by Tonic via ContentTypeSwitch
+
+        // Track if an error was sent (for EndStream handling)
+        let error_sent = Arc::new(AtomicBool::new(false));
+        let error_sent_clone = error_sent.clone();
 
         let body_stream = self
             .0
@@ -116,62 +111,64 @@ where
                     // Regular message frame with flags=0x00
                     let mut buf = vec![0u8; 5];
                     if use_proto {
-                        msg.encode(&mut buf).unwrap();
+                        msg.encode(&mut buf).expect("protobuf encode failed");
                     } else {
-                        serde_json::to_writer(&mut buf, &msg).unwrap();
+                        serde_json::to_writer(&mut buf, &msg).expect("json encode failed");
                     }
                     let len = (buf.len() - 5) as u32;
                     buf[1..5].copy_from_slice(&len.to_be_bytes());
-                    Ok(Bytes::from(buf))
+                    (Bytes::from(buf), false)
                 }
                 Err(err) => {
-                    // For gRPC: errors should be sent as trailers, not in-stream
-                    // For Connect: send Error EndStreamResponse with flags=0x02
-                    // For simplicity, we'll send Connect-style error for now
+                    // Send Error EndStreamResponse with flags=0x02
                     let mut buf = vec![0b0000_0010u8, 0, 0, 0, 0];
                     let json = serde_json::json!({ "error": err });
-                    serde_json::to_writer(&mut buf, &json).unwrap();
+                    serde_json::to_writer(&mut buf, &json).expect("json encode failed");
                     let len = (buf.len() - 5) as u32;
                     buf[1..5].copy_from_slice(&len.to_be_bytes());
-                    Err(Bytes::from(buf)) // Mark as error to prevent success EndStream
+                    (Bytes::from(buf), true) // Mark as error
                 }
             })
-            // Take all messages (including errors)
-            .scan(false, |error_seen, item| {
+            // Take all messages, stop after error
+            .scan(false, move |error_seen, (bytes, is_error)| {
                 if *error_seen {
                     futures::future::ready(None)
+                } else if is_error {
+                    *error_seen = true;
+                    error_sent.store(true, Ordering::SeqCst);
+                    futures::future::ready(Some(bytes))
                 } else {
-                    match &item {
-                        Err(_) => {
-                            *error_seen = true;
-                            futures::future::ready(Some(item))
-                        }
-                        Ok(_) => futures::future::ready(Some(item)),
-                    }
+                    futures::future::ready(Some(bytes))
                 }
             })
-            // Convert Result<Bytes, Bytes> to Result<Bytes, Infallible>
-            .map(|item| match item {
-                Ok(bytes) => Ok::<_, std::convert::Infallible>(bytes),
-                Err(bytes) => Ok::<_, std::convert::Infallible>(bytes),
-            });
+            // Append success EndStreamResponse if no error was sent
+            .chain(futures::stream::once(async move {
+                if error_sent_clone.load(Ordering::SeqCst) {
+                    // Error already sent EndStream
+                    None
+                } else {
+                    // Connect streaming: append success EndStreamResponse
+                    let mut buf = vec![0b0000_0010u8, 0, 0, 0, 0];
+                    serde_json::to_writer(&mut buf, &serde_json::json!({}))
+                        .expect("json encode failed");
+                    let len = (buf.len() - 5) as u32;
+                    buf[1..5].copy_from_slice(&len.to_be_bytes());
+                    Some(Bytes::from(buf))
+                }
+            }).filter_map(|x| async { x }))
+            // Wrap in Result for Body::from_stream
+            .map(|bytes| Ok::<_, std::convert::Infallible>(bytes));
 
         let body = Body::from_stream(body_stream);
-
-        let content_type = if use_proto {
-            "application/grpc+proto"
-        } else {
-            APPLICATION_CONNECT_JSON
-        };
 
         Response::builder()
             .status(StatusCode::OK)
             .header(
                 header::CONTENT_TYPE,
-                HeaderValue::from_static(content_type),
+                HeaderValue::from_static(protocol.response_content_type()),
             )
             .body(body)
-            .unwrap()
+            .expect("response build failed")
     }
 }
 

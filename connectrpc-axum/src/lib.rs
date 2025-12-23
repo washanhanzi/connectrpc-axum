@@ -1,5 +1,7 @@
 pub mod error;
 pub mod handler;
+pub mod layer;
+pub mod protocol;
 pub mod request;
 pub mod response;
 pub mod service_builder;
@@ -16,6 +18,8 @@ pub use handler::{
     unimplemented_boxed_call,
 };
 pub use handler::{ConnectHandler, ConnectHandlerWrapper, post_connect};
+pub use layer::{ConnectLayer, ConnectService};
+pub use protocol::{RequestProtocol, get_request_protocol};
 pub use service_builder::MakeServiceBuilder;
 
 // Re-export several crates
@@ -39,6 +43,8 @@ pub mod prelude {
         ConnectHandler, ConnectHandlerWrapper, ConnectStreamHandlerWrapper, post_connect,
         post_connect_stream,
     };
+    pub use crate::layer::{ConnectLayer, ConnectService};
+    pub use crate::protocol::{RequestProtocol, get_request_protocol};
     pub use crate::request::ConnectRequest;
     pub use crate::response::{ConnectResponse, StreamBody};
     pub use crate::service_builder::MakeServiceBuilder;

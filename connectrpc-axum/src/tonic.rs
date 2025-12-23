@@ -15,11 +15,23 @@ use hyper::http::header::CONTENT_TYPE;
 use hyper::http::{Request, Response, StatusCode};
 
 /// Returns true if the request looks like a gRPC (Tonic) call based on `content-type`.
+///
+/// When the `tonic-web` feature is enabled, this also matches `application/grpc-web*`
+/// content types, allowing grpc-web requests to be routed to Tonic (with `tonic_web::GrpcWebLayer`).
 fn is_grpc(req: &Request<AxumBody>) -> bool {
     req.headers()
         .get(CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .map_or(false, |s| s.starts_with("application/grpc"))
+        .map_or(false, |s| {
+            #[cfg(feature = "tonic-web")]
+            {
+                s.starts_with("application/grpc")
+            }
+            #[cfg(not(feature = "tonic-web"))]
+            {
+                s.starts_with("application/grpc") && !s.starts_with("application/grpc-web")
+            }
+        })
 }
 
 /// Map any `http_body::Body` into `axum::Body` by streaming bytes.

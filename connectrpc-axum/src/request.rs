@@ -1,42 +1,15 @@
 //! Extractor for Connect requests.
 use crate::error::Code;
 use crate::error::ConnectError;
+use crate::protocol::get_request_protocol;
 use axum::{
     body::Bytes,
     extract::{FromRequest, Request},
-    http::{Method, header},
+    http::Method,
 };
 use prost::Message;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use std::cell::Cell;
-
-const APPLICATION_PROTO: &str = "application/proto";
-const APPLICATION_CONNECT_PROTO: &str = "application/connect+proto";
-const APPLICATION_JSON: &str = "application/json";
-const APPLICATION_CONNECT_JSON: &str = "application/connect+json";
-
-/// Content format used in the request, stored in thread-local storage
-/// so the response can match the format.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ContentFormat {
-    Json,
-    Proto,
-}
-
-thread_local! {
-    static REQUEST_FORMAT: Cell<ContentFormat> = const { Cell::new(ContentFormat::Json) };
-}
-
-/// Store the request content format for this request
-pub fn set_request_format(format: ContentFormat) {
-    REQUEST_FORMAT.with(|f| f.set(format));
-}
-
-/// Get the request content format for this request
-pub fn get_request_format() -> ContentFormat {
-    REQUEST_FORMAT.with(|f| f.get())
-}
 
 #[derive(Debug, Clone)]
 pub struct ConnectRequest<T>(pub T);
@@ -68,55 +41,45 @@ where
     S: Send + Sync,
     T: Message + DeserializeOwned + Default,
 {
-    let content_type = req
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
-    let content_type = content_type.to_string();
-
-    // Determine the format and store it in thread-local storage
-    let format = if content_type.starts_with(APPLICATION_PROTO)
-        || content_type.starts_with(APPLICATION_CONNECT_PROTO)
-        || content_type.starts_with("application/grpc")
-    {
-        ContentFormat::Proto
-    } else {
-        ContentFormat::Json
-    };
-    set_request_format(format);
+    // Protocol is detected by ConnectLayer middleware and stored in task-local
+    let protocol = get_request_protocol();
 
     let mut bytes = Bytes::from_request(req, _state)
         .await
         .map_err(|err| ConnectError::new(Code::Internal, err.to_string()))?;
 
-    // For Connect streaming content types AND gRPC, unwrap the 5-byte frame envelope
-    // Both protocols use the same frame format: [flags:1][length:4][payload:length]
-    let is_connect_streaming = content_type.starts_with(APPLICATION_CONNECT_PROTO)
-        || content_type.starts_with(APPLICATION_CONNECT_JSON);
-    let is_grpc = content_type.starts_with("application/grpc");
-    let needs_frame_unwrap = is_connect_streaming || is_grpc;
+    // For Connect streaming, unwrap the 5-byte frame envelope
+    // Frame format: [flags:1][length:4][payload:length]
+    // Note: gRPC requests are handled by Tonic via ContentTypeSwitch
+    let needs_frame_unwrap = protocol.needs_envelope();
 
     if needs_frame_unwrap && bytes.len() >= 5 {
-        // Frame format: [flags:1][length:4][payload:length]
         let flags = bytes[0];
         let length = u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]) as usize;
 
-        // Validate compression flag for gRPC
-        if is_grpc && flags > 1 {
+        // Connect streaming: flag 0x00 = message, 0x02 = end-stream
+        if flags == 0x02 {
             return Err(ConnectError::new(
                 Code::InvalidArgument,
-                format!(
-                    "invalid gRPC compression flag: {} (valid flags are 0 and 1)",
-                    flags
-                ),
+                "unexpected EndStreamResponse in request",
+            ));
+        } else if flags != 0x00 {
+            return Err(ConnectError::new(
+                Code::InvalidArgument,
+                format!("invalid Connect frame flags: 0x{:02x}", flags),
             ));
         }
 
-        // Extract the actual payload
-        if bytes.len() >= 5 + length {
-            bytes = bytes.slice(5..5 + length);
-        } else {
+        // Extract the actual payload (unary request must have exactly one frame)
+        if bytes.len() > 5 + length {
+            return Err(ConnectError::new(
+                Code::InvalidArgument,
+                format!(
+                    "frame has {} unexpected trailing bytes",
+                    bytes.len() - 5 - length
+                ),
+            ));
+        } else if bytes.len() < 5 + length {
             return Err(ConnectError::new(
                 Code::InvalidArgument,
                 format!(
@@ -126,27 +89,24 @@ where
                 ),
             ));
         }
+        bytes = bytes.slice(5..5 + length);
     } else if needs_frame_unwrap {
+        // Frame expected but body is too short - this is an error
+        return Err(ConnectError::new(
+            Code::InvalidArgument,
+            "protocol error: incomplete envelope",
+        ));
     }
 
-    if content_type.starts_with(APPLICATION_PROTO)
-        || content_type.starts_with(APPLICATION_CONNECT_PROTO)
-        || content_type.starts_with("application/grpc")
-    {
+    // Decode based on protocol encoding
+    if protocol.is_proto() {
         let message = T::decode(bytes)
             .map_err(|err| ConnectError::new(Code::InvalidArgument, err.to_string()))?;
         Ok(ConnectRequest(message))
-    } else if content_type.starts_with(APPLICATION_JSON)
-        || content_type.starts_with(APPLICATION_CONNECT_JSON)
-    {
+    } else {
         let message: T = serde_json::from_slice(&bytes)
             .map_err(|err| ConnectError::new(Code::InvalidArgument, err.to_string()))?;
         Ok(ConnectRequest(message))
-    } else {
-        Err(ConnectError::new(
-            Code::InvalidArgument,
-            format!("unsupported content-type: {}", content_type),
-        ))
     }
 }
 
@@ -176,7 +136,7 @@ where
         ));
     }
 
-    let bytes = if params.base64.as_deref() == Some("true") {
+    let bytes = if params.base64.as_deref() == Some("1") {
         use base64::{Engine as _, engine::general_purpose};
         general_purpose::URL_SAFE
             .decode(&params.message)
