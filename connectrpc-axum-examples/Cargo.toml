@@ -12,20 +12,45 @@ tonic = [
   "dep:tonic",
   "dep:tonic-prost",
 ]
+tonic-web = [
+  "tonic",
+  "connectrpc-axum/tonic-web",
+  "dep:tonic-web",
+]
 
+# Example 1: Pure ConnectRPC unary
 [[bin]]
-name = "connect-only"
-path = "src/bin/connect-only.rs"
+name = "connect-unary"
+path = "src/bin/connect-unary.rs"
 
+# Example 2: Pure ConnectRPC server streaming
 [[bin]]
-name = "connect-tonic"
-path = "src/bin/connect-tonic.rs"
+name = "connect-server-stream"
+path = "src/bin/connect-server-stream.rs"
+
+# Example 3: Tonic gRPC unary (also works with ConnectRPC)
+[[bin]]
+name = "tonic-unary"
+path = "src/bin/tonic-unary.rs"
 required-features = ["tonic"]
 
+# Example 4: Tonic server streaming (also works with ConnectRPC)
 [[bin]]
-name = "connect-tonic-bidi-stream"
-path = "src/bin/connect-tonic-bidi-stream.rs"
+name = "tonic-server-stream"
+path = "src/bin/tonic-server-stream.rs"
 required-features = ["tonic"]
+
+# Example 5: Tonic bidirectional streaming (gRPC only)
+[[bin]]
+name = "tonic-bidi-stream"
+path = "src/bin/tonic-bidi-stream.rs"
+required-features = ["tonic"]
+
+# Example 6: gRPC-Web via tonic-web
+[[bin]]
+name = "grpc-web"
+path = "src/bin/grpc-web.rs"
+required-features = ["tonic-web"]
 
 [dependencies]
 # Application dependency for error handling
@@ -64,6 +89,8 @@ tokio-stream = "0.1"
 tonic = { version = "0.14", optional = true }
 # Required when using tonic feature: Used by generated Tonic code
 tonic-prost = { workspace = true, optional = true }
+# Required when using tonic-web feature: gRPC-Web support
+tonic-web = { version = "0.14", optional = true }
 # Required: Used by generated service code
 tower = { workspace = true }
 # Application dependency for HTTP middleware

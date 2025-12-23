@@ -1,29 +1,28 @@
+//! Example 2: Pure ConnectRPC Server Streaming
+//!
+//! This example demonstrates ConnectRPC server streaming:
+//! - Server streaming RPC (single request, multiple responses)
+//! - Uses async_stream for ergonomic stream creation
+//! - No gRPC support (pure Connect protocol)
+//!
+//! Run with: cargo run --bin connect-server-stream --no-default-features
+//! Test with Go client: go run ./cmd/client --protocol connect server-stream
+
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
 use futures::Stream;
 use std::net::SocketAddr;
 
-// Simple stateless handler for SayHello (unary)
-async fn say_hello(
-    ConnectRequest(req): ConnectRequest<HelloRequest>,
-) -> Result<ConnectResponse<HelloResponse>, ConnectError> {
-    Ok(ConnectResponse(HelloResponse {
-        message: format!("Hello, {}!", req.name.unwrap_or_default()),
-        response_type: None,  // oneof field - set to None for now
-    }))
-}
-
-// Server streaming handler - returns multiple responses!
+/// Server streaming handler - returns multiple responses
 async fn say_hello_stream(
     ConnectRequest(req): ConnectRequest<HelloRequest>,
 ) -> Result<
     ConnectResponse<StreamBody<impl Stream<Item = Result<HelloResponse, ConnectError>>>>,
     ConnectError,
 > {
-    let name = req.name.unwrap_or_else(|| "Anonymous".to_string());
+    let name = req.name.unwrap_or_else(|| "World".to_string());
     let hobbies = req.hobbies;
 
-    // Create a stream that yields multiple responses
     let response_stream = async_stream::stream! {
         // First greeting
         yield Ok(HelloResponse {
@@ -31,16 +30,16 @@ async fn say_hello_stream(
             response_type: None,
         });
 
-        // If there are hobbies, greet each one
+        // Stream hobbies if provided
         if !hobbies.is_empty() {
             for (idx, hobby) in hobbies.iter().enumerate() {
                 yield Ok(HelloResponse {
-                    message: format!("Hobby #{}: {} - that's interesting!", idx + 1, hobby),
+                    message: format!("Hobby #{}: {} - nice!", idx + 1, hobby),
                     response_type: None,
                 });
             }
         } else {
-            // Send multiple greetings if no hobbies provided
+            // Send sample messages
             for i in 1..=3 {
                 yield Ok(HelloResponse {
                     message: format!("Stream message #{} for {}", i, name),
@@ -51,7 +50,7 @@ async fn say_hello_stream(
 
         // Final message
         yield Ok(HelloResponse {
-            message: format!("Stream complete for {}. Goodbye!", name),
+            message: format!("Stream complete. Goodbye, {}!", name),
             response_type: None,
         });
     };
@@ -61,18 +60,23 @@ async fn say_hello_stream(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Build Connect router with simple stateless handlers
     let connect_router = helloworldservice::HelloWorldServiceBuilder::new()
-        .say_hello(say_hello)
         .say_hello_stream(say_hello_stream)
         .build();
 
     let addr: SocketAddr = "0.0.0.0:3000".parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    println!("Connect-only server listening on http://{}", addr);
-    println!("Example: Pure ConnectRPC implementation");
-    println!("  - Unary RPC: SayHello");
-    println!("  - Server streaming RPC: SayHelloStream (returns multiple messages!)");
+
+    println!("=== Example 2: Pure ConnectRPC Server Streaming ===");
+    println!("Server listening on http://{}", addr);
+    println!();
+    println!("Service: HelloWorldService");
+    println!("  - SayHelloStream (server streaming): POST /hello.HelloWorldService/SayHelloStream");
+    println!();
+    println!("Test with:");
+    println!("  curl -X POST http://localhost:3000/hello.HelloWorldService/SayHelloStream \\");
+    println!("    -H 'Content-Type: application/connect+json' \\");
+    println!("    -d '{{\"name\": \"Alice\", \"hobbies\": [\"coding\", \"reading\"]}}'");
 
     axum::serve(listener, connect_router.into_make_service()).await?;
     Ok(())

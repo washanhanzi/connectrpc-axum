@@ -5,28 +5,44 @@ Quick reference for `cargo-make` tasks. Run from the `connectrpc-axum-examples/`
 ## Quick Start
 
 ```bash
-cargo make setup          # One-time setup
-cargo make run-connect-only    # Terminal 1
-cargo make go-run              # Terminal 2
+cargo make setup                    # One-time setup
+cargo make run-tonic-unary          # Terminal 1: Start server
+cargo make go-test-unary            # Terminal 2: Test with Connect
+cargo make go-test-unary-grpc       # Terminal 2: Test with gRPC
 ```
 
 ## Server Tasks
 
 | Task | Description |
 |------|-------------|
-| `cargo make run-connect-only` | Run pure Connect server (port 3000) |
-| `cargo make run-connect-tonic` | Run Connect + Tonic server |
-| `cargo make run-connect-tonic-bidi` | Run server with bidi streaming |
+| `cargo make run-connect-unary` | Example 1: Pure ConnectRPC unary |
+| `cargo make run-connect-server-stream` | Example 2: Pure ConnectRPC streaming |
+| `cargo make run-tonic-unary` | Example 3: Connect + gRPC unary |
+| `cargo make run-tonic-server-stream` | Example 4: Connect + gRPC streaming |
+| `cargo make run-tonic-bidi-stream` | Example 5: gRPC bidi streaming |
+| `cargo make run-grpc-web` | Example 6: gRPC-Web |
 | `cargo make build-servers` | Build all server binaries |
 | `cargo make watch-server` | Auto-restart on code changes |
 
-## Go Client Tasks
+## Go Client Test Tasks
+
+| Task | Description |
+|------|-------------|
+| `cargo make go-test-unary` | Test unary RPC (Connect) |
+| `cargo make go-test-unary-grpc` | Test unary RPC (gRPC) |
+| `cargo make go-test-server-stream` | Test server streaming (Connect) |
+| `cargo make go-test-server-stream-grpc` | Test server streaming (gRPC) |
+| `cargo make go-test-bidi-stream` | Test bidi streaming (gRPC only) |
+| `cargo make go-test-grpc-web` | Test gRPC-Web |
+| `cargo make go-test-all` | Run all tests (Connect) |
+| `cargo make go-test-all-grpc` | Run all tests (gRPC) |
+
+## Go Client Build Tasks
 
 | Task | Description |
 |------|-------------|
 | `cargo make go-generate` | Generate protobuf code from .proto files |
-| `cargo make go-build` | Build the streaming test client |
-| `cargo make go-run` | Run the streaming test client |
+| `cargo make go-build` | Build the test client |
 | `cargo make go-deps` | Download Go dependencies |
 | `cargo make go-clean` | Remove generated files |
 
@@ -46,13 +62,42 @@ cargo make go-run              # Terminal 2
 cargo make setup
 ```
 
-### Run Server and Test
+### Test Unary RPC (Connect + gRPC)
 ```bash
 # Terminal 1
-cargo make run-connect-only
+cargo make run-tonic-unary
 
 # Terminal 2
-cargo make go-run
+cargo make go-test-unary          # Connect protocol
+cargo make go-test-unary-grpc     # gRPC protocol
+```
+
+### Test Server Streaming
+```bash
+# Terminal 1
+cargo make run-tonic-server-stream
+
+# Terminal 2
+cargo make go-test-server-stream      # Connect
+cargo make go-test-server-stream-grpc # gRPC
+```
+
+### Test Bidirectional Streaming (gRPC only)
+```bash
+# Terminal 1
+cargo make run-tonic-bidi-stream
+
+# Terminal 2
+cargo make go-test-bidi-stream
+```
+
+### Test gRPC-Web
+```bash
+# Terminal 1
+cargo make run-grpc-web
+
+# Terminal 2
+cargo make go-test-grpc-web
 ```
 
 ### Development Loop
@@ -61,18 +106,7 @@ cargo make go-run
 cargo make watch-server
 
 # In another terminal
-cargo make go-run
-```
-
-### Test Different Servers
-```bash
-# Test each server implementation
-cargo make run-connect-only
-cargo make run-connect-tonic
-cargo make run-connect-tonic-bidi
-
-# Each time, run in another terminal:
-cargo make go-run
+cargo make go-test-unary
 ```
 
 ### Clean and Rebuild
@@ -91,9 +125,8 @@ cargo make build-all
 ## Tips
 
 - Use `cargo make --list-all-steps` to see all tasks with categories
-- Tasks can be run from any directory by specifying paths
-- The Go client tests Connect protocol conformance
 - All servers run on port 3000 by default
+- Go client uses `-protocol` flag to switch between connect/grpc
 
 ## Troubleshooting
 
@@ -116,4 +149,5 @@ cargo install cargo-make
 ```bash
 cargo make go-clean
 cargo make go-generate
+cargo make go-deps
 ```

@@ -1,3 +1,15 @@
+//! Example 4: Tonic Server Streaming (also works with ConnectRPC)
+//!
+//! This example demonstrates dual-protocol server streaming:
+//! - Server streaming RPC works with both Connect and gRPC protocols
+//! - Uses TonicCompatibleBuilder for both routers
+//! - Same streaming handler serves both protocols
+//!
+//! Run with: cargo run --bin tonic-server-stream
+//! Test with:
+//!   - Connect: go run ./cmd/client --protocol connect server-stream
+//!   - gRPC:    go run ./cmd/client --protocol grpc server-stream
+
 use axum::extract::State;
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
@@ -10,21 +22,7 @@ struct AppState {
     counter: Arc<AtomicUsize>,
 }
 
-// Handler with state (unary)
-async fn say_hello(
-    State(state): State<AppState>,
-    ConnectRequest(req): ConnectRequest<HelloRequest>,
-) -> Result<ConnectResponse<HelloResponse>, ConnectError> {
-    let count = state
-        .counter
-        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    Ok(ConnectResponse(HelloResponse {
-        message: format!("Hello #{}, {}!", count, req.name.unwrap_or_default()),
-        response_type: None,
-    }))
-}
-
-// Server streaming handler with state - returns multiple responses!
+/// Streaming handler with state - works for both Connect and gRPC
 async fn say_hello_stream(
     State(state): State<AppState>,
     ConnectRequest(req): ConnectRequest<HelloRequest>,
@@ -32,11 +30,10 @@ async fn say_hello_stream(
     ConnectResponse<StreamBody<impl Stream<Item = Result<HelloResponse, ConnectError>>>>,
     ConnectError,
 > {
-    let name = req.name.unwrap_or_else(|| "Anonymous".to_string());
+    let name = req.name.unwrap_or_else(|| "World".to_string());
     let hobbies = req.hobbies;
     let counter = state.counter.clone();
 
-    // Create a stream that yields multiple responses
     let response_stream = async_stream::stream! {
         let count = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         yield Ok(HelloResponse {
@@ -76,27 +73,38 @@ async fn say_hello_stream(
 async fn main() -> anyhow::Result<()> {
     let app_state = AppState::default();
 
-    // ✅ Now using TonicCompatibleBuilder with streaming support (Phases 3 & 4 complete!)
-    // This demonstrates that the tonic-compatible builder now works with streaming methods
-    let (connect_router, _grpc_server) =
+    // Build both Connect router and gRPC server from same handlers
+    let (connect_router, grpc_server) =
         helloworldservice::HelloWorldServiceTonicCompatibleBuilder::new()
-            .say_hello(say_hello)
             .say_hello_stream(say_hello_stream)
-            .with_state(app_state.clone())
+            .with_state(app_state)
             .build();
 
-    // Note: The grpc_server is available for use with tonic::transport::Server
-    // For this example, we're just running the Connect server
-    let app = connect_router;
+    // Combine into a single service that routes by Content-Type
+    let dispatch = connectrpc_axum::MakeServiceBuilder::new()
+        .add_router(connect_router)
+        .add_grpc_service(grpc_server)
+        .build();
 
     let addr: SocketAddr = "0.0.0.0:3000".parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    println!("Connect server listening on http://{}", addr);
-    println!("Example: TonicCompatibleBuilder with state and server streaming");
-    println!("  - Unary RPC: SayHello (with counter)");
-    println!("  - Server streaming RPC: SayHelloStream (multiple messages with counter)");
-    println!("  - Single handler works for both Connect and gRPC!");
 
-    axum::serve(listener, app.into_make_service()).await?;
+    println!("=== Example 4: Tonic Server Streaming (+ ConnectRPC) ===");
+    println!("Server listening on http://{}", addr);
+    println!();
+    println!("Service: HelloWorldService");
+    println!("  - SayHelloStream (server streaming): /hello.HelloWorldService/SayHelloStream");
+    println!();
+    println!("Protocols supported:");
+    println!("  - Connect (JSON): Content-Type: application/connect+json");
+    println!("  - Connect (Proto): Content-Type: application/connect+proto");
+    println!("  - gRPC: Content-Type: application/grpc");
+    println!();
+    println!("Test with:");
+    println!("  go run ./cmd/client --protocol connect server-stream");
+    println!("  go run ./cmd/client --protocol grpc server-stream");
+
+    let make = tower::make::Shared::new(dispatch);
+    axum::serve(listener, make).await?;
     Ok(())
 }

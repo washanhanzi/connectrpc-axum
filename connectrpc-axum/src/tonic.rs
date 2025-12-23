@@ -10,7 +10,6 @@ use axum::response::Response as AxumResponse;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use http_body::Body as HttpBody;
-use http_body_util::BodyExt as _;
 use hyper::http::header::CONTENT_TYPE;
 use hyper::http::{Request, Response, StatusCode};
 
@@ -34,13 +33,17 @@ fn is_grpc(req: &Request<AxumBody>) -> bool {
         })
 }
 
-/// Map any `http_body::Body` into `axum::Body` by streaming bytes.
+/// Map any `http_body::Body` into `axum::Body`, preserving trailers.
+///
+/// Uses `AxumBody::new()` instead of `from_stream(into_data_stream())` because
+/// `into_data_stream()` discards non-data frames (trailers). For gRPC, trailers
+/// are essential as they carry `grpc-status` and `grpc-message`.
 fn to_axum_body<B>(body: B) -> AxumBody
 where
     B: HttpBody<Data = Bytes> + Send + 'static,
-    B::Error: std::error::Error + Send + Sync + 'static,
+    B::Error: Into<Box<dyn std::error::Error + Send + Sync>> + 'static,
 {
-    AxumBody::from_stream(body.into_data_stream())
+    AxumBody::new(body)
 }
 
 fn internal_error<E: std::fmt::Display>(err: E) -> AxumResponse {

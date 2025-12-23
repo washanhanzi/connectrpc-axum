@@ -1,6 +1,6 @@
-# Connect Protocol Streaming Verification
+# Connect Protocol Test Client
 
-This directory contains both a Go client and a reference Go server for testing Connect protocol streaming implementations.
+This directory contains a Go test client for verifying Connect and gRPC protocol implementations, plus a reference Go server.
 
 ## Project Structure
 
@@ -18,24 +18,23 @@ go-client/
 └── README.md
 ```
 
-## Components
+## Client Usage
 
-### 1. Test Client (`cmd/client/`)
+```bash
+go run ./cmd/client [flags] <command>
 
-- **Raw HTTP Protocol Testing**: Inspects the actual binary frames sent by the server
-- **Connect Client Testing**: Uses the official Connect-Go client library
-- **Protocol Compliance Verification**: Checks for:
-  - Proper frame structure `[flags:1][length:4][payload:N]`
-  - EndStreamResponse presence and format
-  - Error handling format
-  - Metadata/trailers
+# Commands:
+#   unary          Test unary RPC
+#   server-stream  Test server streaming RPC
+#   bidi-stream    Test bidirectional streaming (gRPC only)
+#   grpc-web       Test gRPC-Web protocol
+#   all            Run all applicable tests
 
-### 2. Reference Go Server (`cmd/server/`)
-
-A minimal Connect server implementation that only implements the `SayHelloStream` handler. This is useful for:
-- Comparing behavior with the Rust connectrpc-axum implementation
-- Verifying correct Connect protocol implementation
-- Testing the Go client against a known-good server
+# Flags:
+#   -server    Server URL (default: http://localhost:3000)
+#   -protocol  Protocol: connect, grpc (default: connect)
+#   -verbose   Verbose output showing raw frames
+```
 
 ## Prerequisites
 
@@ -45,230 +44,168 @@ A minimal Connect server implementation that only implements the `SayHelloStream
 
 ## Setup
 
-### Option 1: Using cargo-make (Recommended)
+### Using cargo-make (Recommended)
 
 From the parent directory (`connectrpc-axum-examples`):
 
 ```bash
-# One-time setup - generates code and builds everything
-cargo make setup
-
-# Or step by step:
-cargo make go-generate    # Generate protobuf code
-cargo make go-build       # Build the test client
+cargo make setup           # One-time setup
+cargo make go-build        # Build client and server
 ```
 
-### Option 2: Manual setup
+### Manual setup
 
 1. Install Buf CLI:
 ```bash
-# macOS
 brew install bufbuild/buf/buf
-
-# Or using Go
-go install github.com/bufbuild/buf/cmd/buf@latest
 ```
 
-2. Generate the code:
+2. Generate code and build:
 ```bash
-buf generate proto --template buf.gen.yaml -o .
-```
-
-3. Build:
-```bash
-go mod download
+cd ..
+buf generate
+cd go-client
+go mod tidy
 go build -o go-client ./cmd/client
 go build -o go-server ./cmd/server
 ```
 
-## Usage
+## Testing Rust Servers
 
-### Testing the Rust Server (connectrpc-axum)
-
-#### Quick Start with cargo-make (Recommended)
+### Quick Start with cargo-make
 
 From the parent directory (`connectrpc-axum-examples`):
 
 ```bash
-# Terminal 1: Start the Rust server
-cargo make run-connect-only
+# Terminal 1: Start a Rust server
+cargo make run-tonic-unary
 
-# Terminal 2: Run the test client
-cargo make go-run
+# Terminal 2: Run tests
+cargo make go-test-unary          # Connect protocol
+cargo make go-test-unary-grpc     # gRPC protocol
 ```
 
-#### Manual Usage
+### Available Test Commands
 
-1. **Start the connectrpc-axum server** (in a separate terminal):
+| Command | Description |
+|---------|-------------|
+| `cargo make go-test-unary` | Test unary (Connect) |
+| `cargo make go-test-unary-grpc` | Test unary (gRPC) |
+| `cargo make go-test-server-stream` | Test streaming (Connect) |
+| `cargo make go-test-server-stream-grpc` | Test streaming (gRPC) |
+| `cargo make go-test-bidi-stream` | Test bidi (gRPC only) |
+| `cargo make go-test-grpc-web` | Test gRPC-Web |
+| `cargo make go-test-all` | All tests (Connect) |
+| `cargo make go-test-all-grpc` | All tests (gRPC) |
+
+### Manual Usage
+
 ```bash
+# Start a Rust server
 cd ..
-cargo run --bin connect-only
+cargo run --bin tonic-unary
+
+# Run tests (in another terminal)
+cd go-client
+./go-client -protocol connect unary
+./go-client -protocol grpc unary
+./go-client -protocol connect server-stream
+./go-client -protocol grpc bidi-stream
 ```
 
-Wait for the server to start (you should see "listening on http://0.0.0.0:3000").
+## Testing Different Server Examples
 
-2. **Run the test client**:
+| Rust Server | Recommended Tests |
+|-------------|-------------------|
+| `run-connect-unary` | `go-test-unary` |
+| `run-connect-server-stream` | `go-test-server-stream` |
+| `run-tonic-unary` | `go-test-unary`, `go-test-unary-grpc` |
+| `run-tonic-server-stream` | `go-test-server-stream`, `go-test-server-stream-grpc` |
+| `run-tonic-bidi-stream` | `go-test-bidi-stream` |
+| `run-grpc-web` | `go-test-grpc-web` |
+
+## Reference Go Server
+
+A minimal Connect server for comparing behavior:
+
 ```bash
-# Using the pre-built binary:
-./go-client
+# Start Go server on port 3001
+cargo make go-run-server
 
-# Or run directly:
-go run ./cmd/client
-
-# Or build first:
-go build -o go-client ./cmd/client
-./go-client
-```
-
-### Testing the Go Reference Server
-
-To test against the Go reference implementation:
-
-1. **Start the Go server** (in a separate terminal):
-```bash
-# From the go-client directory:
-go run ./cmd/server
-# Or use the pre-built binary:
-./go-server
-# Or build it first:
-go build -o go-server ./cmd/server
-./go-server
-```
-
-The server will start on port 3001.
-
-2. **Update the client to point to the Go server**:
-Edit `cmd/client/main.go` and change the `serverURL` constant:
-```go
-const serverURL = "http://localhost:3001"
-```
-
-3. **Run the test client**:
-```bash
-go run ./cmd/client
-# or
-./go-client
-```
-
-### Comparing Implementations
-
-You can run both servers side-by-side on different ports:
-- Rust server (connectrpc-axum): `http://localhost:3000`
-- Go server (reference): `http://localhost:3001`
-
-Then run the client against each to compare behavior.
-
-### Testing Different Server Implementations
-
-With cargo-make (from parent directory):
-```bash
-cargo make run-connect-tonic         # Tonic integration
-cargo make run-connect-tonic-bidi    # Bidirectional streaming
-```
-
-Or manually:
-```bash
-cd ..
-cargo run --bin connect-only                # Pure Connect implementation
-cargo run --bin connect-tonic              # Tonic integration
-cargo run --bin connect-tonic-bidi-stream  # Bidirectional streaming
+# Test against it
+./go-client -server http://localhost:3001 -protocol connect unary
 ```
 
 ## What the Tests Check
 
-### Raw HTTP Protocol Test
+### Connect Protocol Tests
 
-This test makes a direct HTTP request and manually parses the streaming response frames. It verifies:
+- HTTP response status (200 OK)
+- Content-Type header (`application/connect+json` or `application/connect+proto`)
+- Frame structure: `[flags:1][length:4][payload:N]`
+- EndStreamResponse presence
+- Error handling format
 
-- HTTP response status (should be 200 OK)
-- Content-Type header (should be `application/connect+json`)
-- Frame structure:
-  - Flag byte (bit 0 = compressed, bit 1 = EndStream)
-  - Length encoding (4-byte big-endian)
-  - Payload format (JSON)
-- EndStreamResponse presence (critical!)
+### gRPC Protocol Tests
 
-### Connect Client Test
+- HTTP/2 communication
+- gRPC status codes
+- Streaming semantics
+- Bidirectional streaming (not supported by Connect)
 
-Uses the official Connect-Go client to:
-- Verify interoperability with standard Connect clients
-- Test message parsing and streaming semantics
-- Check error handling
+### Verbose Mode
 
-## Expected Output for Compliant Server
+Use `-verbose` flag to see raw protocol frames:
 
-```
-🔬 RAW HTTP PROTOCOL TEST
-================================================================================
-
-📥 RESPONSE HEADERS:
-  Status: 200 OK
-  Content-Type: application/connect+json
-
-📦 RESPONSE FRAMES:
-
-  Frame #1:
-    Flags: 0b00000000 (0x00)
-    - Compressed: false
-    - EndStream: false
-    Length: XX bytes
-    Payload (JSON):
-    { "message": "..." }
-
-  Frame #2:
-    ...
-
-  Frame #N (FINAL):
-    Flags: 0b00000010 (0x02)  ← EndStream flag MUST be set!
-    - Compressed: false
-    - EndStream: true
-    Length: XX bytes
-    Payload (JSON):
-    {}  ← Empty for success, or {"error": {...}, "metadata": {...}} for errors
-    ✅ EndStream flag detected - stream should end
-
-  Total frames received: N
+```bash
+./go-client -verbose -protocol connect server-stream
 ```
 
-## Common Issues Detected
+## Expected Output
 
-### ❌ Missing EndStreamResponse
-
-If you see:
 ```
-⚠️  WARNING: No explicit EndStreamResponse was detected!
-```
+============================================================
+UNARY RPC TEST [CONNECT]
+============================================================
+Response: Hello, Connect Unary Tester!
 
-This means the server is ending the stream without sending a proper EndStreamResponse frame with the EndStream flag set. This violates the Connect protocol.
-
-### ❌ Wrong Error Format
-
-Errors should be wrapped in an EndStreamResponse:
-```json
-{
-  "error": {
-    "code": "unknown",
-    "message": "error message",
-    "details": [
-      {
-        "type": "type.googleapis.com/ErrorType",
-        "value": "base64-encoded-data",
-        "debug": {...}
-      }
-    ]
-  },
-  "metadata": {
-    "header-name": ["value"]
-  }
-}
+============================================================
+SERVER STREAMING TEST [CONNECT]
+============================================================
+  [1] Hello, Connect Stream Tester! Starting stream...
+  [2] Hobby #1: coding - nice!
+  [3] Hobby #2: testing - nice!
+  [4] Stream complete. Goodbye, Connect Stream Tester!
+Received 4 messages
 ```
 
-### ❌ Missing Metadata
+## Troubleshooting
 
-Trailing metadata should be included in the final EndStreamResponse.
+### Connection Refused
+
+Make sure the Rust server is running:
+```bash
+cargo make run-tonic-unary
+```
+
+### Missing Generated Code
+
+Regenerate protobuf code:
+```bash
+cargo make go-generate
+cargo make go-deps
+```
+
+### gRPC Tests Failing
+
+Ensure you're using a Tonic-enabled server:
+```bash
+cargo make run-tonic-unary  # Works with gRPC
+# Not: cargo make run-connect-unary  # Connect only
+```
 
 ## References
 
 - [Connect Protocol Specification](https://connectrpc.com/docs/protocol/)
-- [Connect Streaming](https://connectrpc.com/docs/go/streaming/)
 - [Connect-Go Documentation](https://connectrpc.com/docs/go/getting-started/)
+- [gRPC-Go Documentation](https://grpc.io/docs/languages/go/)

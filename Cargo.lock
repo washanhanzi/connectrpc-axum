@@ -319,6 +319,7 @@ dependencies = [
  "tokio-stream",
  "tonic",
  "tonic-prost",
+ "tonic-web",
  "tower",
  "tower-http",
 ]

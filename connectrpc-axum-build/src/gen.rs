@@ -31,10 +31,10 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             .iter()
             .map(|method| {
                 let method_name = format_ident!("{}", method.name.to_case(Case::Snake));
-                let request_type =
-                    format_ident!("{}", method.input_type.split('.').next_back().unwrap());
-                let response_type =
-                    format_ident!("{}", method.output_type.split('.').next_back().unwrap());
+                let request_type: proc_macro2::TokenStream =
+                    method.input_type.parse().expect("invalid request type path");
+                let response_type: proc_macro2::TokenStream =
+                    method.output_type.parse().expect("invalid response type path");
                 let path = format!(
                     "/{}.{}/{}",
                     service.package, service.proto_name, method.proto_name

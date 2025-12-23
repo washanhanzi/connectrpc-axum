@@ -14,39 +14,16 @@ This directory contains examples demonstrating the `connectrpc-axum` library wit
 
 Unlike pure Tonic, ConnectRPC Axum gives you the full power of Axum's ecosystem while maintaining protocol compatibility with gRPC and Connect clients.
 
-### How It Works
+## Examples Overview
 
-1. **Build Time**: `connectrpc-axum-build` generates Rust code from your `.proto` files
-   - Message types using `prost`
-   - Service builders with type-safe method registration
-   - Optional Tonic server traits for gRPC compatibility
-
-2. **Runtime**: Your handlers receive typed requests and return typed responses
-   - Automatic serialization (JSON or binary protobuf)
-   - Streaming support using Rust async streams
-   - Full access to Axum extractors (State, Headers, Extensions, etc.)
-
-3. **Deployment**: The generated service builder creates an Axum `Router`
-   - Can be merged with other Axum routes
-   - Supports middleware and layers
-   - Works with any Axum-compatible HTTP server
-
-## Directory Structure
-
-```
-connectrpc-axum-examples/
-├── Makefile.toml        # cargo-make task definitions (recommended)
-├── proto/               # Protocol Buffer definitions
-│   ├── hello.proto
-│   └── echo.proto
-├── src/bin/             # Rust server examples
-│   ├── connect-only.rs           # Pure Connect implementation
-│   ├── connect-tonic.rs          # Connect + Tonic integration
-│   └── connect-tonic-bidi-stream.rs  # Bidirectional streaming
-└── go-client/           # Go protocol verification client
-    ├── main.go
-    └── README.md
-```
+| Example | Protocol Support | Features |
+|---------|------------------|----------|
+| **connect-unary** | Connect | Basic unary RPC |
+| **connect-server-stream** | Connect | Server streaming |
+| **tonic-unary** | Connect + gRPC | Dual-protocol unary |
+| **tonic-server-stream** | Connect + gRPC | Dual-protocol streaming |
+| **tonic-bidi-stream** | gRPC | Bidirectional streaming |
+| **grpc-web** | gRPC-Web | Browser-compatible gRPC |
 
 ## Quick Start
 
@@ -57,354 +34,319 @@ connectrpc-axum-examples/
    ```bash
    cargo install cargo-make
    ```
-3. **Go**: For the test client (optional)
-4. **Buf CLI**: For generating protobuf code (if using Go client)
+3. **Go 1.21+**: For the test client
+4. **Buf CLI**: For generating protobuf code
    ```bash
    brew install bufbuild/buf/buf
    ```
 
 ### Setup
 
-Run the one-time setup:
 ```bash
 cargo make setup
 ```
 
-This will:
-- Generate Go protobuf code
-- Build all Rust servers
-- Build the Go test client
-
 ### Running Examples
 
-#### Option 1: Using cargo-make (Recommended)
-
 ```bash
-# Show all available tasks
-cargo make help
+# Terminal 1: Start a server
+cargo make run-tonic-unary
 
-# Run a server
-cargo make run-connect-only
-cargo make run-connect-tonic
-cargo make run-connect-tonic-bidi
-
-# In another terminal, test with Go client
-cargo make go-run
+# Terminal 2: Test with Go client
+cargo make go-test-unary          # Connect protocol
+cargo make go-test-unary-grpc     # gRPC protocol
 ```
 
-#### Option 2: Using cargo directly
+## Directory Structure
 
-```bash
-# Run any example
-cargo run --bin connect-only
-cargo run --bin connect-tonic
-cargo run --bin connect-tonic-bidi-stream
+```
+connectrpc-axum-examples/
+├── proto/                         # Protocol Buffer definitions
+│   ├── hello.proto                # HelloWorldService
+│   └── echo.proto                 # EchoService (with bidi)
+├── src/bin/                       # Rust server examples
+│   ├── connect-unary.rs           # Example 1: Pure Connect unary
+│   ├── connect-server-stream.rs   # Example 2: Pure Connect streaming
+│   ├── tonic-unary.rs             # Example 3: Connect + gRPC unary
+│   ├── tonic-server-stream.rs     # Example 4: Connect + gRPC streaming
+│   ├── tonic-bidi-stream.rs       # Example 5: gRPC bidi streaming
+│   └── grpc-web.rs                # Example 6: gRPC-Web
+└── go-client/                     # Go test client
+    └── cmd/client/main.go         # Flag-based test runner
 ```
 
-## Available Examples
+## Example Details
 
-### 1. connect-only.rs
+### Example 1: connect-unary
 
-**Pure Connect implementation** - Demonstrates the core ConnectRPC functionality.
-
-```bash
-cargo make run-connect-only
-# or
-cargo run --bin connect-only
-```
-
-Features:
-- Unary RPC: `SayHello`
-- Server streaming: `SayHelloStream`
-- Pure Connect protocol (no gRPC)
-- Shared state with Axum extractors
-
-**Endpoints:**
-- `http://localhost:3000/hello.HelloWorldService/SayHello`
-- `http://localhost:3000/hello.HelloWorldService/SayHelloStream`
-
-### 2. connect-tonic.rs
-
-**Connect + Tonic integration** - Shows how to run Connect and gRPC services together.
+**Pure ConnectRPC unary** - Simplest example with no gRPC.
 
 ```bash
-cargo make run-connect-tonic
-# or
-cargo run --bin connect-tonic
+cargo make run-connect-unary
+# Test: cargo make go-test-unary
 ```
 
 Features:
-- HelloWorldService via Connect router
-- Custom Tonic implementation
-- Mixed service deployment
+- Single request, single response
+- Stateless handler
+- No Tonic dependency
+
+### Example 2: connect-server-stream
+
+**Pure ConnectRPC streaming** - Server streams multiple responses.
+
+```bash
+cargo make run-connect-server-stream
+# Test: cargo make go-test-server-stream
+```
+
+Features:
+- Uses `async_stream::stream!` macro
+- Returns `StreamBody<impl Stream<...>>`
+- No Tonic dependency
+
+### Example 3: tonic-unary
+
+**Dual-protocol unary** - Same handler serves Connect and gRPC.
+
+```bash
+cargo make run-tonic-unary
+# Test: cargo make go-test-unary && cargo make go-test-unary-grpc
+```
+
+Features:
+- Uses `TonicCompatibleBuilder`
+- Single handler for both protocols
 - Shared application state
+- Routes by Content-Type
 
-### 3. connect-tonic-bidi-stream.rs
+### Example 4: tonic-server-stream
 
-**Bidirectional streaming** - Full-featured example with all streaming types.
+**Dual-protocol streaming** - Server streaming for both protocols.
 
 ```bash
-cargo make run-connect-tonic-bidi
-# or
-cargo run --bin connect-tonic-bidi-stream
+cargo make run-tonic-server-stream
+# Test: cargo make go-test-server-stream && cargo make go-test-server-stream-grpc
 ```
 
 Features:
-- Unary RPC
-- Server streaming
-- Client streaming (gRPC only - not supported by Connect protocol)
-- Bidirectional streaming (gRPC only - not supported by Connect protocol)
-- Multiple services on one port
+- Same streaming handler serves Connect and gRPC
+- `MakeServiceBuilder` combines routers
 
-**Note:** Client and bidirectional streaming are only available via Tonic/gRPC, as the Connect protocol only supports unary and server-streaming RPCs.
+### Example 5: tonic-bidi-stream
 
-## Key Differences Between Examples
-
-| Feature | connect-only | connect-tonic | connect-tonic-bidi |
-|---------|--------------|---------------|-------------------|
-| Connect Protocol | ✅ | ✅ | ✅ |
-| gRPC Protocol | ❌ | ✅ | ✅ |
-| Unary RPC | ✅ | ✅ | ✅ |
-| Server Streaming | ✅ | ✅ | ✅ |
-| Client Streaming | ❌ | ❌ | ✅ (gRPC only) |
-| Bidirectional Streaming | ❌ | ❌ | ✅ (gRPC only) |
-| Axum Extractors | ✅ | ✅ | ✅ |
-| Shared State | ✅ | ✅ | ✅ |
-
-## Testing
-
-### Protocol Verification with Go Client
-
-The `go-client` directory contains a comprehensive test client that verifies Connect protocol conformance.
+**Bidirectional streaming** - gRPC-only feature.
 
 ```bash
-# Build and run the test client
-cargo make go-run
+cargo make run-tonic-bidi-stream
+# Test: cargo make go-test-bidi-stream
 ```
 
-The client tests:
-- Binary frame structure
-- EndStreamResponse presence
-- Error handling format
-- HTTP status codes
-- Content-Type headers
+Features:
+- Custom Tonic `impl EchoService`
+- `tonic::Streaming<Request>` input
+- gRPC-only (Connect protocol doesn't support bidi)
 
-See [go-client/README.md](go-client/README.md) for detailed information.
+### Example 6: grpc-web
 
-## Available Tasks (cargo-make)
+**gRPC-Web support** - Browser-compatible gRPC via tonic-web.
 
-Run `cargo make help` to see all available tasks:
+```bash
+cargo make run-grpc-web
+# Test: cargo make go-test-grpc-web
+```
 
-### Rust Servers
-- `cargo make run-connect-only` - Run connect-only example
-- `cargo make run-connect-tonic` - Run connect-tonic example
-- `cargo make run-connect-tonic-bidi` - Run bidi streaming example
-- `cargo make build-servers` - Build all servers
+Features:
+- Uses `tonic_web::GrpcWebLayer`
+- HTTP/1.1 compatible for browsers
+- Supports both gRPC and gRPC-Web
 
-### Go Client
-- `cargo make go-generate` - Generate protobuf code
-- `cargo make go-build` - Build test client
-- `cargo make go-run` - Run test client
-- `cargo make go-clean` - Clean generated files
+## Go Client Usage
 
-### Build & Maintenance
-- `cargo make build-all` - Build everything
-- `cargo make clean-all` - Clean all artifacts
-- `cargo make setup` - Initial setup
+The Go client supports multiple protocols and test modes:
 
-### Development
-- `cargo make watch-server` - Auto-restart server on changes (requires cargo-watch)
+```bash
+# Basic usage
+go run ./cmd/client [flags] <command>
+
+# Commands:
+#   unary          Test unary RPC
+#   server-stream  Test server streaming
+#   bidi-stream    Test bidi streaming (gRPC only)
+#   grpc-web       Test gRPC-Web protocol
+#   all            Run all applicable tests
+
+# Flags:
+#   -server    Server URL (default: http://localhost:3000)
+#   -protocol  Protocol: connect, grpc (default: connect)
+#   -verbose   Verbose output with raw frames
+```
+
+### Quick Test Commands
+
+```bash
+# Test unary with Connect
+cargo make go-test-unary
+
+# Test unary with gRPC
+cargo make go-test-unary-grpc
+
+# Test server streaming with Connect
+cargo make go-test-server-stream
+
+# Test server streaming with gRPC
+cargo make go-test-server-stream-grpc
+
+# Test bidirectional streaming (gRPC only)
+cargo make go-test-bidi-stream
+
+# Test gRPC-Web
+cargo make go-test-grpc-web
+
+# Run all tests with Connect
+cargo make go-test-all
+
+# Run all tests with gRPC
+cargo make go-test-all-grpc
+```
+
+## Feature Matrix
+
+| Example | Connect | gRPC | gRPC-Web | Unary | Server Stream | Bidi |
+|---------|---------|------|----------|-------|---------------|------|
+| connect-unary | Y | - | - | Y | - | - |
+| connect-server-stream | Y | - | - | - | Y | - |
+| tonic-unary | Y | Y | - | Y | - | - |
+| tonic-server-stream | Y | Y | - | - | Y | - |
+| tonic-bidi-stream | Y | Y | - | Y | Y | Y |
+| grpc-web | - | Y | Y | Y | Y | - |
 
 ## Protocol Definitions
 
-All examples use the same protobuf definitions in the `proto/` directory:
-
 ### hello.proto
-- `SayHello`: Unary RPC
-- `SayHelloStream`: Server streaming RPC
+
+```protobuf
+service HelloWorldService {
+  rpc SayHello(HelloRequest) returns (HelloResponse);
+  rpc SayHelloStream(HelloRequest) returns (stream HelloResponse);
+}
+```
 
 ### echo.proto
-- `Echo`: Unary RPC
-- `EchoClientStream`: Client streaming RPC
-- `EchoBidiStream`: Bidirectional streaming RPC
 
-## Testing Your Changes
+```protobuf
+service EchoService {
+  rpc Echo(EchoRequest) returns (EchoResponse);
+  rpc EchoClientStream(stream EchoRequest) returns (EchoResponse);
+  rpc EchoBidiStream(stream EchoRequest) returns (stream EchoResponse);
+}
+```
 
-After making changes to the library:
+## Available Tasks
 
-1. **Rebuild the examples:**
-   ```bash
-   cargo make build-servers
-   ```
+```bash
+cargo make help
+```
 
-2. **Run a server:**
-   ```bash
-   cargo make run-connect-only
-   ```
+### Rust Servers
+- `run-connect-unary` - Example 1: Pure ConnectRPC unary
+- `run-connect-server-stream` - Example 2: Pure ConnectRPC streaming
+- `run-tonic-unary` - Example 3: gRPC + Connect unary
+- `run-tonic-server-stream` - Example 4: gRPC + Connect streaming
+- `run-tonic-bidi-stream` - Example 5: gRPC bidi streaming
+- `run-grpc-web` - Example 6: gRPC-Web
+- `build-servers` - Build all examples
 
-3. **Test with Go client (in another terminal):**
-   ```bash
-   cargo make go-run
-   ```
+### Go Tests
+- `go-test-unary` - Test unary (Connect)
+- `go-test-unary-grpc` - Test unary (gRPC)
+- `go-test-server-stream` - Test streaming (Connect)
+- `go-test-server-stream-grpc` - Test streaming (gRPC)
+- `go-test-bidi-stream` - Test bidi (gRPC only)
+- `go-test-grpc-web` - Test gRPC-Web
+- `go-test-all` / `go-test-all-grpc` - Run all tests
 
-4. **Watch for changes (optional):**
-   ```bash
-   cargo make watch-server
-   ```
+### Build & Maintenance
+- `setup` - Initial one-time setup
+- `build-all` - Build everything
+- `clean-all` - Clean all artifacts
 
-## Using Generated Code in Your Own Project
+## Using in Your Project
 
-### Code Generation Setup
-
-1. **Add build dependencies** to your `Cargo.toml`:
-   ```toml
-   [build-dependencies]
-   connectrpc-axum-build = { version = "0.0.4", features = ["tonic"] }
-   ```
-
-2. **Create `build.rs`** in your project root:
-   ```rust
-   fn main() -> Result<(), Box<dyn std::error::Error>> {
-       connectrpc_axum_build::compile_dir("proto")
-           .with_tonic()  // Optional: enable Tonic gRPC support
-           .compile()?;
-       Ok(())
-   }
-   ```
-
-3. **Include generated code** in your `src/lib.rs` or `src/main.rs`:
-   ```rust
-   // You can include generated code in any module
-   pub mod pb {
-       include!(concat!(env!("OUT_DIR"), "/your_package.rs"));
-   }
-
-   // Re-export for convenience (optional)
-   pub use pb::*;
-   ```
-
-### Required Runtime Dependencies
-
-The generated code requires these dependencies in your `Cargo.toml`:
+### Cargo.toml
 
 ```toml
 [dependencies]
-# Core runtime
-connectrpc-axum = "0.0.4"
+connectrpc-axum = "0.0.7"
 axum = "0.8"
-
-# Message types and serialization
 prost = "0.14"
 pbjson = "0.8"
 pbjson-types = "0.8"
 serde = { version = "1.0", features = ["derive"] }
-
-# Async and streaming
 futures = "0.3"
 tokio-stream = "0.1"
-
-# HTTP
 http-body = "1"
 tower = "0.5"
 
-# Optional: Tonic support
+# Optional: Tonic/gRPC support
 tonic = { version = "0.14", optional = true }
 tonic-prost = { version = "0.14", optional = true }
+
+[build-dependencies]
+connectrpc-axum-build = "0.0.9"
+
+[features]
+tonic = ["connectrpc-axum/tonic", "connectrpc-axum-build/tonic", "dep:tonic", "dep:tonic-prost"]
 ```
 
-See the [Cargo.toml](./Cargo.toml) in this directory for detailed comments explaining each dependency.
-
-### Module Organization
-
-Generated code uses `super::` to reference types, so you can organize it however you want:
+### build.rs
 
 ```rust
-// Option 1: Module with re-export (like this example)
-mod pb {
-    include!(concat!(env!("OUT_DIR"), "/hello.rs"));
-}
-pub use pb::*;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let builder = connectrpc_axum_build::compile_dir("proto");
 
-// Option 2: Direct module (no re-export needed)
-pub mod hello {
-    include!(concat!(env!("OUT_DIR"), "/hello.rs"));
-}
+    #[cfg(feature = "tonic")]
+    let builder = builder.with_tonic();
 
-// Option 3: Multiple packages in one module
-pub mod proto {
-    pub mod hello {
-        include!(concat!(env!("OUT_DIR"), "/hello.rs"));
-    }
-    pub mod echo {
-        include!(concat!(env!("OUT_DIR"), "/echo.rs"));
-    }
+    builder.compile()?;
+    Ok(())
 }
 ```
 
-The generated Tonic traits correctly reference types using `super::TypeName`, so you don't need to re-export types at your crate root.
+### src/lib.rs
+
+```rust
+mod pb {
+    include!(concat!(env!("OUT_DIR"), "/hello.rs"));
+    include!(concat!(env!("OUT_DIR"), "/echo.rs"));
+}
+pub use pb::*;
+```
 
 ## Troubleshooting
 
 ### Port Already in Use
 
-If you get "Address already in use" errors:
 ```bash
-# Find and kill process on port 3000
 lsof -ti:3000 | xargs kill -9
 ```
 
 ### Go Client Build Errors
 
-Make sure you've generated the protobuf code:
 ```bash
 cargo make go-generate
+cargo make go-deps
 ```
 
 ### cargo-make Not Found
 
-Install it with:
 ```bash
 cargo install cargo-make
 ```
 
-Or use cargo directly without cargo-make.
-
-### Code Generation Errors
-
-If you encounter errors with generated code:
-
-1. **Clean and rebuild:**
-   ```bash
-   cargo clean
-   cargo build
-   ```
-
-2. **Check your proto files** are in the correct directory (default: `proto/`)
-
-3. **Verify build.rs** is in your project root and properly configured
-
-### Type Resolution Errors
-
-If you see errors like "cannot find type `TypeName` in crate root":
-
-- **This should not happen** with the latest version (0.0.4+)
-- The generated code now uses `super::` to reference types
-- You can include generated code in any module without crate-level re-exports
-- If you still see this, ensure you're using the latest version of `connectrpc-axum-build`
-
 ## Learn More
 
-### ConnectRPC Axum
-- **Repository**: https://github.com/washanhanzi/connectrpc-axum
-- **Crate Documentation**: https://docs.rs/connectrpc-axum/
-
-### Related Technologies
 - **ConnectRPC Protocol**: https://connectrpc.com/docs/protocol/
 - **Axum Framework**: https://docs.rs/axum/
 - **Tonic gRPC**: https://docs.rs/tonic/
-- **Protocol Buffers**: https://protobuf.dev/
-- **pbjson**: https://docs.rs/pbjson/
-
-### Tools
-- **cargo-make Documentation**: https://sagiegurari.github.io/cargo-make/
-- **Buf CLI**: https://buf.build/docs/
+- **cargo-make**: https://sagiegurari.github.io/cargo-make/

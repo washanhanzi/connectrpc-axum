@@ -1,15 +1,24 @@
+//! Example 5: Tonic Bidirectional Streaming (gRPC only)
+//!
+//! This example demonstrates bidirectional streaming:
+//! - Client and server can send messages independently
+//! - Only supported by gRPC (not Connect protocol)
+//! - Uses custom Tonic service implementation
+//!
+//! Run with: cargo run --bin tonic-bidi-stream
+//! Test with: go run ./cmd/client --protocol grpc bidi-stream
+
 use connectrpc_axum::prelude::*;
-use futures::Stream;
-use futures::StreamExt;
+use connectrpc_axum_examples::{
+    EchoRequest, EchoResponse, echo_service_server,
+    HelloRequest, HelloResponse, helloworldservice,
+};
+use futures::{Stream, StreamExt};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, atomic::AtomicUsize};
 use axum::extract::State;
 use tonic::Status;
-use connectrpc_axum_examples::{
-    HelloRequest, HelloResponse, helloworldservice,
-    EchoRequest, EchoResponse, echo_service_server,
-};
 
 #[derive(Clone, Default)]
 struct AppState {
@@ -17,54 +26,7 @@ struct AppState {
 }
 
 // ============================================================================
-// Hello Service - Connect Handlers
-// ============================================================================
-
-async fn say_hello(
-    State(state): State<AppState>,
-    ConnectRequest(req): ConnectRequest<HelloRequest>,
-) -> Result<ConnectResponse<HelloResponse>, ConnectError> {
-    let count = state.counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    Ok(ConnectResponse(HelloResponse {
-        message: format!("Hello #{}, {}!", count, req.name.unwrap_or_default()),
-        response_type: None,
-    }))
-}
-
-async fn say_hello_stream(
-    State(state): State<AppState>,
-    ConnectRequest(req): ConnectRequest<HelloRequest>,
-) -> Result<ConnectResponse<StreamBody<impl Stream<Item = Result<HelloResponse, ConnectError>>>>, ConnectError> {
-    let name = req.name.unwrap_or_else(|| "Anonymous".to_string());
-    let counter = state.counter.clone();
-
-    let response_stream = async_stream::stream! {
-        let count = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        yield Ok(HelloResponse {
-            message: format!("Stream #{}: Hello, {}!", count, name),
-            response_type: None,
-        });
-
-        for i in 1..=3 {
-            let count = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            yield Ok(HelloResponse {
-                message: format!("Stream #{}: Message {} for {}", count, i, name),
-                response_type: None,
-            });
-        }
-
-        let count = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        yield Ok(HelloResponse {
-            message: format!("Stream #{}: Goodbye, {}!", count, name),
-            response_type: None,
-        });
-    };
-
-    Ok(ConnectResponse(StreamBody::new(response_stream)))
-}
-
-// ============================================================================
-// Echo Service - Custom Tonic Implementation with State
+// Echo Service - Custom Tonic Implementation for Bidi Streaming
 // ============================================================================
 
 struct EchoServiceImpl {
@@ -73,7 +35,7 @@ struct EchoServiceImpl {
 
 #[tonic::async_trait]
 impl echo_service_server::EchoService for EchoServiceImpl {
-    // Unary RPC
+    /// Unary RPC
     async fn echo(
         &self,
         request: tonic::Request<EchoRequest>,
@@ -85,15 +47,15 @@ impl echo_service_server::EchoService for EchoServiceImpl {
         }))
     }
 
-    // Client streaming RPC
+    /// Client streaming RPC - collect all messages then respond
     async fn echo_client_stream(
         &self,
         request: tonic::Request<tonic::Streaming<EchoRequest>>,
     ) -> Result<tonic::Response<EchoResponse>, Status> {
-        let mut req_stream = request.into_inner();
+        let mut stream = request.into_inner();
         let mut messages = Vec::new();
 
-        while let Some(result) = req_stream.next().await {
+        while let Some(result) = stream.next().await {
             match result {
                 Ok(req) => messages.push(req.message),
                 Err(e) => return Err(e),
@@ -111,27 +73,28 @@ impl echo_service_server::EchoService for EchoServiceImpl {
         }))
     }
 
-    // Bidirectional streaming RPC
+    /// Bidirectional streaming RPC - echo each message as it arrives
     type EchoBidiStreamStream = Pin<Box<dyn Stream<Item = Result<EchoResponse, Status>> + Send>>;
 
     async fn echo_bidi_stream(
         &self,
         request: tonic::Request<tonic::Streaming<EchoRequest>>,
     ) -> Result<tonic::Response<Self::EchoBidiStreamStream>, Status> {
-        let mut req_stream = request.into_inner();
+        let mut stream = request.into_inner();
         let counter = self.app_state.counter.clone();
 
         let response_stream = async_stream::stream! {
             let mut message_count = 0;
-            while let Some(result) = req_stream.next().await {
+
+            while let Some(result) = stream.next().await {
                 match result {
-                    Ok(request) => {
+                    Ok(req) => {
                         message_count += 1;
                         let count = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         yield Ok(EchoResponse {
                             message: format!(
                                 "Bidi Echo #{} (msg #{}): {}",
-                                count, message_count, request.message
+                                count, message_count, req.message
                             ),
                         });
                     }
@@ -142,11 +105,11 @@ impl echo_service_server::EchoService for EchoServiceImpl {
                 }
             }
 
-            let final_count = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let count = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             yield Ok(EchoResponse {
                 message: format!(
-                    "Bidi stream #{} completed. Received {} messages total.",
-                    final_count, message_count
+                    "Bidi stream #{} completed. Received {} messages.",
+                    count, message_count
                 ),
             });
         };
@@ -156,29 +119,36 @@ impl echo_service_server::EchoService for EchoServiceImpl {
 }
 
 // ============================================================================
-// Main Server
+// Hello Service - Connect Handler for comparison
 // ============================================================================
+
+async fn say_hello(
+    State(state): State<AppState>,
+    ConnectRequest(req): ConnectRequest<HelloRequest>,
+) -> Result<ConnectResponse<HelloResponse>, ConnectError> {
+    let count = state.counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    Ok(ConnectResponse(HelloResponse {
+        message: format!("Hello #{}, {}!", count, req.name.unwrap_or_default()),
+        response_type: None,
+    }))
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let app_state = AppState::default();
 
-    // Build Connect router for HelloWorldService
+    // Build Connect router for HelloWorldService (unary only, for comparison)
     let hello_router = helloworldservice::HelloWorldServiceBuilder::new()
         .say_hello(say_hello)
-        .say_hello_stream(say_hello_stream)
         .with_state(app_state.clone())
         .build();
 
-    // Build custom Tonic gRPC service for EchoService
-    let echo_grpc_service =
-        echo_service_server::EchoServiceServer::new(EchoServiceImpl {
-            app_state: app_state.clone(),
-        });
+    // Build Tonic gRPC service for EchoService (with bidi streaming)
+    let echo_grpc_service = echo_service_server::EchoServiceServer::new(EchoServiceImpl {
+        app_state: app_state.clone(),
+    });
 
-    // Use MakeServiceBuilder to combine multiple services
-    // - HelloWorldService via Connect router (unary + server streaming)
-    // - EchoService via Tonic gRPC (unary + client streaming + bidi streaming)
+    // Combine services
     let dispatch = connectrpc_axum::MakeServiceBuilder::new()
         .add_router(hello_router)
         .add_grpc_service(echo_grpc_service)
@@ -186,10 +156,21 @@ async fn main() -> anyhow::Result<()> {
 
     let addr: SocketAddr = "0.0.0.0:3000".parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    println!("Multi-service server listening on http://{}", addr);
-    println!("Example: Combines Connect (hello.proto) and Tonic (echo.proto) services");
-    println!("  - HelloWorldService: Connect router with state");
-    println!("  - EchoService: Custom Tonic implementation with bidi streaming");
+
+    println!("=== Example 5: Tonic Bidirectional Streaming (gRPC only) ===");
+    println!("Server listening on http://{}", addr);
+    println!();
+    println!("Services:");
+    println!("  HelloWorldService (Connect):");
+    println!("    - SayHello (unary)");
+    println!();
+    println!("  EchoService (gRPC only):");
+    println!("    - Echo (unary)");
+    println!("    - EchoClientStream (client streaming)");
+    println!("    - EchoBidiStream (bidirectional streaming)");
+    println!();
+    println!("Test with:");
+    println!("  go run ./cmd/client --protocol grpc bidi-stream");
 
     let make = tower::make::Shared::new(dispatch);
     axum::serve(listener, make).await?;
