@@ -218,7 +218,18 @@ impl CompileBuilder {
                     let first_pass_file = format!("{}/{}", out_dir, filename);
 
                     // Append tonic server code to first-pass file
-                    let mut content = fs::read_to_string(&first_pass_file).unwrap_or_default();
+                    let mut content = fs::read_to_string(&first_pass_file).map_err(|e| {
+                        std::io::Error::new(
+                            e.kind(),
+                            format!(
+                                "First-pass file '{}' not found. This typically means \
+                                 prost-build and tonic-build generated different filenames \
+                                 for the same proto package. Check that your proto files \
+                                 have consistent package declarations. Original error: {}",
+                                first_pass_file, e
+                            ),
+                        )
+                    })?;
                     content.push_str(
                         "\n// --- Tonic gRPC server stubs (extern_path reused messages) ---\n",
                     );

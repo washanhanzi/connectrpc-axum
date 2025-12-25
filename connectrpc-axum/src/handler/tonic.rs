@@ -9,6 +9,7 @@ use std::{future::Future, pin::Pin};
 
 use crate::{
     error::ConnectError,
+    protocol::get_request_protocol,
     request::ConnectRequest,
     response::{ConnectResponse, StreamBody},
 };
@@ -316,9 +317,13 @@ where
             let result = (self.0)(connect_req).await;
 
             // Convert result to response
+            // For streaming handlers, errors must use streaming framing (EndStream frame)
             match result {
                 Ok(response) => response.into_response(),
-                Err(err) => err.into_response(),
+                Err(err) => {
+                    let use_proto = get_request_protocol().is_proto();
+                    err.into_streaming_response(use_proto)
+                }
             }
         })
     }
@@ -354,9 +359,13 @@ where
             let result = (self.0)(state_extractor, connect_req).await;
 
             // Convert result to response
+            // For streaming handlers, errors must use streaming framing (EndStream frame)
             match result {
                 Ok(response) => response.into_response(),
-                Err(err) => err.into_response(),
+                Err(err) => {
+                    let use_proto = get_request_protocol().is_proto();
+                    err.into_streaming_response(use_proto)
+                }
             }
         })
     }

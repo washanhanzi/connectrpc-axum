@@ -5,7 +5,7 @@
 //! implemented in the `ConnectStreamResponse` type's `IntoResponse` trait, which is
 //! the idiomatic way to handle streaming responses in Axum.
 
-use crate::error::ConnectError;
+use crate::error::{ConnectError, internal_error_end_stream_frame, internal_error_streaming_response};
 use crate::protocol::get_request_protocol;
 use axum::{
     body::{Body, Bytes},
@@ -55,6 +55,7 @@ where
         // Get protocol from task-local (set by ConnectLayer middleware)
         let protocol = get_request_protocol();
         let use_proto = protocol.is_proto();
+        let content_type = protocol.streaming_response_content_type();
 
         // Connect streaming: Send message frames + EndStreamResponse with flag 0x02
         // Note: gRPC is handled by Tonic via ContentTypeSwitch
@@ -69,23 +70,39 @@ where
                 Ok(msg) => {
                     // Regular message frame with flags=0x00
                     let mut buf = vec![0u8; 5];
-                    if use_proto {
-                        msg.encode(&mut buf).expect("protobuf encode failed");
+                    let encode_result = if use_proto {
+                        msg.encode(&mut buf).map_err(|_| ())
                     } else {
-                        serde_json::to_writer(&mut buf, &msg).expect("json encode failed");
+                        serde_json::to_writer(&mut buf, &msg).map_err(|_| ())
+                    };
+
+                    match encode_result {
+                        Ok(()) => {
+                            let len = (buf.len() - 5) as u32;
+                            buf[1..5].copy_from_slice(&len.to_be_bytes());
+                            (Bytes::from(buf), false)
+                        }
+                        Err(()) => {
+                            // Encoding failed - send internal error EndStream frame
+                            (Bytes::from(internal_error_end_stream_frame()), true)
+                        }
                     }
-                    let len = (buf.len() - 5) as u32;
-                    buf[1..5].copy_from_slice(&len.to_be_bytes());
-                    (Bytes::from(buf), false)
                 }
                 Err(err) => {
                     // Error EndStreamResponse with flags=0x02 (EndStream)
                     let mut buf = vec![0b0000_0010u8, 0, 0, 0, 0];
                     let json = serde_json::json!({ "error": err });
-                    serde_json::to_writer(&mut buf, &json).expect("json encode failed");
-                    let len = (buf.len() - 5) as u32;
-                    buf[1..5].copy_from_slice(&len.to_be_bytes());
-                    (Bytes::from(buf), true) // Mark as error
+                    match serde_json::to_writer(&mut buf, &json) {
+                        Ok(()) => {
+                            let len = (buf.len() - 5) as u32;
+                            buf[1..5].copy_from_slice(&len.to_be_bytes());
+                            (Bytes::from(buf), true)
+                        }
+                        Err(_) => {
+                            // Error serialization failed - use fallback internal error frame
+                            (Bytes::from(internal_error_end_stream_frame()), true)
+                        }
+                    }
                 }
             })
             // Take all messages, stop after error
@@ -107,9 +124,9 @@ where
                     None
                 } else {
                     // Connect streaming: append success EndStreamResponse
+                    // Note: Serializing {} cannot fail in serde_json
                     let mut buf = vec![0b0000_0010u8, 0, 0, 0, 0];
-                    serde_json::to_writer(&mut buf, &serde_json::json!({}))
-                        .expect("json encode failed");
+                    let _ = serde_json::to_writer(&mut buf, &serde_json::json!({}));
                     let len = (buf.len() - 5) as u32;
                     buf[1..5].copy_from_slice(&len.to_be_bytes());
                     Some(Bytes::from(buf))
@@ -124,9 +141,11 @@ where
             .status(StatusCode::OK)
             .header(
                 header::CONTENT_TYPE,
-                HeaderValue::from_static(protocol.response_content_type()),
+                // Always use streaming content-type for streaming responses,
+                // even if the request was unary (server-streaming case)
+                HeaderValue::from_static(content_type),
             )
             .body(body)
-            .expect("response build failed")
+            .unwrap_or_else(|_| internal_error_streaming_response(content_type))
     }
 }

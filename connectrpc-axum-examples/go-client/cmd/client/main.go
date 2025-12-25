@@ -10,6 +10,7 @@
 //	server-stream  Test server streaming RPC
 //	bidi-stream    Test bidirectional streaming (gRPC only)
 //	grpc-web       Test gRPC-Web protocol
+//	stream-error   Test streaming error handling (bug reproduction)
 //	all            Run all applicable tests
 //
 // Flags:
@@ -23,6 +24,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -64,6 +66,8 @@ func main() {
 		runBidiStreamTest()
 	case "grpc-web":
 		runGrpcWebTest()
+	case "stream-error":
+		runStreamErrorTest()
 	case "all":
 		runAllTests()
 	default:
@@ -81,6 +85,7 @@ func printUsage() {
 	fmt.Println("  server-stream  Test server streaming RPC")
 	fmt.Println("  bidi-stream    Test bidirectional streaming (gRPC only)")
 	fmt.Println("  grpc-web       Test gRPC-Web protocol")
+	fmt.Println("  stream-error   Test streaming error handling (bug reproduction)")
 	fmt.Println("  all            Run all applicable tests")
 	fmt.Println()
 	fmt.Println("Flags:")
@@ -524,6 +529,242 @@ func testRawHTTPStreaming() {
 	}
 
 	fmt.Printf("\nTotal frames: %d\n", frameNum)
+}
+
+// ============================================================================
+// Streaming Error Tests
+// ============================================================================
+
+func runStreamErrorTest() {
+	printHeader("STREAMING ERROR HANDLING TEST", "connect")
+
+	fmt.Println("Testing that streaming handlers returning errors BEFORE the stream starts")
+	fmt.Println("produce proper Connect streaming responses:")
+	fmt.Println("  - HTTP 200 with Content-Type: application/connect+json")
+	fmt.Println("  - Error in EndStream frame (flags=0x02)")
+	fmt.Println()
+
+	// Test cases that trigger early errors
+	testCases := []struct {
+		name        string
+		expectedErr string
+	}{
+		{"unauthorized", "permission_denied"},
+		{"invalid", "invalid_argument"},
+		{"notfound", "not_found"},
+	}
+
+	allPassed := true
+	for _, tc := range testCases {
+		fmt.Printf("\n--- Testing name='%s' (expecting %s) ---\n", tc.name, tc.expectedErr)
+		if !testStreamingErrorConnect(tc.name, tc.expectedErr) {
+			allPassed = false
+		}
+	}
+
+	// Also test normal case
+	fmt.Printf("\n--- Testing name='Alice' (normal stream, should succeed) ---\n")
+	if !testStreamingErrorConnect("Alice", "") {
+		allPassed = false
+	}
+
+	if !allPassed {
+		log.Fatal("Stream error tests failed")
+	}
+	fmt.Println("\nAll stream error tests passed!")
+}
+
+func testStreamingErrorConnect(name string, expectedErrCode string) bool {
+	// Use raw HTTP to see exactly what the server returns
+	url := *serverURL + "/hello.HelloWorldService/SayHelloStream"
+	reqBody := fmt.Sprintf(`{"name":"%s"}`, name)
+
+	req, err := http.NewRequest("POST", url, strings.NewReader(reqBody))
+	if err != nil {
+		log.Printf("Failed to create request: %v", err)
+		return false
+	}
+
+	// For server-streaming, the request is unary (application/json)
+	// but the response is streaming (application/connect+json)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("Failed to send request: %v", err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	fmt.Printf("HTTP Status: %d %s\n", resp.StatusCode, resp.Status)
+	fmt.Printf("Content-Type: %s\n", resp.Header.Get("Content-Type"))
+
+	// Read the response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("Failed to read response: %v", err)
+		return false
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+
+	// Check HTTP status - must be 200 for streaming
+	if resp.StatusCode != http.StatusOK {
+		fmt.Printf("FAIL: Server returned non-200 status for streaming endpoint.\n")
+		fmt.Printf("Connect protocol requires HTTP 200 for streaming responses.\n")
+		return false
+	}
+
+	// Check content type - must be application/connect+json
+	if !strings.HasPrefix(contentType, "application/connect+json") {
+		fmt.Printf("FAIL: Expected Content-Type: application/connect+json, got: %s\n", contentType)
+		return false
+	}
+
+	// Parse Connect streaming frames and validate
+	fmt.Println("Response frames:")
+	return parseConnectFramesAndValidate(body, expectedErrCode)
+}
+
+func parseConnectFrames(body []byte) {
+	parseConnectFramesAndValidate(body, "")
+}
+
+func parseConnectFramesAndValidate(body []byte, expectedErrCode string) bool {
+	offset := 0
+	frameNum := 0
+	hasEndStream := false
+	foundExpectedError := false
+	hasMessages := false
+
+	for offset < len(body) {
+		if len(body)-offset < 5 {
+			fmt.Printf("  (incomplete frame header, %d bytes remaining)\n", len(body)-offset)
+			break
+		}
+
+		flags := body[offset]
+		length := binary.BigEndian.Uint32(body[offset+1 : offset+5])
+		offset += 5
+
+		frameNum++
+		isEndStream := flags&0x02 != 0
+
+		if int(length) > len(body)-offset {
+			fmt.Printf("  Frame #%d: flags=0x%02x, length=%d (TRUNCATED)\n", frameNum, flags, length)
+			break
+		}
+
+		payload := body[offset : offset+int(length)]
+		offset += int(length)
+
+		fmt.Printf("  Frame #%d: flags=0x%02x (endstream=%v), length=%d\n",
+			frameNum, flags, isEndStream, length)
+
+		// Parse JSON payload
+		var jsonData map[string]interface{}
+		if err := json.Unmarshal(payload, &jsonData); err == nil {
+			// Check if it's an error frame
+			if errData, ok := jsonData["error"]; ok {
+				errMap, _ := errData.(map[string]interface{})
+				errCode, _ := errMap["code"].(string)
+				prettyJSON, _ := json.MarshalIndent(errData, "    ", "  ")
+				fmt.Printf("    ERROR: %s\n", string(prettyJSON))
+
+				// Check if this is the expected error
+				if expectedErrCode != "" && errCode == expectedErrCode {
+					foundExpectedError = true
+				}
+			} else if msg, ok := jsonData["message"]; ok {
+				fmt.Printf("    message: %v\n", msg)
+				hasMessages = true
+			} else {
+				prettyJSON, _ := json.MarshalIndent(jsonData, "    ", "  ")
+				fmt.Printf("    %s\n", string(prettyJSON))
+			}
+		} else {
+			fmt.Printf("    (raw): %s\n", string(payload))
+		}
+
+		if isEndStream {
+			fmt.Println("  (EndStream)")
+			hasEndStream = true
+			break
+		}
+	}
+
+	// Validate based on expected error
+	if expectedErrCode != "" {
+		// Expecting an error response
+		if !foundExpectedError {
+			fmt.Printf("FAIL: Expected error code '%s' not found\n", expectedErrCode)
+			return false
+		}
+		if !hasEndStream {
+			fmt.Println("FAIL: Missing EndStream frame")
+			return false
+		}
+		return true
+	}
+
+	// Expecting a successful stream
+	if !hasMessages {
+		fmt.Println("FAIL: No messages received in stream")
+		return false
+	}
+	if !hasEndStream {
+		fmt.Println("FAIL: Missing EndStream frame")
+		return false
+	}
+	return true
+}
+
+// testStreamingErrorWithConnectClient tests using the official Connect client
+// to show how the bug manifests in real client code
+func testStreamingErrorWithConnectClient(name string) {
+	client := genconnect.NewHelloWorldServiceClient(
+		http.DefaultClient,
+		*serverURL,
+	)
+
+	stream, err := client.SayHelloStream(context.Background(), connect.NewRequest(&gen.HelloRequest{
+		Name: &name,
+	}))
+	if err != nil {
+		// When the bug occurs, the Connect client may fail here with a confusing error
+		// because it receives application/json instead of application/connect+json
+		fmt.Printf("Stream creation error: %v\n", err)
+
+		// Check if it's a Connect error we can inspect
+		var connectErr *connect.Error
+		if ok := errors.As(err, &connectErr); ok {
+			fmt.Printf("  Connect error code: %s\n", connectErr.Code())
+			fmt.Printf("  Connect error message: %s\n", connectErr.Message())
+		} else {
+			fmt.Printf("  (Error is not a *connect.Error - this indicates protocol failure)\n")
+		}
+		return
+	}
+
+	// Try to read from stream
+	msgCount := 0
+	for stream.Receive() {
+		msgCount++
+		fmt.Printf("  [%d] %s\n", msgCount, stream.Msg().Message)
+	}
+
+	if err := stream.Err(); err != nil {
+		fmt.Printf("Stream error: %v\n", err)
+		var connectErr *connect.Error
+		if ok := errors.As(err, &connectErr); ok {
+			fmt.Printf("  Connect error code: %s\n", connectErr.Code())
+			fmt.Printf("  Connect error message: %s\n", connectErr.Message())
+		}
+		return
+	}
+
+	fmt.Printf("Stream completed with %d messages\n", msgCount)
 }
 
 // ============================================================================

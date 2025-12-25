@@ -24,6 +24,9 @@ const (
 type HelloWorldServiceServer struct{}
 
 // SayHelloStream implements server-side streaming
+// This handler demonstrates CORRECT error handling for Connect streaming:
+// - Errors returned before streaming starts are properly framed as EndStream
+// - The Connect library handles this correctly, returning HTTP 200 with error in EndStream frame
 func (s *HelloWorldServiceServer) SayHelloStream(
 	ctx context.Context,
 	req *connect.Request[gen.HelloRequest],
@@ -36,7 +39,25 @@ func (s *HelloWorldServiceServer) SayHelloStream(
 
 	log.Printf("📥 Received SayHelloStream request from: %s", name)
 
-	// Send 3 messages with a small delay between them
+	// Simulate authorization check that fails BEFORE streaming
+	if name == "unauthorized" {
+		log.Printf("❌ Authorization failed for: %s", name)
+		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("you are not authorized to access this stream"))
+	}
+
+	// Simulate input validation failure BEFORE streaming
+	if name == "invalid" {
+		log.Printf("❌ Validation failed for: %s", name)
+		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid name provided"))
+	}
+
+	// Simulate resource not found BEFORE streaming
+	if name == "notfound" {
+		log.Printf("❌ Resource not found for: %s", name)
+		return connect.NewError(connect.CodeNotFound, fmt.Errorf("requested resource does not exist"))
+	}
+
+	// Normal case: stream messages
 	messages := []string{
 		fmt.Sprintf("Hello, %s! This is message 1.", name),
 		fmt.Sprintf("Hello, %s! This is message 2.", name),
@@ -94,9 +115,18 @@ func main() {
 
 	log.Printf("🚀 Go Connect server starting on %s", serverPort)
 	log.Printf("📍 Endpoint: %s", path)
-	log.Printf("🔧 Implementation: SayHelloStream only (for comparison)")
+	log.Printf("🔧 Implementation: SayHelloStream with early error handling")
 	log.Printf("")
-	log.Printf("Test with: go run main.go (update serverURL to http://localhost:3000)")
+	log.Printf("Error test cases (these return errors BEFORE streaming):")
+	log.Printf("  - name='unauthorized' -> PermissionDenied")
+	log.Printf("  - name='invalid'      -> InvalidArgument")
+	log.Printf("  - name='notfound'     -> NotFound")
+	log.Printf("")
+	log.Printf("This server demonstrates CORRECT behavior:")
+	log.Printf("  - HTTP 200 with application/connect+json")
+	log.Printf("  - Error in EndStream frame")
+	log.Printf("")
+	log.Printf("Test with: go run ./cmd/client stream-error")
 
 	// Use h2c for HTTP/2 without TLS
 	err := http.ListenAndServe(

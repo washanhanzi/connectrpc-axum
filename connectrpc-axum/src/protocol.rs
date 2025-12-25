@@ -93,6 +93,18 @@ impl RequestProtocol {
     pub fn is_streaming(&self) -> bool {
         matches!(self, Self::ConnectStreamJson | Self::ConnectStreamProto)
     }
+
+    /// Get the streaming response content-type based on the encoding.
+    ///
+    /// For server-streaming endpoints where the request is unary but the
+    /// response is streaming, use this to get the correct streaming content-type.
+    pub fn streaming_response_content_type(&self) -> &'static str {
+        if self.is_proto() {
+            "application/connect+proto"
+        } else {
+            "application/connect+json"
+        }
+    }
 }
 
 // Task-local storage for per-request protocol context.

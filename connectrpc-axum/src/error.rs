@@ -1,9 +1,12 @@
 use axum::{
     Json,
-    http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
+    body::Body,
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde::{Serialize, Serializer};
+
+use crate::protocol::get_request_protocol;
 
 /// Connect RPC error codes, matching the codes defined in the Connect protocol.
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -123,25 +126,16 @@ impl ConnectError {
 
 impl IntoResponse for ConnectError {
     fn into_response(self) -> Response {
-        let status_code = match self.code {
-            Code::Ok => StatusCode::OK,
-            Code::Canceled => StatusCode::REQUEST_TIMEOUT,
-            Code::Unknown => StatusCode::INTERNAL_SERVER_ERROR,
-            Code::InvalidArgument => StatusCode::BAD_REQUEST,
-            Code::DeadlineExceeded => StatusCode::REQUEST_TIMEOUT,
-            Code::NotFound => StatusCode::NOT_FOUND,
-            Code::AlreadyExists => StatusCode::CONFLICT,
-            Code::PermissionDenied => StatusCode::FORBIDDEN,
-            Code::ResourceExhausted => StatusCode::TOO_MANY_REQUESTS,
-            Code::FailedPrecondition => StatusCode::BAD_REQUEST, // Connect spec says this should be 400
-            Code::Aborted => StatusCode::CONFLICT,
-            Code::OutOfRange => StatusCode::BAD_REQUEST,
-            Code::Unimplemented => StatusCode::NOT_IMPLEMENTED,
-            Code::Internal => StatusCode::INTERNAL_SERVER_ERROR,
-            Code::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
-            Code::DataLoss => StatusCode::INTERNAL_SERVER_ERROR,
-            Code::Unauthenticated => StatusCode::UNAUTHORIZED,
-        };
+        let protocol = get_request_protocol();
+
+        // For streaming protocols, errors must be returned as EndStream frames
+        // with HTTP 200, not as HTTP error status codes
+        if protocol.is_streaming() {
+            return self.into_streaming_error_response(protocol);
+        }
+
+        // For unary protocols, use HTTP status codes
+        let status_code = self.http_status_code();
 
         // Create the error response body
         let error_body = ErrorResponseBody {
@@ -153,9 +147,110 @@ impl IntoResponse for ConnectError {
         // Start with the base response
         let mut response = (status_code, Json(error_body)).into_response();
 
+        // Set the correct content-type for errors
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static(protocol.error_content_type()),
+        );
+
         // Add metadata as headers
         let headers = response.headers_mut();
         headers.extend(self.meta.iter().map(|(k, v)| (k.clone(), v.clone())));
+
+        response
+    }
+}
+
+impl ConnectError {
+    /// Convert error code to HTTP status code (for unary responses only)
+    fn http_status_code(&self) -> StatusCode {
+        match self.code {
+            Code::Ok => StatusCode::OK,
+            Code::Canceled => StatusCode::REQUEST_TIMEOUT,
+            Code::Unknown => StatusCode::INTERNAL_SERVER_ERROR,
+            Code::InvalidArgument => StatusCode::BAD_REQUEST,
+            Code::DeadlineExceeded => StatusCode::REQUEST_TIMEOUT,
+            Code::NotFound => StatusCode::NOT_FOUND,
+            Code::AlreadyExists => StatusCode::CONFLICT,
+            Code::PermissionDenied => StatusCode::FORBIDDEN,
+            Code::ResourceExhausted => StatusCode::TOO_MANY_REQUESTS,
+            Code::FailedPrecondition => StatusCode::BAD_REQUEST,
+            Code::Aborted => StatusCode::CONFLICT,
+            Code::OutOfRange => StatusCode::BAD_REQUEST,
+            Code::Unimplemented => StatusCode::NOT_IMPLEMENTED,
+            Code::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            Code::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+            Code::DataLoss => StatusCode::INTERNAL_SERVER_ERROR,
+            Code::Unauthenticated => StatusCode::UNAUTHORIZED,
+        }
+    }
+
+    /// Create a streaming error response with proper EndStream framing.
+    ///
+    /// Per the Connect protocol, streaming responses must:
+    /// - Always return HTTP 200
+    /// - Use application/connect+json or application/connect+proto content-type
+    /// - Deliver errors in an EndStream frame (flags = 0x02)
+    ///
+    /// This method should be used by streaming handlers when returning errors
+    /// before the stream has started. The `use_proto` flag determines the
+    /// response encoding (protobuf vs JSON).
+    pub fn into_streaming_response(self, use_proto: bool) -> Response {
+        let content_type = if use_proto {
+            "application/connect+proto"
+        } else {
+            "application/connect+json"
+        };
+        self.into_streaming_error_response_with_content_type(content_type)
+    }
+
+    /// Internal helper for creating streaming error responses.
+    fn into_streaming_error_response(self, protocol: crate::protocol::RequestProtocol) -> Response {
+        self.into_streaming_error_response_with_content_type(protocol.error_content_type())
+    }
+
+    /// Create a streaming error response with the specified content-type.
+    fn into_streaming_error_response_with_content_type(self, content_type: &'static str) -> Response {
+        // Build the EndStream JSON payload: { "error": { "code": "...", "message": "..." } }
+        let error_body = ErrorResponseBody {
+            code: self.code,
+            message: self.message.clone(),
+            details: self.details.clone(),
+        };
+        let end_stream_payload = serde_json::json!({ "error": error_body });
+
+        // Serialize the error payload, falling back to a minimal internal error frame on failure
+        let frame = match serde_json::to_vec(&end_stream_payload) {
+            Ok(payload_bytes) => {
+                // Build the EndStream frame: [flags:1][length:4][payload]
+                // flags = 0x02 indicates EndStream
+                let mut frame = Vec::with_capacity(5 + payload_bytes.len());
+                frame.push(0b0000_0010); // EndStream flag
+                frame.extend_from_slice(&(payload_bytes.len() as u32).to_be_bytes());
+                frame.extend_from_slice(&payload_bytes);
+                frame
+            }
+            Err(_) => {
+                // Serialization failed - use fallback internal error frame
+                internal_error_end_stream_frame()
+            }
+        };
+
+        // Build the response with HTTP 200 and streaming content-type
+        let mut response = Response::builder()
+            .status(StatusCode::OK)
+            .header(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static(content_type),
+            )
+            .body(Body::from(frame))
+            .unwrap_or_else(|_| internal_error_streaming_response(content_type));
+
+        // Add metadata as headers
+        let headers = response.headers_mut();
+        for (key, value) in self.meta.iter() {
+            headers.append(key.clone(), value.clone());
+        }
 
         response
     }
@@ -311,4 +406,60 @@ impl From<ConnectError> for ::tonic::Status {
         let code: ::tonic::Code = err.code().into();
         ::tonic::Status::new(code, err.message().unwrap_or("").to_string())
     }
+}
+
+// ---- Safe fallback responses for serialization/encoding failures ----
+
+/// Create a safe 500 Internal Server Error response for unary requests.
+///
+/// This is used when serialization or encoding fails and we cannot produce
+/// a proper ConnectError response. The body is a hardcoded JSON string that
+/// cannot fail to serialize.
+pub(crate) fn internal_error_response(content_type: &'static str) -> Response {
+    // Hardcoded JSON that cannot fail - no dynamic content
+    const ERROR_BODY: &[u8] = br#"{"code":"internal","message":"Internal serialization error"}"#;
+
+    Response::builder()
+        .status(StatusCode::INTERNAL_SERVER_ERROR)
+        .header(header::CONTENT_TYPE, HeaderValue::from_static(content_type))
+        .body(Body::from(ERROR_BODY.to_vec()))
+        // This cannot fail: status is valid, header is valid static strings, body is valid bytes
+        .unwrap_or_else(|_| {
+            // Ultimate fallback - empty 500 response
+            let mut response = Response::new(Body::empty());
+            *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+            response
+        })
+}
+
+/// Create a safe EndStream error frame for streaming responses.
+///
+/// This is used when encoding a message in a stream fails. Returns bytes
+/// for an EndStream frame (flags=0x02) containing an internal error.
+pub(crate) fn internal_error_end_stream_frame() -> Vec<u8> {
+    // Hardcoded EndStream JSON payload that cannot fail
+    const ERROR_PAYLOAD: &[u8] = br#"{"error":{"code":"internal","message":"Internal serialization error"}}"#;
+
+    let mut frame = Vec::with_capacity(5 + ERROR_PAYLOAD.len());
+    frame.push(0b0000_0010); // EndStream flag
+    frame.extend_from_slice(&(ERROR_PAYLOAD.len() as u32).to_be_bytes());
+    frame.extend_from_slice(ERROR_PAYLOAD);
+    frame
+}
+
+/// Create a safe streaming response with an internal error EndStream frame.
+///
+/// This is used when we cannot build a proper streaming response and need
+/// to return a safe fallback.
+pub(crate) fn internal_error_streaming_response(content_type: &'static str) -> Response {
+    let frame = internal_error_end_stream_frame();
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, HeaderValue::from_static(content_type))
+        .body(Body::from(frame))
+        .unwrap_or_else(|_| {
+            // Ultimate fallback - empty 200 response
+            Response::new(Body::empty())
+        })
 }

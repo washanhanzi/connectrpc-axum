@@ -15,7 +15,7 @@ Execute the integration test script:
 The tests pass when ALL of these conditions are met:
 
 1. **Exit code is 0** - The script returns exit code 0
-2. **All 9 tests pass** - The summary shows "All 9 tests passed!"
+2. **All 10 tests pass** - The summary shows "All 10 tests passed!"
 3. **No FAIL markers** - No test shows FAIL in the results
 
 ## Verification Chain
@@ -45,6 +45,7 @@ If any validation fails, Go client calls `log.Fatalf()` which exits with code 1.
 | 7 | tonic-bidi-stream | Connect | Unary |
 | 8 | tonic-bidi-stream | gRPC | Bidi streaming |
 | 9 | grpc-web | gRPC-Web | Unary |
+| 10 | streaming-error-repro | Connect | Stream error handling |
 
 ## Failure Handling
 
@@ -63,7 +64,7 @@ After running, report results as:
 
 ```
 Integration Tests: [PASS/FAIL]
-- Total: 9 tests
+- Total: 10 tests
 - Passed: X
 - Failed: Y
 - Exit code: Z

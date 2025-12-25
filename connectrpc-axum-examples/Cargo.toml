@@ -52,6 +52,11 @@ name = "grpc-web"
 path = "src/bin/grpc-web.rs"
 required-features = ["tonic-web"]
 
+# Bug Reproduction: Streaming error handling bypass
+[[bin]]
+name = "streaming-error-repro"
+path = "src/bin/streaming-error-repro.rs"
+
 [dependencies]
 # Application dependency for error handling
 anyhow = "1"

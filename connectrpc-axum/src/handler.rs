@@ -7,7 +7,9 @@ use axum::{
 use std::{future::Future, pin::Pin};
 
 use crate::{
-    error::ConnectError, request::ConnectRequest,
+    error::ConnectError,
+    protocol::get_request_protocol,
+    request::ConnectRequest,
     response::{ConnectResponse, StreamBody},
 };
 use futures::Stream;
@@ -197,9 +199,14 @@ where
             let result = (self.0)(connect_req).await;
 
             // Convert result to response
+            // For streaming handlers, errors must use streaming framing (EndStream frame)
             match result {
                 Ok(response) => response.into_response(),
-                Err(err) => err.into_response(),
+                Err(err) => {
+                    // Use the request protocol to determine proto vs JSON encoding
+                    let use_proto = get_request_protocol().is_proto();
+                    err.into_streaming_response(use_proto)
+                }
             }
         })
     }
@@ -256,9 +263,14 @@ macro_rules! impl_handler_for_connect_stream_handler_wrapper {
                     let result = (self.0)($($A,)* connect_req).await;
 
                     // Convert result to response
+                    // For streaming handlers, errors must use streaming framing (EndStream frame)
                     match result {
                         Ok(response) => response.into_response(),
-                        Err(err) => err.into_response(),
+                        Err(err) => {
+                            // Use the request protocol to determine proto vs JSON encoding
+                            let use_proto = get_request_protocol().is_proto();
+                            err.into_streaming_response(use_proto)
+                        }
                     }
                 })
             }

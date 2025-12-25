@@ -27,16 +27,17 @@
 #   │ tonic-bidi-stream       │ Connect  │ Unary             │
 #   │ tonic-bidi-stream       │ gRPC     │ Bidi streaming    │
 #   │ grpc-web                │ gRPC-Web │ Unary             │
+#   │ streaming-error-repro   │ Connect  │ Stream error      │
 #   └─────────────────────────┴──────────┴───────────────────┘
 #
 # Exit Codes:
 #   0 - All tests passed
-#   N - Number of failed tests (1-9)
+#   N - Number of failed tests (1-10)
 #
 # Success Condition:
 #   The script succeeds when ALL of the following are true:
-#   1. All 6 Rust servers start successfully on port 3000
-#   2. All 9 Go client tests complete without error
+#   1. All 7 Rust servers start successfully on port 3000
+#   2. All 10 Go client tests complete without error
 #   3. Each test receives expected response data
 #   4. Exit code is 0
 #
@@ -265,6 +266,16 @@ if start_server "grpc-web" "tonic-web"; then
     stop_server
 fi
 
+# ----------------------------------------------------------------------------
+# Test 7: streaming-error-repro (Streaming error handling)
+# ----------------------------------------------------------------------------
+print_header "Test 7: streaming-error-repro"
+
+if start_server "streaming-error-repro" ""; then
+    run_go_test "connect" "stream-error" "streaming-error-repro / Connect stream-error"
+    stop_server
+fi
+
 # ============================================================================
 # Summary
 # ============================================================================
@@ -283,7 +294,8 @@ for test_name in \
     "tonic-server-stream / gRPC" \
     "tonic-bidi-stream / Connect unary" \
     "tonic-bidi-stream / gRPC bidi" \
-    "grpc-web / gRPC-Web"
+    "grpc-web / gRPC-Web" \
+    "streaming-error-repro / Connect stream-error"
 do
     if [ -n "${RESULTS[$test_name]}" ]; then
         echo "  $test_name: ${RESULTS[$test_name]}"
