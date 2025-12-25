@@ -73,7 +73,7 @@ async fn say_hello_stream_with_error(
         });
     };
 
-    Ok(ConnectResponse(StreamBody::new(response_stream)))
+    Ok(ConnectResponse::new(StreamBody::new(response_stream)))
 }
 
 #[tokio::main]

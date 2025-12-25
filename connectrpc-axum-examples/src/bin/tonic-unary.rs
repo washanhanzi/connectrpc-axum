@@ -29,7 +29,7 @@ async fn say_hello(
     let count = state.counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let name = req.name.unwrap_or_else(|| "World".to_string());
 
-    Ok(ConnectResponse(HelloResponse {
+    Ok(ConnectResponse::new(HelloResponse {
         message: format!("Hello #{}, {}!", count, name),
         response_type: None,
     }))

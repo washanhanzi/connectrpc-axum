@@ -6,7 +6,7 @@ use axum::{
 };
 use serde::{Serialize, Serializer};
 
-use crate::protocol::get_request_protocol;
+use crate::protocol::RequestProtocol;
 
 /// Connect RPC error codes, matching the codes defined in the Connect protocol.
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -124,10 +124,12 @@ impl ConnectError {
     }
 }
 
-impl IntoResponse for ConnectError {
-    fn into_response(self) -> Response {
-        let protocol = get_request_protocol();
-
+impl ConnectError {
+    /// Convert this error into an HTTP response using the specified protocol.
+    ///
+    /// This is the primary method used by handler wrappers to convert errors
+    /// to responses with the correct encoding based on the request protocol.
+    pub(crate) fn into_response_with_protocol(self, protocol: RequestProtocol) -> Response {
         // For streaming protocols, errors must be returned as EndStream frames
         // with HTTP 200, not as HTTP error status codes
         if protocol.is_streaming() {
@@ -158,6 +160,14 @@ impl IntoResponse for ConnectError {
         headers.extend(self.meta.iter().map(|(k, v)| (k.clone(), v.clone())));
 
         response
+    }
+}
+
+impl IntoResponse for ConnectError {
+    fn into_response(self) -> Response {
+        // Fallback to default protocol (ConnectUnaryJson)
+        // Handler wrappers should use into_response_with_protocol() instead
+        self.into_response_with_protocol(RequestProtocol::default())
     }
 }
 

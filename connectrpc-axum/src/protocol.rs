@@ -1,10 +1,10 @@
-//! Protocol detection and per-request context for Connect RPC.
+//! Protocol detection for Connect RPC.
 //!
 //! This module provides the [`RequestProtocol`] enum for identifying the wire protocol
-//! variant from incoming requests, and task-local storage for propagating this context
-//! to response encoding.
-
-use std::cell::Cell;
+//! variant from incoming requests. The protocol is stored in request extensions by
+//! [`ConnectLayer`] and injected into response types by handler wrappers.
+//!
+//! [`ConnectLayer`]: crate::layer::ConnectLayer
 
 /// Protocol variant detected from the incoming request.
 ///
@@ -105,37 +105,6 @@ impl RequestProtocol {
             "application/connect+json"
         }
     }
-}
-
-// Task-local storage for per-request protocol context.
-// This replaces the previous thread-local storage which was unsound for async code.
-tokio::task_local! {
-    static REQUEST_PROTOCOL: Cell<RequestProtocol>;
-}
-
-/// Get the protocol for the current request.
-///
-/// Returns the protocol set by [`ConnectLayer`] middleware, or the default
-/// (ConnectUnaryJson) if called outside a request context.
-///
-/// [`ConnectLayer`]: crate::layer::ConnectLayer
-pub fn get_request_protocol() -> RequestProtocol {
-    REQUEST_PROTOCOL
-        .try_with(|p| p.get())
-        .unwrap_or_default()
-}
-
-/// Scope for running code with a specific request protocol.
-///
-/// This is used internally by [`ConnectLayer`] to set the protocol for a request.
-/// The protocol is available via [`get_request_protocol()`] within the scope.
-///
-/// [`ConnectLayer`]: crate::layer::ConnectLayer
-pub async fn with_protocol<F, T>(protocol: RequestProtocol, f: F) -> T
-where
-    F: std::future::Future<Output = T>,
-{
-    REQUEST_PROTOCOL.scope(Cell::new(protocol), f).await
 }
 
 #[cfg(test)]

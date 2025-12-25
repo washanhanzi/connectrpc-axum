@@ -1,6 +1,6 @@
 //! Response types for Connect.
 use crate::error::{ConnectError, internal_error_response, internal_error_end_stream_frame, internal_error_streaming_response};
-use crate::protocol::get_request_protocol;
+use crate::protocol::RequestProtocol;
 use axum::{
     body::{Body, Bytes},
     http::{HeaderValue, StatusCode, header},
@@ -10,15 +10,40 @@ use futures::Stream;
 use prost::Message;
 use serde::Serialize;
 
+/// Response wrapper for Connect RPC handlers.
+///
+/// The `protocol` field is set automatically by the handler wrapper based on
+/// the request's Content-Type. Users should create responses with `ConnectResponse::new()`
+/// or by wrapping the value directly.
 #[derive(Debug, Clone)]
-pub struct ConnectResponse<T>(pub T);
+pub struct ConnectResponse<T> {
+    pub(crate) inner: T,
+    pub(crate) protocol: RequestProtocol,
+}
 
 impl<T> ConnectResponse<T> {
+    /// Create a new ConnectResponse wrapping the given value.
+    ///
+    /// The protocol will be set by the framework before encoding.
+    pub fn new(inner: T) -> Self {
+        Self {
+            inner,
+            protocol: RequestProtocol::default(),
+        }
+    }
+
     /// Extract the inner value from the ConnectResponse wrapper.
     /// This is useful for converting ConnectResponse back to the original type,
     /// particularly when bridging to Tonic handlers.
     pub fn into_inner(self) -> T {
-        self.0
+        self.inner
+    }
+
+    /// Set the protocol for response encoding.
+    /// This is called internally by handler wrappers.
+    pub(crate) fn with_protocol(mut self, protocol: RequestProtocol) -> Self {
+        self.protocol = protocol;
+        self
     }
 }
 
@@ -27,15 +52,14 @@ where
     T: Message + Serialize,
 {
     fn into_response(self) -> Response {
-        // Get protocol from task-local (set by ConnectLayer middleware)
-        let protocol = get_request_protocol();
+        let protocol = self.protocol;
 
         let body = if protocol.is_proto() {
             // Connect unary proto: raw bytes, no frame envelope
-            self.0.encode_to_vec()
+            self.inner.encode_to_vec()
         } else {
             // Connect unary JSON: raw JSON, no frame envelope
-            match serde_json::to_vec(&self.0) {
+            match serde_json::to_vec(&self.inner) {
                 Ok(bytes) => bytes,
                 Err(_) => {
                     // Serialization failed (e.g., non-finite floats, custom serializer errors)
@@ -98,8 +122,7 @@ where
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        // Get protocol from task-local (set by ConnectLayer middleware)
-        let protocol = get_request_protocol();
+        let protocol = self.protocol;
         let use_proto = protocol.is_proto();
         let content_type = protocol.streaming_response_content_type();
 
@@ -111,7 +134,7 @@ where
         let error_sent_clone = error_sent.clone();
 
         let body_stream = self
-            .0
+            .inner
             .stream
             .map(move |result| match result {
                 Ok(msg) => {

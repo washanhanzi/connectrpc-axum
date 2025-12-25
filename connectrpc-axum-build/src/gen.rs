@@ -387,7 +387,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                                     ) -> Result<::tonic::Response<#response_type>, ::tonic::Status> {
                                         let req = connectrpc_axum::request::ConnectRequest(request.into_inner());
                                         match (self.#method_name)(req).await {
-                                            Ok(connectrpc_axum::response::ConnectResponse(resp)) => Ok(::tonic::Response::new(resp)),
+                                            Ok(response) => Ok(::tonic::Response::new(response.into_inner())),
                                             Err(err) => Err(err.into()),
                                         }
                                     }

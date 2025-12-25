@@ -127,7 +127,7 @@ async fn say_hello(
     ConnectRequest(req): ConnectRequest<HelloRequest>,
 ) -> Result<ConnectResponse<HelloResponse>, ConnectError> {
     let count = state.counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    Ok(ConnectResponse(HelloResponse {
+    Ok(ConnectResponse::new(HelloResponse {
         message: format!("Hello #{}, {}!", count, req.name.unwrap_or_default()),
         response_type: None,
     }))

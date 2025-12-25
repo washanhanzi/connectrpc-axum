@@ -9,7 +9,7 @@ use std::{future::Future, pin::Pin};
 
 use crate::{
     error::ConnectError,
-    protocol::get_request_protocol,
+    protocol::RequestProtocol,
     request::ConnectRequest,
     response::{ConnectResponse, StreamBody},
 };
@@ -147,7 +147,7 @@ where
                     fut.await.map(|response| {
                         let stream = response.into_inner().into_inner();
                         let boxed_stream: BoxedStream<Resp> = Box::pin(stream);
-                        ConnectResponse(StreamBody::new(boxed_stream))
+                        ConnectResponse::new(StreamBody::new(boxed_stream))
                     })
                 })
             })
@@ -180,7 +180,7 @@ where
                     fut.await.map(|response| {
                         let stream = response.into_inner().into_inner();
                         let boxed_stream: BoxedStream<Resp> = Box::pin(stream);
-                        ConnectResponse(StreamBody::new(boxed_stream))
+                        ConnectResponse::new(StreamBody::new(boxed_stream))
                     })
                 })
             })
@@ -204,6 +204,13 @@ macro_rules! impl_handler_for_tonic_compatible_wrapper {
 
             fn call(self, req: Request, state: ()) -> Self::Future {
                 Box::pin(async move {
+                    // Extract protocol from extensions (set by ConnectLayer)
+                    let protocol = req
+                        .extensions()
+                        .get::<RequestProtocol>()
+                        .copied()
+                        .unwrap_or_default();
+
                     // Extract the ConnectRequest (body only)
                     let connect_req = match ConnectRequest::<Req>::from_request(req, &state).await {
                         Ok(value) => value,
@@ -213,10 +220,10 @@ macro_rules! impl_handler_for_tonic_compatible_wrapper {
                     // Call the handler function
                     let result = (self.0)(connect_req).await;
 
-                    // Convert result to response
+                    // Convert result to response, injecting protocol
                     match result {
-                        Ok(response) => response.into_response(),
-                        Err(err) => err.into_response(),
+                        Ok(response) => response.with_protocol(protocol).into_response(),
+                        Err(err) => err.into_response_with_protocol(protocol),
                     }
                 })
             }
@@ -242,6 +249,13 @@ macro_rules! impl_handler_for_tonic_compatible_wrapper {
 
             fn call(self, req: Request, state: S) -> Self::Future {
                 Box::pin(async move {
+                    // Extract protocol from extensions (set by ConnectLayer)
+                    let protocol = req
+                        .extensions()
+                        .get::<RequestProtocol>()
+                        .copied()
+                        .unwrap_or_default();
+
                     // Clone state for the extractor and extract body directly
                     let state_extractor = axum::extract::State(state.clone());
 
@@ -254,10 +268,10 @@ macro_rules! impl_handler_for_tonic_compatible_wrapper {
                     // Call the handler function
                     let result = (self.0)(state_extractor, connect_req).await;
 
-                    // Convert result to response
+                    // Convert result to response, injecting protocol
                     match result {
-                        Ok(response) => response.into_response(),
-                        Err(err) => err.into_response(),
+                        Ok(response) => response.with_protocol(protocol).into_response(),
+                        Err(err) => err.into_response_with_protocol(protocol),
                     }
                 })
             }
@@ -307,6 +321,13 @@ where
 
     fn call(self, req: Request, _state: ()) -> Self::Future {
         Box::pin(async move {
+            // Extract protocol from extensions (set by ConnectLayer)
+            let protocol = req
+                .extensions()
+                .get::<RequestProtocol>()
+                .copied()
+                .unwrap_or_default();
+
             // Extract the ConnectRequest (body only)
             let connect_req = match ConnectRequest::<Req>::from_request(req, &()).await {
                 Ok(value) => value,
@@ -316,12 +337,12 @@ where
             // Call the handler function
             let result = (self.0)(connect_req).await;
 
-            // Convert result to response
+            // Convert result to response, injecting protocol
             // For streaming handlers, errors must use streaming framing (EndStream frame)
             match result {
-                Ok(response) => response.into_response(),
+                Ok(response) => response.with_protocol(protocol).into_response(),
                 Err(err) => {
-                    let use_proto = get_request_protocol().is_proto();
+                    let use_proto = protocol.is_proto();
                     err.into_streaming_response(use_proto)
                 }
             }
@@ -346,6 +367,13 @@ where
 
     fn call(self, req: Request, state: S) -> Self::Future {
         Box::pin(async move {
+            // Extract protocol from extensions (set by ConnectLayer)
+            let protocol = req
+                .extensions()
+                .get::<RequestProtocol>()
+                .copied()
+                .unwrap_or_default();
+
             // Clone state for the extractor and extract body directly
             let state_extractor = axum::extract::State(state.clone());
 
@@ -358,12 +386,12 @@ where
             // Call the handler function
             let result = (self.0)(state_extractor, connect_req).await;
 
-            // Convert result to response
+            // Convert result to response, injecting protocol
             // For streaming handlers, errors must use streaming framing (EndStream frame)
             match result {
-                Ok(response) => response.into_response(),
+                Ok(response) => response.with_protocol(protocol).into_response(),
                 Err(err) => {
-                    let use_proto = get_request_protocol().is_proto();
+                    let use_proto = protocol.is_proto();
                     err.into_streaming_response(use_proto)
                 }
             }

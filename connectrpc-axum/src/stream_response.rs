@@ -6,7 +6,7 @@
 //! the idiomatic way to handle streaming responses in Axum.
 
 use crate::error::{ConnectError, internal_error_end_stream_frame, internal_error_streaming_response};
-use crate::protocol::get_request_protocol;
+use crate::protocol::RequestProtocol;
 use axum::{
     body::{Body, Bytes},
     http::{HeaderValue, header},
@@ -21,15 +21,23 @@ use serde::Serialize;
 /// This wrapper takes a stream of messages and encodes them according to the
 /// Connect protocol for server streams. The encoding format (JSON or protobuf)
 /// is determined by the incoming request's Content-Type.
+///
+/// The `protocol` field is set automatically by the handler wrapper.
 #[derive(Debug)]
 pub struct ConnectStreamResponse<S> {
-    stream: S,
+    pub(crate) stream: S,
+    pub(crate) protocol: RequestProtocol,
 }
 
 impl<S> ConnectStreamResponse<S> {
     /// Create a new `ConnectStreamResponse` from a stream of messages.
+    ///
+    /// The protocol will be set by the framework before encoding.
     pub fn new(stream: S) -> Self {
-        Self { stream }
+        Self {
+            stream,
+            protocol: RequestProtocol::default(),
+        }
     }
 
     /// Extract the underlying stream from the response wrapper.
@@ -52,8 +60,7 @@ where
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        // Get protocol from task-local (set by ConnectLayer middleware)
-        let protocol = get_request_protocol();
+        let protocol = self.protocol;
         let use_proto = protocol.is_proto();
         let content_type = protocol.streaming_response_content_type();
 

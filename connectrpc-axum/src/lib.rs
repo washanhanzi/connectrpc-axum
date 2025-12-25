@@ -19,7 +19,7 @@ pub use handler::{
 };
 pub use handler::{ConnectHandler, ConnectHandlerWrapper, post_connect};
 pub use layer::{ConnectLayer, ConnectService};
-pub use protocol::{RequestProtocol, get_request_protocol};
+pub use protocol::RequestProtocol;
 pub use service_builder::MakeServiceBuilder;
 
 // Re-export several crates
@@ -44,7 +44,7 @@ pub mod prelude {
         post_connect_stream,
     };
     pub use crate::layer::{ConnectLayer, ConnectService};
-    pub use crate::protocol::{RequestProtocol, get_request_protocol};
+    pub use crate::protocol::RequestProtocol;
     pub use crate::request::ConnectRequest;
     pub use crate::response::{ConnectResponse, StreamBody};
     pub use crate::service_builder::MakeServiceBuilder;

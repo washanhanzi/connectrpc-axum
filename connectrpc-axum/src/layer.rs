@@ -1,9 +1,9 @@
 //! Middleware layer for Connect RPC protocol handling.
 //!
 //! The [`ConnectLayer`] middleware detects the protocol variant from incoming requests
-//! and scopes a task-local context so that response encoding can match the request format.
+//! and stores it in request extensions so that response encoding can match the request format.
 
-use crate::protocol::{with_protocol, RequestProtocol};
+use crate::protocol::RequestProtocol;
 use axum::http::{header, Method, Request};
 use std::{
     future::Future,
@@ -16,8 +16,8 @@ use tower::{Layer, Service, ServiceExt};
 ///
 /// This layer:
 /// 1. Detects the protocol variant from the request (Content-Type header or query params)
-/// 2. Scopes a task-local [`RequestProtocol`] for the duration of request handling
-/// 3. Response encoding can then use [`get_request_protocol()`] to match the request format
+/// 2. Stores the [`RequestProtocol`] in request extensions
+/// 3. Handler wrappers extract the protocol and inject it into response types
 ///
 /// # Example
 ///
@@ -29,7 +29,6 @@ use tower::{Layer, Service, ServiceExt};
 ///     .layer(ConnectLayer);
 /// ```
 ///
-/// [`get_request_protocol()`]: crate::protocol::get_request_protocol
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ConnectLayer;
 
@@ -63,19 +62,17 @@ where
         self.inner.poll_ready(cx)
     }
 
-    fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
-        // Detect protocol from request
+    fn call(&mut self, mut req: Request<ReqBody>) -> Self::Future {
+        // Detect protocol from request and store in extensions
         let protocol = detect_protocol(&req);
+        req.extensions_mut().insert(protocol);
 
         // Clone inner service for the async block
         let inner = self.inner.clone();
         // Replace self.inner with the clone so it's ready for the next request
         let inner = std::mem::replace(&mut self.inner, inner);
 
-        // Scope the task-local protocol for the entire request handling
-        Box::pin(async move {
-            with_protocol(protocol, async move { inner.oneshot(req).await }).await
-        })
+        Box::pin(async move { inner.oneshot(req).await })
     }
 }
 

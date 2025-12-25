@@ -1,7 +1,7 @@
 //! Extractor for Connect requests.
 use crate::error::Code;
 use crate::error::ConnectError;
-use crate::protocol::get_request_protocol;
+use crate::protocol::RequestProtocol;
 use axum::{
     body::Bytes,
     extract::{FromRequest, Request},
@@ -41,8 +41,12 @@ where
     S: Send + Sync,
     T: Message + DeserializeOwned + Default,
 {
-    // Protocol is detected by ConnectLayer middleware and stored in task-local
-    let protocol = get_request_protocol();
+    // Protocol is detected by ConnectLayer middleware and stored in extensions
+    let protocol = req
+        .extensions()
+        .get::<RequestProtocol>()
+        .copied()
+        .unwrap_or_default();
 
     let mut bytes = Bytes::from_request(req, _state)
         .await

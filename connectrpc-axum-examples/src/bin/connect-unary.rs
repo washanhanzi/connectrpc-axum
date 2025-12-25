@@ -17,7 +17,7 @@ async fn say_hello(
     ConnectRequest(req): ConnectRequest<HelloRequest>,
 ) -> Result<ConnectResponse<HelloResponse>, ConnectError> {
     let name = req.name.unwrap_or_else(|| "World".to_string());
-    Ok(ConnectResponse(HelloResponse {
+    Ok(ConnectResponse::new(HelloResponse {
         message: format!("Hello, {}!", name),
         response_type: None,
     }))
