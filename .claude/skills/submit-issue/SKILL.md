@@ -32,10 +32,7 @@ If the question can be answered from documentation, provide the answer and ask i
 Before submitting a bug report:
 
 1. **Reproduce the issue** - Ask user for reproduction steps if not provided
-2. **Run integration tests** - Use the test-integration skill:
-   ```bash
-   ./connectrpc-axum-examples/test-all.sh
-   ```
+2. **Run integration tests** - Use the `/test` skill command
 3. **Check connect-go behavior** - Use connect-go-reference skill to verify expected protocol behavior
 4. **Document findings** - Note whether tests pass/fail and any discrepancies
 
@@ -108,7 +105,7 @@ gh issue edit <number> --add-label "bug"
 ## Reference Skills
 
 - **connect-go-reference**: Use to verify protocol behavior against official Go implementation
-- **test-integration**: Use to run integration tests and verify bugs
+- **test**: Use to run integration tests and verify bugs
 
 ## Documentation References
 
