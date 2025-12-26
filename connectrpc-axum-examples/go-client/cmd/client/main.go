@@ -6,12 +6,14 @@
 //
 // Commands:
 //
-//	unary          Test unary RPC
-//	server-stream  Test server streaming RPC
-//	bidi-stream    Test bidirectional streaming (gRPC only)
-//	grpc-web       Test gRPC-Web protocol
-//	stream-error   Test streaming error handling (bug reproduction)
-//	all            Run all applicable tests
+//	unary           Test unary RPC
+//	server-stream   Test server streaming RPC
+//	client-stream   Test client streaming RPC (Connect protocol)
+//	bidi-stream     Test bidirectional streaming (gRPC only)
+//	connect-bidi    Test bidirectional streaming (Connect protocol)
+//	grpc-web        Test gRPC-Web protocol
+//	stream-error    Test streaming error handling (bug reproduction)
+//	all             Run all applicable tests
 //
 // Flags:
 //
@@ -22,6 +24,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -29,6 +32,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -37,6 +41,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/connectrpc-axum/examples/go-client/gen"
 	"github.com/connectrpc-axum/examples/go-client/gen/genconnect"
+	"golang.org/x/net/http2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
@@ -62,8 +67,12 @@ func main() {
 		runUnaryTest()
 	case "server-stream":
 		runServerStreamTest()
+	case "client-stream":
+		runClientStreamTest()
 	case "bidi-stream":
 		runBidiStreamTest()
+	case "connect-bidi":
+		runConnectBidiStreamTest()
 	case "grpc-web":
 		runGrpcWebTest()
 	case "stream-error":
@@ -81,12 +90,14 @@ func printUsage() {
 	fmt.Println("Usage: go run ./cmd/client [flags] <command>")
 	fmt.Println()
 	fmt.Println("Commands:")
-	fmt.Println("  unary          Test unary RPC")
-	fmt.Println("  server-stream  Test server streaming RPC")
-	fmt.Println("  bidi-stream    Test bidirectional streaming (gRPC only)")
-	fmt.Println("  grpc-web       Test gRPC-Web protocol")
-	fmt.Println("  stream-error   Test streaming error handling (bug reproduction)")
-	fmt.Println("  all            Run all applicable tests")
+	fmt.Println("  unary           Test unary RPC")
+	fmt.Println("  server-stream   Test server streaming RPC")
+	fmt.Println("  client-stream   Test client streaming RPC (Connect protocol)")
+	fmt.Println("  bidi-stream     Test bidirectional streaming (gRPC only)")
+	fmt.Println("  connect-bidi    Test bidirectional streaming (Connect protocol)")
+	fmt.Println("  grpc-web        Test gRPC-Web protocol")
+	fmt.Println("  stream-error    Test streaming error handling (bug reproduction)")
+	fmt.Println("  all             Run all applicable tests")
 	fmt.Println()
 	fmt.Println("Flags:")
 	flag.PrintDefaults()
@@ -284,6 +295,186 @@ func testServerStreamGrpc() {
 	}
 
 	fmt.Printf("Received %d messages\n", msgCount)
+}
+
+// ============================================================================
+// Client Streaming Tests (Connect protocol)
+// ============================================================================
+
+func runClientStreamTest() {
+	printHeader("CLIENT STREAMING TEST", *protocol)
+
+	switch *protocol {
+	case "connect":
+		testClientStreamConnect()
+	case "grpc":
+		testClientStreamGrpc()
+	default:
+		fmt.Printf("Unknown protocol: %s\n", *protocol)
+	}
+}
+
+func testClientStreamConnect() {
+	client := genconnect.NewEchoServiceClient(
+		http.DefaultClient,
+		*serverURL,
+	)
+
+	stream := client.EchoClientStream(context.Background())
+
+	// Send multiple messages
+	messages := []string{"Hello", "World", "from", "Client", "Stream"}
+	for _, msg := range messages {
+		fmt.Printf("  -> Sending: %s\n", msg)
+		if err := stream.Send(&gen.EchoRequest{Message: msg}); err != nil {
+			log.Fatalf("Send error: %v", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Close send and get response
+	resp, err := stream.CloseAndReceive()
+	if err != nil {
+		log.Fatalf("CloseAndReceive error: %v", err)
+	}
+
+	fmt.Printf("  <- Response: %s\n", resp.Msg.Message)
+
+	// Validate response contains expected info
+	if resp.Msg.Message == "" {
+		log.Fatalf("Client stream: empty response message")
+	}
+	if !strings.Contains(resp.Msg.Message, fmt.Sprintf("%d", len(messages))) {
+		log.Printf("Warning: Response may not reflect all %d messages: %s", len(messages), resp.Msg.Message)
+	}
+
+	fmt.Println("Client streaming test passed!")
+}
+
+func testClientStreamGrpc() {
+	addr := strings.TrimPrefix(*serverURL, "http://")
+	addr = strings.TrimPrefix(addr, "https://")
+
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Fatalf("Failed to connect: %v", err)
+	}
+	defer conn.Close()
+
+	client := gen.NewEchoServiceClient(conn)
+
+	stream, err := client.EchoClientStream(context.Background())
+	if err != nil {
+		log.Fatalf("Failed to start client stream: %v", err)
+	}
+
+	// Send multiple messages
+	messages := []string{"Hello", "World", "from", "gRPC", "Client", "Stream"}
+	for _, msg := range messages {
+		fmt.Printf("  -> Sending: %s\n", msg)
+		if err := stream.Send(&gen.EchoRequest{Message: msg}); err != nil {
+			log.Fatalf("Send error: %v", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Close and receive response
+	resp, err := stream.CloseAndRecv()
+	if err != nil {
+		log.Fatalf("CloseAndRecv error: %v", err)
+	}
+
+	fmt.Printf("  <- Response: %s\n", resp.Message)
+
+	// Validate response
+	if resp.Message == "" {
+		log.Fatalf("gRPC client stream: empty response message")
+	}
+
+	fmt.Println("gRPC client streaming test passed!")
+}
+
+// ============================================================================
+// Connect Bidirectional Streaming Tests
+// ============================================================================
+
+func runConnectBidiStreamTest() {
+	printHeader("CONNECT BIDI STREAMING TEST", "connect")
+
+	testConnectBidiStream()
+}
+
+func testConnectBidiStream() {
+	// Create HTTP/2 client with h2c (cleartext) support for bidi streaming
+	h2cClient := &http.Client{
+		Transport: &http2.Transport{
+			AllowHTTP: true,
+			DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
+				// Use regular TCP connection (not TLS) for h2c
+				var d net.Dialer
+				return d.DialContext(ctx, network, addr)
+			},
+		},
+	}
+
+	client := genconnect.NewEchoServiceClient(
+		h2cClient,
+		*serverURL,
+	)
+
+	stream := client.EchoBidiStream(context.Background())
+
+	// Send messages in a goroutine
+	go func() {
+		messages := []string{"Hello", "World", "Bidi", "Stream", "Test"}
+		for _, msg := range messages {
+			fmt.Printf("  -> Sending: %s\n", msg)
+			if err := stream.Send(&gen.EchoRequest{Message: msg}); err != nil {
+				log.Printf("Send error: %v", err)
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if err := stream.CloseRequest(); err != nil {
+			log.Printf("CloseRequest error: %v", err)
+		}
+	}()
+
+	// Receive responses
+	msgCount := 0
+	for {
+		resp, err := stream.Receive()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			// Check if we already received messages - if so, this might just be stream termination
+			if msgCount > 0 && strings.Contains(err.Error(), "EOF") {
+				fmt.Printf("  (Stream ended with: %v)\n", err)
+				break
+			}
+			log.Fatalf("Receive error: %v", err)
+		}
+		msgCount++
+		if resp.Message == "" {
+			log.Fatalf("Bidi stream: empty message at position %d", msgCount)
+		}
+		fmt.Printf("  <- Received [%d]: %s\n", msgCount, resp.Message)
+	}
+
+	if err := stream.CloseResponse(); err != nil {
+		// Ignore close errors after successful message receipt
+		if msgCount == 0 {
+			log.Printf("CloseResponse error: %v", err)
+		}
+	}
+
+	// Validate we received responses
+	if msgCount == 0 {
+		log.Fatalf("Connect bidi stream: received no messages")
+	}
+
+	fmt.Printf("Connect bidi stream completed with %d messages\n", msgCount)
 }
 
 // ============================================================================

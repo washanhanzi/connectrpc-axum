@@ -12,6 +12,7 @@ repository = "https://github.com/washanhanzi/connectrpc-axum"
 
 [workspace.dependencies]
 anyhow = "1.0"
+async-stream = "0.3"
 axum = "0.8"
 axum-core = "0.5"
 axum-extra = "0.12"

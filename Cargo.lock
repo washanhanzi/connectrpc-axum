@@ -251,6 +251,7 @@ dependencies = [
 name = "connectrpc-axum"
 version = "0.0.8"
 dependencies = [
+ "async-stream",
  "axum",
  "axum-core",
  "axum-extra",
@@ -310,6 +311,7 @@ dependencies = [
  "http-body",
  "http-body-util",
  "hyper",
+ "hyper-util",
  "pbjson",
  "pbjson-types",
  "prost",

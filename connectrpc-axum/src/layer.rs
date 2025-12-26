@@ -3,6 +3,7 @@
 //! The [`ConnectLayer`] middleware detects the protocol variant from incoming requests
 //! and stores it in request extensions so that response encoding can match the request format.
 
+use crate::limits::MessageLimits;
 use crate::protocol::RequestProtocol;
 use axum::http::{header, Method, Request};
 use std::{
@@ -12,38 +13,71 @@ use std::{
 };
 use tower::{Layer, Service, ServiceExt};
 
-/// Layer that wraps services with Connect protocol detection.
+/// Layer that wraps services with Connect protocol detection and message limits.
 ///
 /// This layer:
 /// 1. Detects the protocol variant from the request (Content-Type header or query params)
-/// 2. Stores the [`RequestProtocol`] in request extensions
+/// 2. Stores the [`RequestProtocol`] and [`MessageLimits`] in request extensions
 /// 3. Handler wrappers extract the protocol and inject it into response types
+/// 4. Request extractors enforce message size limits
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use connectrpc_axum::ConnectLayer;
+/// use connectrpc_axum::{ConnectLayer, MessageLimits};
 ///
+/// // Use default 4 MB limit
 /// let router = Router::new()
 ///     .route("/service/Method", post(handler))
-///     .layer(ConnectLayer);
+///     .layer(ConnectLayer::new());
+///
+/// // Custom 16 MB limit
+/// let router = Router::new()
+///     .route("/service/Method", post(handler))
+///     .layer(ConnectLayer::with_limits(MessageLimits::new(16 * 1024 * 1024)));
 /// ```
 ///
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ConnectLayer;
+#[derive(Debug, Clone, Copy)]
+pub struct ConnectLayer {
+    limits: MessageLimits,
+}
+
+impl Default for ConnectLayer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ConnectLayer {
+    /// Create a new ConnectLayer with default message limits (4 MB).
+    pub fn new() -> Self {
+        Self {
+            limits: MessageLimits::default(),
+        }
+    }
+
+    /// Create a new ConnectLayer with custom message limits.
+    pub fn with_limits(limits: MessageLimits) -> Self {
+        Self { limits }
+    }
+}
 
 impl<S> Layer<S> for ConnectLayer {
     type Service = ConnectService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        ConnectService { inner }
+        ConnectService {
+            inner,
+            limits: self.limits,
+        }
     }
 }
 
-/// Service wrapper that provides per-request protocol context.
+/// Service wrapper that provides per-request protocol context and message limits.
 #[derive(Debug, Clone)]
 pub struct ConnectService<S> {
     inner: S,
+    limits: MessageLimits,
 }
 
 impl<S, ReqBody> Service<Request<ReqBody>> for ConnectService<S>
@@ -66,6 +100,9 @@ where
         // Detect protocol from request and store in extensions
         let protocol = detect_protocol(&req);
         req.extensions_mut().insert(protocol);
+
+        // Store message limits in extensions for request extractors
+        req.extensions_mut().insert(self.limits);
 
         // Clone inner service for the async block
         let inner = self.inner.clone();

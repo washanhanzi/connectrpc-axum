@@ -9,10 +9,12 @@ use std::{future::Future, pin::Pin};
 use crate::{
     error::ConnectError,
     protocol::RequestProtocol,
-    request::ConnectRequest,
+    request::{ConnectRequest, ConnectStreamingRequest},
     response::{ConnectResponse, StreamBody},
 };
 use futures::Stream;
+use prost::Message;
+use serde::de::DeserializeOwned;
 
 #[cfg(feature = "tonic")]
 mod tonic;
@@ -60,9 +62,8 @@ where
     F: Fn(ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
     ConnectRequest<Req>: FromRequest<()>,
-    ConnectResponse<Resp>: IntoResponse + Send + Sync + 'static,
     Req: Send + Sync + 'static,
-    Resp: Send + Clone + Sync + 'static,
+    Resp: prost::Message + serde::Serialize + Send + Clone + Sync + 'static,
 {
     type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -84,9 +85,9 @@ where
             // Call the handler function
             let result = (self.0)(connect_req).await;
 
-            // Convert result to response, injecting protocol
+            // Convert result to response with protocol
             match result {
-                Ok(response) => response.with_protocol(protocol).into_response(),
+                Ok(response) => response.into_response_with_protocol(protocol),
                 Err(err) => err.into_response_with_protocol(protocol),
             }
         })
@@ -112,8 +113,7 @@ macro_rules! impl_handler_for_connect_handler_wrapper {
             S: Send + Sync + 'static,
 
             // Response constraints
-            ConnectResponse<Resp>: IntoResponse + Send + Sync + 'static,
-            Resp: Send + Clone + Sync + 'static,
+            Resp: prost::Message + serde::Serialize + Send + Clone + Sync + 'static,
         {
             type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -150,9 +150,9 @@ macro_rules! impl_handler_for_connect_handler_wrapper {
                     // Call the handler function
                     let result = (self.0)($($A,)* connect_req).await;
 
-                    // Convert result to response, injecting protocol
+                    // Convert result to response with protocol
                     match result {
-                        Ok(response) => response.with_protocol(protocol).into_response(),
+                        Ok(response) => response.into_response_with_protocol(protocol),
                         Err(err) => err.into_response_with_protocol(protocol),
                     }
                 })
@@ -195,9 +195,8 @@ where
     Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
     St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
     ConnectRequest<Req>: FromRequest<()>,
-    ConnectResponse<StreamBody<St>>: IntoResponse + Send + Sync + 'static,
     Req: Send + Sync + 'static,
-    Resp: Send + Sync + 'static,
+    Resp: prost::Message + serde::Serialize + Send + Sync + 'static,
 {
     type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -219,10 +218,10 @@ where
             // Call the handler function
             let result = (self.0)(connect_req).await;
 
-            // Convert result to response, injecting protocol
+            // Convert result to response with protocol
             // For streaming handlers, errors must use streaming framing (EndStream frame)
             match result {
-                Ok(response) => response.with_protocol(protocol).into_response(),
+                Ok(response) => response.into_response_with_protocol(protocol),
                 Err(err) => {
                     let use_proto = protocol.is_proto();
                     err.into_streaming_response(use_proto)
@@ -251,8 +250,7 @@ macro_rules! impl_handler_for_connect_stream_handler_wrapper {
             S: Send + Sync + 'static,
 
             // Response constraints
-            ConnectResponse<StreamBody<St>>: IntoResponse + Send + Sync + 'static,
-            Resp: Send + Sync + 'static,
+            Resp: prost::Message + serde::Serialize + Send + Sync + 'static,
         {
             type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -289,10 +287,10 @@ macro_rules! impl_handler_for_connect_stream_handler_wrapper {
                     // Call the handler function
                     let result = (self.0)($($A,)* connect_req).await;
 
-                    // Convert result to response, injecting protocol
+                    // Convert result to response with protocol
                     // For streaming handlers, errors must use streaming framing (EndStream frame)
                     match result {
-                        Ok(response) => response.with_protocol(protocol).into_response(),
+                        Ok(response) => response.into_response_with_protocol(protocol),
                         Err(err) => {
                             let use_proto = protocol.is_proto();
                             err.into_streaming_response(use_proto)
@@ -319,6 +317,144 @@ where
     T: 'static,
 {
     axum::routing::post(ConnectStreamHandlerWrapper(f))
+}
+
+// =============== Client Streaming Handler Support ===============
+
+/// A wrapper that adapts client streaming handlers to work with Axum's Handler trait.
+///
+/// Client streaming: client sends a stream of messages, server responds with one message.
+/// This is typically used by generated code for client streaming RPC methods.
+#[derive(Clone)]
+pub struct ConnectClientStreamHandlerWrapper<F>(pub F);
+
+/// Type alias for compatibility with generated code
+pub type ConnectClientStreamHandler<F> = ConnectClientStreamHandlerWrapper<F>;
+
+impl<F, Fut, Req, Resp> Handler<(ConnectStreamingRequest<Req>,), ()>
+    for ConnectClientStreamHandlerWrapper<F>
+where
+    F: Fn(ConnectStreamingRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
+    Req: Message + DeserializeOwned + Default + Send + 'static,
+    Resp: Message + serde::Serialize + Send + Clone + Sync + 'static,
+{
+    type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
+
+    fn call(self, req: Request, _state: ()) -> Self::Future {
+        Box::pin(async move {
+            // Extract protocol from extensions (set by ConnectLayer)
+            let protocol = req
+                .extensions()
+                .get::<RequestProtocol>()
+                .copied()
+                .unwrap_or_default();
+
+            // Extract the streaming request
+            let streaming_req = match ConnectStreamingRequest::<Req>::from_request(req, &()).await {
+                Ok(value) => value,
+                Err(err) => return err.into_response(),
+            };
+
+            // Call the handler function
+            let result = (self.0)(streaming_req).await;
+
+            // Convert result to streaming response format
+            // Client streaming uses streaming framing for the response
+            // (single message frame + EndStreamResponse)
+            match result {
+                Ok(response) => response.into_streaming_response_with_protocol(protocol),
+                Err(err) => {
+                    let use_proto = protocol.is_proto();
+                    err.into_streaming_response(use_proto)
+                }
+            }
+        })
+    }
+}
+
+/// Creates a POST method router from a client streaming handler function.
+///
+/// Client streaming: client sends a stream of messages, server responds with one message.
+pub fn post_connect_client_stream<F, Req, Resp, Fut>(f: F) -> MethodRouter<()>
+where
+    F: Fn(ConnectStreamingRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
+    Req: Message + DeserializeOwned + Default + Send + 'static,
+    Resp: Message + serde::Serialize + Send + Clone + Sync + 'static,
+{
+    axum::routing::post(ConnectClientStreamHandlerWrapper(f))
+}
+
+// =============== Bidirectional Streaming Handler Support ===============
+
+/// A wrapper that adapts bidirectional streaming handlers to work with Axum's Handler trait.
+///
+/// Bidi streaming: both client and server send streams of messages.
+/// This is typically used by generated code for bidirectional streaming RPC methods.
+///
+/// Note: Bidirectional streaming requires HTTP/2 for full-duplex communication.
+#[derive(Clone)]
+pub struct ConnectBidiStreamHandlerWrapper<F>(pub F);
+
+/// Type alias for compatibility with generated code
+pub type ConnectBidiStreamHandler<F> = ConnectBidiStreamHandlerWrapper<F>;
+
+impl<F, Fut, Req, Resp, St> Handler<(ConnectStreamingRequest<Req>,), ()>
+    for ConnectBidiStreamHandlerWrapper<F>
+where
+    F: Fn(ConnectStreamingRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
+    St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
+    Req: Message + DeserializeOwned + Default + Send + 'static,
+    Resp: Message + serde::Serialize + Send + Sync + 'static,
+{
+    type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
+
+    fn call(self, req: Request, _state: ()) -> Self::Future {
+        Box::pin(async move {
+            // Extract protocol from extensions (set by ConnectLayer)
+            let protocol = req
+                .extensions()
+                .get::<RequestProtocol>()
+                .copied()
+                .unwrap_or_default();
+
+            // Extract the streaming request
+            let streaming_req = match ConnectStreamingRequest::<Req>::from_request(req, &()).await {
+                Ok(value) => value,
+                Err(err) => return err.into_response(),
+            };
+
+            // Call the handler function
+            let result = (self.0)(streaming_req).await;
+
+            // Convert result to response with protocol
+            // For streaming responses, errors must use streaming framing (EndStream frame)
+            match result {
+                Ok(response) => response.into_response_with_protocol(protocol),
+                Err(err) => {
+                    let use_proto = protocol.is_proto();
+                    err.into_streaming_response(use_proto)
+                }
+            }
+        })
+    }
+}
+
+/// Creates a POST method router from a bidirectional streaming handler function.
+///
+/// Bidi streaming: both client and server send streams of messages.
+/// Requires HTTP/2 for full-duplex communication.
+pub fn post_connect_bidi_stream<F, Req, Resp, St, Fut>(f: F) -> MethodRouter<()>
+where
+    F: Fn(ConnectStreamingRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
+    St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
+    Req: Message + DeserializeOwned + Default + Send + 'static,
+    Resp: Message + serde::Serialize + Send + Sync + 'static,
+{
+    axum::routing::post(ConnectBidiStreamHandlerWrapper(f))
 }
 
 // =============== TonicCompatibleHandlerWrapper implementations ===============

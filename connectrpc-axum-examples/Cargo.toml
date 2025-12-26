@@ -75,7 +75,9 @@ http-body = "1"
 # Application dependency for HTTP body utilities
 http-body-util = "0.1"
 # Application dependency for HTTP server
-hyper = "1.8"
+hyper = { version = "1.8", features = ["server", "http2"] }
+# Application dependency for HTTP/2 h2c support
+hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto", "http2"] }
 # Required: Used by generated code for JSON serialization
 pbjson = { workspace = true }
 # Required: Used by generated code for well-known types JSON serialization

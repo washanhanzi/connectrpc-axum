@@ -448,7 +448,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                             };
 
                             let grpc_server = #server_mod_name::#tonic_server_type_name::new(tonic_service);
-                            (router.layer(connectrpc_axum::ConnectLayer), grpc_server)
+                            (router.layer(connectrpc_axum::ConnectLayer::new()), grpc_server)
                         }
                     }
 
@@ -467,7 +467,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                             };
 
                             let grpc_server = #server_mod_name::#tonic_server_type_name::new(tonic_service);
-                            (router.layer(connectrpc_axum::ConnectLayer), grpc_server)
+                            (router.layer(connectrpc_axum::ConnectLayer::new()), grpc_server)
                         }
                     }
                 };
@@ -558,7 +558,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                     ///
                     /// [`ConnectLayer`]: connectrpc_axum::ConnectLayer
                     pub fn build(self) -> axum::Router<()> {
-                        self.router.layer(connectrpc_axum::ConnectLayer)
+                        self.router.layer(connectrpc_axum::ConnectLayer::new())
                     }
                 }
 

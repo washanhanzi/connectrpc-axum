@@ -4,7 +4,7 @@ use crate::protocol::RequestProtocol;
 use axum::{
     body::{Body, Bytes},
     http::{HeaderValue, StatusCode, header},
-    response::{IntoResponse, Response},
+    response::Response,
 };
 use futures::Stream;
 use prost::Message;
@@ -12,54 +12,36 @@ use serde::Serialize;
 
 /// Response wrapper for Connect RPC handlers.
 ///
-/// The `protocol` field is set automatically by the handler wrapper based on
-/// the request's Content-Type. Users should create responses with `ConnectResponse::new()`
-/// or by wrapping the value directly.
+/// A simple tuple struct that wraps the response value.
+/// Protocol encoding is handled at the framework level, not stored in the response.
 #[derive(Debug, Clone)]
-pub struct ConnectResponse<T> {
-    pub(crate) inner: T,
-    pub(crate) protocol: RequestProtocol,
-}
+pub struct ConnectResponse<T>(pub T);
 
 impl<T> ConnectResponse<T> {
     /// Create a new ConnectResponse wrapping the given value.
-    ///
-    /// The protocol will be set by the framework before encoding.
     pub fn new(inner: T) -> Self {
-        Self {
-            inner,
-            protocol: RequestProtocol::default(),
-        }
+        Self(inner)
     }
 
     /// Extract the inner value from the ConnectResponse wrapper.
-    /// This is useful for converting ConnectResponse back to the original type,
-    /// particularly when bridging to Tonic handlers.
     pub fn into_inner(self) -> T {
-        self.inner
-    }
-
-    /// Set the protocol for response encoding.
-    /// This is called internally by handler wrappers.
-    pub(crate) fn with_protocol(mut self, protocol: RequestProtocol) -> Self {
-        self.protocol = protocol;
-        self
+        self.0
     }
 }
 
-impl<T> IntoResponse for ConnectResponse<T>
+impl<T> ConnectResponse<T>
 where
     T: Message + Serialize,
 {
-    fn into_response(self) -> Response {
-        let protocol = self.protocol;
-
+    /// Encode the response with the given protocol and convert to an HTTP response.
+    /// This is called by the framework's handler wrapper.
+    pub(crate) fn into_response_with_protocol(self, protocol: RequestProtocol) -> Response {
         let body = if protocol.is_proto() {
             // Connect unary proto: raw bytes, no frame envelope
-            self.inner.encode_to_vec()
+            self.0.encode_to_vec()
         } else {
             // Connect unary JSON: raw JSON, no frame envelope
-            match serde_json::to_vec(&self.inner) {
+            match serde_json::to_vec(&self.0) {
                 Ok(bytes) => bytes,
                 Err(_) => {
                     // Serialization failed (e.g., non-finite floats, custom serializer errors)
@@ -76,6 +58,50 @@ where
             )
             .body(Body::from(body))
             .unwrap_or_else(|_| internal_error_response(protocol.error_content_type()))
+    }
+
+    /// Encode the response as a streaming response (single message frame + EndStreamResponse).
+    ///
+    /// This is used for client streaming RPCs where the response is a single message
+    /// but must be sent in streaming format with framing.
+    pub(crate) fn into_streaming_response_with_protocol(self, protocol: RequestProtocol) -> Response {
+        let use_proto = protocol.is_proto();
+        let content_type = protocol.streaming_response_content_type();
+
+        // Encode the message
+        let payload = if use_proto {
+            self.0.encode_to_vec()
+        } else {
+            match serde_json::to_vec(&self.0) {
+                Ok(bytes) => bytes,
+                Err(_) => {
+                    return internal_error_streaming_response(content_type);
+                }
+            }
+        };
+
+        // Build message frame: [flags=0x00][length:4][payload]
+        let mut message_frame = Vec::with_capacity(5 + payload.len());
+        message_frame.push(0x00); // flags = 0x00 for regular message
+        message_frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        message_frame.extend_from_slice(&payload);
+
+        // Build EndStreamResponse frame: [flags=0x02][length:4][{}]
+        let end_stream_payload = b"{}";
+        let mut end_stream_frame = Vec::with_capacity(5 + end_stream_payload.len());
+        end_stream_frame.push(0x02); // flags = 0x02 for EndStream
+        end_stream_frame.extend_from_slice(&(end_stream_payload.len() as u32).to_be_bytes());
+        end_stream_frame.extend_from_slice(end_stream_payload);
+
+        // Combine frames
+        let mut body = message_frame;
+        body.extend_from_slice(&end_stream_frame);
+
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, HeaderValue::from_static(content_type))
+            .body(Body::from(body))
+            .unwrap_or_else(|_| internal_error_streaming_response(content_type))
     }
 }
 
@@ -110,19 +136,18 @@ impl<S> StreamBody<S> {
     }
 }
 
-/// IntoResponse implementation for streaming responses.
-/// When T is wrapped in StreamBody, we encode it as a Connect streaming response.
-impl<S, T> IntoResponse for ConnectResponse<StreamBody<S>>
+impl<S, T> ConnectResponse<StreamBody<S>>
 where
     S: Stream<Item = Result<T, ConnectError>> + Send + 'static,
     T: Message + Serialize + Send + 'static,
 {
-    fn into_response(self) -> Response {
+    /// Encode the streaming response with the given protocol and convert to an HTTP response.
+    /// This is called by the framework's handler wrapper.
+    pub(crate) fn into_response_with_protocol(self, protocol: RequestProtocol) -> Response {
         use futures::StreamExt;
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        let protocol = self.protocol;
         let use_proto = protocol.is_proto();
         let content_type = protocol.streaming_response_content_type();
 
@@ -134,7 +159,7 @@ where
         let error_sent_clone = error_sent.clone();
 
         let body_stream = self
-            .inner
+            .0
             .stream
             .map(move |result| match result {
                 Ok(msg) => {

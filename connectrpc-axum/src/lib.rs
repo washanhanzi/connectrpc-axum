@@ -1,6 +1,7 @@
 pub mod error;
 pub mod handler;
 pub mod layer;
+pub mod limits;
 pub mod protocol;
 pub mod request;
 pub mod response;
@@ -17,8 +18,13 @@ pub use handler::{
     BoxedCall, IntoFactory, TonicCompatibleHandlerWrapper, post_connect_tonic,
     unimplemented_boxed_call,
 };
-pub use handler::{ConnectHandler, ConnectHandlerWrapper, post_connect};
+pub use handler::{
+    ConnectBidiStreamHandler, ConnectBidiStreamHandlerWrapper, ConnectClientStreamHandler,
+    ConnectClientStreamHandlerWrapper, ConnectHandler, ConnectHandlerWrapper, post_connect,
+    post_connect_bidi_stream, post_connect_client_stream,
+};
 pub use layer::{ConnectLayer, ConnectService};
+pub use limits::{MessageLimits, DEFAULT_MAX_MESSAGE_SIZE};
 pub use protocol::RequestProtocol;
 pub use service_builder::MakeServiceBuilder;
 
@@ -40,12 +46,15 @@ pub mod prelude {
         unimplemented_boxed_call,
     };
     pub use crate::handler::{
-        ConnectHandler, ConnectHandlerWrapper, ConnectStreamHandlerWrapper, post_connect,
-        post_connect_stream,
+        ConnectBidiStreamHandler, ConnectBidiStreamHandlerWrapper, ConnectClientStreamHandler,
+        ConnectClientStreamHandlerWrapper, ConnectHandler, ConnectHandlerWrapper,
+        ConnectStreamHandlerWrapper, post_connect, post_connect_bidi_stream,
+        post_connect_client_stream, post_connect_stream,
     };
     pub use crate::layer::{ConnectLayer, ConnectService};
+    pub use crate::limits::{MessageLimits, DEFAULT_MAX_MESSAGE_SIZE};
     pub use crate::protocol::RequestProtocol;
-    pub use crate::request::ConnectRequest;
+    pub use crate::request::{ConnectRequest, ConnectStreamingRequest};
     pub use crate::response::{ConnectResponse, StreamBody};
     pub use crate::service_builder::MakeServiceBuilder;
     pub use crate::stream_response::ConnectStreamResponse;

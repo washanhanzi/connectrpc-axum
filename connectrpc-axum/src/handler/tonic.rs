@@ -198,7 +198,7 @@ macro_rules! impl_handler_for_tonic_compatible_wrapper {
             F: Fn(ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
             Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
             ConnectRequest<Req>: FromRequest<()>,
-            ConnectResponse<Resp>: IntoResponse,
+            Resp: prost::Message + serde::Serialize + Send + Sync + 'static,
         {
             type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -220,9 +220,9 @@ macro_rules! impl_handler_for_tonic_compatible_wrapper {
                     // Call the handler function
                     let result = (self.0)(connect_req).await;
 
-                    // Convert result to response, injecting protocol
+                    // Convert result to response with protocol
                     match result {
-                        Ok(response) => response.with_protocol(protocol).into_response(),
+                        Ok(response) => response.into_response_with_protocol(protocol),
                         Err(err) => err.into_response_with_protocol(protocol),
                     }
                 })
@@ -243,7 +243,7 @@ macro_rules! impl_handler_for_tonic_compatible_wrapper {
             Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
             ConnectRequest<Req>: FromRequest<S>,
             S: Clone + Send + Sync + 'static,
-            ConnectResponse<Resp>: IntoResponse,
+            Resp: prost::Message + serde::Serialize + Send + Sync + 'static,
         {
             type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -268,9 +268,9 @@ macro_rules! impl_handler_for_tonic_compatible_wrapper {
                     // Call the handler function
                     let result = (self.0)(state_extractor, connect_req).await;
 
-                    // Convert result to response, injecting protocol
+                    // Convert result to response with protocol
                     match result {
-                        Ok(response) => response.with_protocol(protocol).into_response(),
+                        Ok(response) => response.into_response_with_protocol(protocol),
                         Err(err) => err.into_response_with_protocol(protocol),
                     }
                 })
@@ -313,9 +313,8 @@ where
     Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
     St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
     ConnectRequest<Req>: FromRequest<()>,
-    ConnectResponse<StreamBody<St>>: IntoResponse,
     Req: Send + Sync + 'static,
-    Resp: Send + Sync + 'static,
+    Resp: prost::Message + serde::Serialize + Send + Sync + 'static,
 {
     type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -337,10 +336,10 @@ where
             // Call the handler function
             let result = (self.0)(connect_req).await;
 
-            // Convert result to response, injecting protocol
+            // Convert result to response with protocol
             // For streaming handlers, errors must use streaming framing (EndStream frame)
             match result {
-                Ok(response) => response.with_protocol(protocol).into_response(),
+                Ok(response) => response.into_response_with_protocol(protocol),
                 Err(err) => {
                     let use_proto = protocol.is_proto();
                     err.into_streaming_response(use_proto)
@@ -359,9 +358,8 @@ where
     St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
     ConnectRequest<Req>: FromRequest<S>,
     S: Clone + Send + Sync + 'static,
-    ConnectResponse<StreamBody<St>>: IntoResponse,
     Req: Send + Sync + 'static,
-    Resp: Send + Sync + 'static,
+    Resp: prost::Message + serde::Serialize + Send + Sync + 'static,
 {
     type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -386,10 +384,10 @@ where
             // Call the handler function
             let result = (self.0)(state_extractor, connect_req).await;
 
-            // Convert result to response, injecting protocol
+            // Convert result to response with protocol
             // For streaming handlers, errors must use streaming framing (EndStream frame)
             match result {
-                Ok(response) => response.with_protocol(protocol).into_response(),
+                Ok(response) => response.into_response_with_protocol(protocol),
                 Err(err) => {
                     let use_proto = protocol.is_proto();
                     err.into_streaming_response(use_proto)
