@@ -1,6 +1,6 @@
 [package]
 name = "connectrpc-axum"
-version = "0.0.8"
+version = "0.0.9"
 edition = "2024"
 description = "Axum-style Connect RPC server"
 readme = "../README.md"
