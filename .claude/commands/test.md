@@ -1,5 +1,5 @@
 # Test Command
 
-Run the full test suite (unit tests + integration tests) for connectrpc-axum.
+Run the full test suite for connectrpc-axum.
 
-/test
+Use the `test` skill to run tests.

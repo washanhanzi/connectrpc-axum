@@ -4,23 +4,57 @@
 [![Documentation](https://docs.rs/connectrpc-axum/badge.svg)](https://docs.rs/connectrpc-axum)
 [![License](https://img.shields.io/crates/l/connectrpc-axum.svg)](LICENSE)
 
-A Rust implementation of the [ConnectRPC](https://connectrpc.com/) protocol for the [Axum](https://github.com/tokio-rs/axum) web framework.
-
-## Features
-
-- 🚀 **Native Axum integration** - Use extractors, middleware, state, and layers
-- 🔒 **Type-safe** - Generated code from Protocol Buffers with compile-time guarantees
-- 🔄 **Streaming support** - Unary, server streaming, client streaming, and bidirectional streaming
-- 🔌 **Tonic compatibility** - Optional gRPC interop for running Connect and gRPC on the same port
-- 📦 **Automatic serialization** - JSON and binary Protocol Buffers via `pbjson`
-- 🎯 **Flexible handlers** - Use any Axum extractors before the request body
-- ⚡ **High performance** - Built on Axum's proven stack (hyper, tokio, tower)
+A Rust library that brings [ConnectRPC](https://connectrpc.com/) protocol support to the [Axum](https://github.com/tokio-rs/axum) web framework, with optional [Tonic](https://github.com/hyperium/tonic) integration for serving gRPC on the same port.
 
 > **Status**: Under active development. Not recommended for production use yet.
 
-## Quick Start
+## What This Library Does
 
-### Installation
+- **Axum Compatibility**: Use Axum's full ecosystem (extractors, middleware, state, layers) with ConnectRPC handlers
+- **ConnectRPC Protocol**: Native handling of Connect protocol requests with automatic JSON/Protobuf encoding
+- **gRPC via Tonic**: Optional feature to serve both Connect and gRPC clients from a single port
+
+| Protocol | Support |
+|----------|---------|
+| Connect (JSON/Proto) | Native |
+| gRPC | Via Tonic integration |
+| gRPC-Web | Via tonic-web layer |
+
+## Features
+
+- Type-safe handlers generated from Protocol Buffers
+- All Axum extractors work before `ConnectRequest<T>`
+- Unary and server streaming for Connect protocol
+- Full streaming (including bidi) via Tonic integration
+- Automatic content negotiation (JSON/binary protobuf)
+
+## Development
+
+### Reporting Issues
+
+Use the `submit-issue` subcommand to report bugs or request features:
+
+```bash
+claude /submit-issue
+```
+
+If not using Claude Code, see [`.claude/skills/submit-issue/SKILL.md`](.claude/skills/submit-issue/SKILL.md) for the workflow.
+
+### Running Tests
+
+Use the `test` subcommand to run unit and integration tests:
+
+```bash
+claude /test
+```
+
+If not using Claude Code, see [`.claude/skills/test.md`](.claude/skills/test.md) for instructions.
+
+### Architecture
+
+See [`.claude/architecture.md`](.claude/architecture.md) for detailed documentation on the project structure, core modules, and design decisions.
+
+## Installation
 
 Add to your `Cargo.toml`:
 
@@ -36,25 +70,22 @@ tokio = { version = "1", features = ["full"] }
 connectrpc-axum-build = "*"
 ```
 
-### 1. Code Generation (build.rs)
+For gRPC support, add the tonic feature:
 
-Add a build script to generate code from your `.proto` files.
+```toml
+[dependencies]
+connectrpc-axum = { version = "*", features = ["tonic"] }
+tonic = "0.14"
 
-```rust
-// build.rs
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // EITHER: Connect-only
-    connectrpc_axum_build::compile_dir("proto").compile()?;
-
-    // OR: Connect + Tonic (enable the "tonic" feature on the build crate)
-    // connectrpc_axum_build::compile_dir("proto").with_tonic().compile()?;
-    Ok(())
-}
+[build-dependencies]
+connectrpc-axum-build = { version = "*", features = ["tonic"] }
 ```
 
-### 2. Create Your Proto Files
+## Usage Guide
 
-Create a `proto/hello.proto` file:
+### 1. Define Your Proto File
+
+Create `proto/hello.proto`:
 
 ```protobuf
 syntax = "proto3";
@@ -75,262 +106,244 @@ message HelloResponse {
 }
 ```
 
-### 3. Include Generated Code
+### 2. Configure Code Generation
 
-In your `src/lib.rs` or `src/main.rs`:
+Create `build.rs`:
 
 ```rust
-// You can include generated code in any module
-pub mod pb {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Connect-only
+    connectrpc_axum_build::compile_dir("proto").compile()?;
+
+    // OR: Connect + Tonic (requires "tonic" feature)
+    // connectrpc_axum_build::compile_dir("proto").with_tonic().compile()?;
+
+    Ok(())
+}
+```
+
+### 3. Include Generated Code
+
+In `src/lib.rs`:
+
+```rust
+mod pb {
     include!(concat!(env!("OUT_DIR"), "/hello.rs"));
 }
-
-// Re-export for convenience (optional)
 pub use pb::*;
 ```
 
-### 4. Build a Connect Server
+### ConnectRPC Only Example
 
-Use any number of `FromRequestParts` extractors first, and end with `ConnectRequest<T>`.
+Use the generated service builder with any Axum extractors:
 
 ```rust
-use axum::{extract::{Query, State}, Router};
+use axum::{extract::State, Router};
 use connectrpc_axum::prelude::*;
 
 #[derive(Clone, Default)]
 struct AppState;
 
-#[derive(serde::Deserialize)]
-struct Pagination { page: usize, per_page: usize }
-
-// Multiple extractors + Connect body
+// Handler with state extractor
 async fn say_hello(
-    Query(_p): Query<Pagination>,
     State(_s): State<AppState>,
     ConnectRequest(req): ConnectRequest<HelloRequest>,
 ) -> Result<ConnectResponse<HelloResponse>, ConnectError> {
-    Ok(ConnectResponse(HelloResponse { message: format!("Hello, {}!", req.name.unwrap_or_default()) }))
+    Ok(ConnectResponse(HelloResponse {
+        message: format!("Hello, {}!", req.name.unwrap_or_default()),
+    }))
 }
 
-// Minimal handler (no state)
-async fn say_hello_simple(
-    ConnectRequest(req): ConnectRequest<HelloRequest>,
-) -> Result<ConnectResponse<HelloResponse>, ConnectError> {
-    Ok(ConnectResponse(HelloResponse { message: format!("Hi, {}!", req.name.unwrap_or_default()) }))
-}
-
-// Build routes via the generated service builder (no manual paths)
-let router = helloworldservice::HelloWorldServiceBuilder::new()
-    .say_hello(say_hello)
-    .say_hello_stream(say_hello_simple)
-    .with_state(AppState::default())
-    .build();
-
-let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-axum::serve(listener, tower::make::Shared::new(router)).await?;
-```
-
-## Advanced Usage
-
-### Streaming Support
-
-ConnectRPC Axum supports all streaming types:
-
-```rust
-use futures::Stream;
-use std::pin::Pin;
-
-// Server streaming
+// Server streaming handler
 async fn say_hello_stream(
     ConnectRequest(req): ConnectRequest<HelloRequest>,
 ) -> Result<StreamBody<HelloResponse>, ConnectError> {
     let stream = async_stream::stream! {
         for i in 0..5 {
             yield Ok(HelloResponse {
-                message: format!("Hello #{}", i),
+                message: format!("Hello #{}, {}!", i, req.name.clone().unwrap_or_default()),
             });
         }
     };
     Ok(StreamBody::new(stream))
 }
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let router = helloworldservice::HelloWorldServiceBuilder::new()
+        .say_hello(say_hello)
+        .say_hello_stream(say_hello_stream)
+        .with_state(AppState::default())
+        .build();
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+    axum::serve(listener, router).await?;
+    Ok(())
+}
 ```
 
-**Note**: Client streaming and bidirectional streaming are only supported via the Tonic integration, as the Connect protocol only supports unary and server-streaming RPCs.
+### gRPC + Connect Example (Tonic Integration)
 
-### Tonic-Compatible Server (gRPC Interop)
-
-Enable features in `Cargo.toml`:
-
-```toml
-[dependencies]
-connectrpc-axum = { version = "*", features = ["tonic"] }
-
-[build-dependencies]
-connectrpc-axum-build = { version = "*", features = ["tonic"] }
-```
-
-build.rs:
+Serve both Connect and gRPC clients on the same port:
 
 ```rust
-connectrpc_axum_build::compile_dir("proto").with_tonic().compile()?;
-```
-
-Use the generated Tonic-compatible builder and single-port dispatcher:
-
-```rust
+use axum::extract::State;
 use connectrpc_axum::prelude::*;
 
 #[derive(Clone, Default)]
 struct AppState;
 
-// Tonic-compatible handler signatures (only these two compile):
-// 1) (ConnectRequest<Req>)
-// 2) (State<S>, ConnectRequest<Req>)
+// Tonic-compatible handlers only allow:
+// - (ConnectRequest<Req>)
+// - (State<S>, ConnectRequest<Req>)
 async fn say_hello(
     State(_s): State<AppState>,
     ConnectRequest(req): ConnectRequest<HelloRequest>,
 ) -> Result<ConnectResponse<HelloResponse>, ConnectError> {
-    Ok(ConnectResponse(HelloResponse { message: format!("Hello, {}!", req.name.unwrap_or_default()) }))
+    Ok(ConnectResponse(HelloResponse {
+        message: format!("Hello, {}!", req.name.unwrap_or_default()),
+    }))
 }
 
-let (router, svc) = helloworldservice::HelloWorldServiceTonicCompatibleBuilder::new()
-    .say_hello(say_hello)
-    .with_state(AppState::default())
-    .build();
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Build both Connect router and Tonic service
+    let (router, svc) = helloworldservice::HelloWorldServiceTonicCompatibleBuilder::new()
+        .say_hello(say_hello)
+        .with_state(AppState::default())
+        .build();
 
-let grpc = hello_world_service_server::HelloWorldServiceServer::new(svc);
+    // Create gRPC server
+    let grpc = hello_world_service_server::HelloWorldServiceServer::new(svc);
 
-let dispatch = connectrpc_axum::ContentTypeSwitch::new(grpc, router);
-axum::serve(listener, tower::make::Shared::new(dispatch)).await?;
+    // ContentTypeSwitch routes by Content-Type:
+    // - application/grpc* -> Tonic gRPC server
+    // - Otherwise -> Axum routes (Connect protocol)
+    let dispatch = connectrpc_axum::ContentTypeSwitch::new(grpc, router);
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+    axum::serve(listener, tower::make::Shared::new(dispatch)).await?;
+    Ok(())
+}
 ```
 
-**Constraints in Tonic-compatible mode:**
-- Allowed handler signatures:
-  - `(ConnectRequest<Req>) -> Result<ConnectResponse<Resp>, ConnectError>`
-  - `(State<S>, ConnectRequest<Req>) -> Result<ConnectResponse<Resp>, ConnectError>`
-- In Connect-only mode, any number of extractors is allowed before `ConnectRequest<Req>`
+## Migration Guide
 
-### Module Organization
+### From Axum
 
-Generated code uses `super::` to reference types, giving you flexibility in organization:
+If you have an existing Axum application and want to add ConnectRPC endpoints, you can merge routers to keep your existing routes alongside new ConnectRPC services:
+
+**Before (Plain Axum)**:
 
 ```rust
-// Option 1: Module with re-export (convenient)
-mod pb {
-    include!(concat!(env!("OUT_DIR"), "/hello.rs"));
-}
-pub use pb::*;
+use axum::{extract::State, Json, Router, routing::get};
 
-// Option 2: Direct module (no re-export needed)
-pub mod hello {
-    include!(concat!(env!("OUT_DIR"), "/hello.rs"));
+#[derive(Clone)]
+struct AppState;
+
+async fn get_user(
+    State(_s): State<AppState>,
+    Json(req): Json<GetUserRequest>,
+) -> Json<GetUserResponse> {
+    Json(GetUserResponse {
+        name: format!("User {}", req.id),
+    })
 }
 
-// Option 3: Multiple packages
-pub mod proto {
-    pub mod hello {
-        include!(concat!(env!("OUT_DIR"), "/hello.rs"));
-    }
-    pub mod auth {
-        include!(concat!(env!("OUT_DIR"), "/auth.rs"));
-    }
-}
+let router = Router::new()
+    .route("/getUser", get(get_user))
+    .with_state(AppState);
 ```
 
-The generated Tonic traits correctly reference types using `super::TypeName`, so you don't need to re-export types at your crate root.
+**After (Keep existing routes + add ConnectRPC)**:
+
+```rust
+use axum::{extract::State, Router, routing::post};
+use connectrpc_axum::prelude::*;
+
+#[derive(Clone)]
+struct AppState;
+
+// Single handler works for both routes (ConnectRPC supports JSON encoding)
+async fn get_user(
+    State(_s): State<AppState>,
+    ConnectRequest(req): ConnectRequest<user::v1::GetUserRequest>,
+) -> Result<ConnectResponse<user::v1::GetUserResponse>, ConnectError> {
+    Ok(ConnectResponse(user::v1::GetUserResponse {
+        name: format!("User {}", req.id),
+    }))
+}
+
+// Build ConnectRPC routes
+let connect_router = userservice::UserServiceBuilder::new()
+    .get_user(get_user)
+    .with_state(AppState)
+    .build();
+
+// Merge with existing route path for backwards compatibility
+let router = Router::new()
+    .route("/getUser", post(get_user))  // Keep legacy path: /getUser
+    .merge(connect_router)               // Add ConnectRPC path: /user.v1.UserService/GetUser
+    .with_state(AppState);
+```
+
+This serves both paths with the same handler (both use JSON):
+- `POST /getUser` - Legacy REST endpoint
+- `POST /user.v1.UserService/GetUser` - ConnectRPC endpoint
+
+**Key differences**:
+- Define message types in `.proto` files instead of Rust structs
+- Use `ConnectRequest<T>` instead of `Json<T>` for request body
+- Use `ConnectResponse<T>` instead of `Json<T>` for response
+- Return `Result<_, ConnectError>` for proper error handling
+- Use generated service builders for type-safe routing
+- ConnectRPC routes are `/<package>.<Service>/<Method>`
+- Use `Router::merge()` to combine existing and ConnectRPC routes
 
 ## Examples
 
 See the [connectrpc-axum-examples](./connectrpc-axum-examples) directory for complete working examples:
 
-- **[connect-only.rs](./connectrpc-axum-examples/src/bin/connect-only.rs)** - Pure Connect implementation with Axum extractors
-- **[connect-tonic.rs](./connectrpc-axum-examples/src/bin/connect-tonic.rs)** - Connect + Tonic integration
-- **[connect-tonic-bidi-stream.rs](./connectrpc-axum-examples/src/bin/connect-tonic-bidi-stream.rs)** - Full streaming support
+| Example | Description |
+|---------|-------------|
+| `connect-unary` | Pure Connect unary RPC |
+| `connect-server-stream` | Pure Connect server streaming |
+| `tonic-unary` | Connect + gRPC unary (dual protocol) |
+| `tonic-server-stream` | Connect + gRPC streaming (dual protocol) |
+| `tonic-bidi-stream` | Bidirectional streaming (gRPC only) |
+| `grpc-web` | gRPC-Web browser support |
 
 Run an example:
+
 ```bash
 cd connectrpc-axum-examples
-cargo run --bin connect-only
+cargo run --bin connect-unary
 ```
-
-See the [examples README](./connectrpc-axum-examples/README.md) for detailed documentation.
 
 ## Protocol Support
 
 | Feature | Connect Protocol | gRPC (via Tonic) |
 |---------|-----------------|------------------|
-| Unary RPC | ✅ | ✅ |
-| Server Streaming | ✅ | ✅ |
-| Client Streaming | ❌ | ✅ |
-| Bidirectional Streaming | ❌ | ✅ |
-| JSON Encoding | ✅ | ❌ |
-| Binary Protobuf | ✅ | ✅ |
-| HTTP/1.1 | ✅ | ❌ |
-| HTTP/2 | ✅ | ✅ |
-
-## Why ConnectRPC Axum?
-
-### vs Pure Tonic
-
-- **Full Axum ecosystem**: Use any Axum extractor, middleware, or layer
-- **Flexible handler signatures**: Not limited to Tonic's trait methods
-- **Better ergonomics**: Less boilerplate, more idiomatic Rust
-- **JSON support**: Automatic JSON serialization via pbjson
-- **HTTP/1.1 support**: Works with standard HTTP clients
-
-### vs Other RPC Frameworks
-
-- **Type safety**: Compile-time guarantees from Protocol Buffers
-- **Standard protocol**: Compatible with ConnectRPC clients in any language
-- **Battle-tested stack**: Built on Axum, hyper, and tokio
-- **Optional gRPC**: Can run both protocols on the same port
-
-## Troubleshooting
-
-### Type Resolution Errors
-
-If you see errors like "cannot find type `TypeName` in crate root":
-
-- The generated code now uses `super::` to reference types
-- You can include generated code in any module without crate-level re-exports
-
-### Code Generation Errors
-
-If protobuf code generation fails:
-
-1. Check that your `.proto` files are in the correct directory (default: `proto/`)
-2. Verify `build.rs` is properly configured
-3. Run `cargo clean && cargo build` to regenerate
-
-### Streaming Issues
-
-Remember:
-- Server streaming works with both Connect and gRPC
-- Client/bidirectional streaming requires the Tonic integration
-- The Connect protocol only supports unary and server streaming
-
-## Contributing
-
-Contributions are welcome! This project is under active development.
-
-Please see the [examples](./connectrpc-axum-examples) for detailed usage patterns and test your changes against them.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+| Unary RPC | Yes | Yes |
+| Server Streaming | Yes | Yes |
+| Client Streaming | No | Yes |
+| Bidirectional Streaming | No | Yes |
+| JSON Encoding | Yes | No |
+| Binary Protobuf | Yes | Yes |
+| HTTP/1.1 | Yes | No |
+| HTTP/2 | Yes | Yes |
 
 ## Acknowledgments
 
-Special thanks to:
-
-- [AThilenius/axum-connect](https://github.com/AThilenius/axum-connect) - Inspiration for the Axum integration approach
-- [tokio-rs/axum](https://github.com/tokio-rs/axum) - The amazing web framework this builds on
-- [ConnectRPC](https://connectrpc.com/) - The protocol specification
-- [hyperium/tonic](https://github.com/hyperium/tonic) - gRPC implementation and interop
+This project was inspired by [AThilenius/axum-connect](https://github.com/AThilenius/axum-connect).
 
 ## Learn More
 
-- **ConnectRPC Protocol**: https://connectrpc.com/docs/protocol/
-- **Axum Documentation**: https://docs.rs/axum/
-- **Tonic gRPC**: https://docs.rs/tonic/
-- **Protocol Buffers**: https://protobuf.dev/
+- [ConnectRPC Protocol](https://connectrpc.com/docs/protocol/)
+- [Axum Documentation](https://docs.rs/axum/)
+- [Tonic gRPC](https://docs.rs/tonic/)
+- [Protocol Buffers](https://protobuf.dev/)
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
