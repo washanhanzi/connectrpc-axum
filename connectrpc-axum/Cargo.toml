@@ -1,8 +1,8 @@
 [package]
 name = "connectrpc-axum"
-version = "0.0.9"
+version = "0.0.10"
 edition = "2024"
-description = "axum style and axum compatible connect rpc server"
+description = "axum style and axum compatible Connect Protocol server"
 readme = "../README.md"
 repository = "https://github.com/washanhanzi/connectrpc-axum"
 license = "MIT"
