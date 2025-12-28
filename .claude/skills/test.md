@@ -1,3 +1,8 @@
+---
+name: test
+description: Run the complete test suite for connectrpc-axum. Use when the user asks to run tests, verify changes, or check if the code works.
+---
+
 # test
 
 Run the complete test suite for connectrpc-axum: unit tests, doc tests, and integration tests with Go clients.
@@ -14,38 +19,38 @@ cargo test
 
 ### 2. Integration Tests
 
+Run from the repo root:
 ```bash
-./connectrpc-axum-examples/test-all.sh
+cd connectrpc-axum-examples/go-client && go test -v -timeout 300s
 ```
 
-This script:
-1. Builds and starts each Rust example server
-2. Runs a Go client against each server
-3. Validates responses match expected behavior
+The Go tests:
+1. Build all Rust example servers (once, cached)
+2. Start each server, wait for it to be ready
+3. Run Go client tests against each server
+4. Validate responses match expected behavior
 
 ## Success Criteria
 
 **Unit Tests**: All tests pass with exit code 0
 
-**Integration Tests**:
-1. Exit code is 0
-2. All 10 tests pass - summary shows "All 10 tests passed!"
-3. No FAIL markers in results
+**Integration Tests**: All tests pass (PASS in output)
 
 ## Integration Test Matrix
 
-| # | Server | Protocol | Test Type |
-|---|--------|----------|-----------|
-| 1 | connect-unary | Connect | Unary |
-| 2 | connect-server-stream | Connect | Server streaming |
-| 3 | tonic-unary | Connect | Unary |
-| 4 | tonic-unary | gRPC | Unary |
-| 5 | tonic-server-stream | Connect | Server streaming |
-| 6 | tonic-server-stream | gRPC | Server streaming |
-| 7 | tonic-bidi-stream | Connect | Unary |
-| 8 | tonic-bidi-stream | gRPC | Bidi streaming |
-| 9 | grpc-web | gRPC-Web | Unary |
-| 10 | streaming-error-repro | Connect | Stream error handling |
+| Test | Server | Protocol | Test Type |
+|------|--------|----------|-----------|
+| TestConnectUnary | connect-unary | Connect | Unary |
+| TestConnectServerStream | connect-server-stream | Connect | Server streaming |
+| TestTonicUnaryConnect | tonic-unary | Connect | Unary |
+| TestTonicUnaryGRPC | tonic-unary | gRPC | Unary |
+| TestTonicServerStreamConnect | tonic-server-stream | Connect | Server streaming |
+| TestTonicServerStreamGRPC | tonic-server-stream | gRPC | Server streaming |
+| TestTonicBidiStreamConnectUnary | tonic-bidi-stream | Connect | Unary |
+| TestTonicBidiStreamGRPC | tonic-bidi-stream | gRPC | Bidi streaming |
+| TestGRPCWeb | grpc-web | gRPC-Web | Unary |
+| TestStreamingErrorHandling | streaming-error-repro | Connect | Stream error handling |
+| TestProtocolVersion | protocol-version | Connect | Protocol header validation |
 
 ## Failure Handling
 
@@ -68,6 +73,5 @@ Unit Tests: [PASS/FAIL]
 - Failed: Y
 
 Integration Tests: [PASS/FAIL]
-- Passed: X/10
-- Failed: Y
+- X tests passed
 ```

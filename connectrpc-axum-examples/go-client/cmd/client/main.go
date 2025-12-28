@@ -13,6 +13,7 @@
 //	connect-bidi    Test bidirectional streaming (Connect protocol)
 //	grpc-web        Test gRPC-Web protocol
 //	stream-error    Test streaming error handling (bug reproduction)
+//	protocol-version Test Connect-Protocol-Version header validation
 //	all             Run all applicable tests
 //
 // Flags:
@@ -77,6 +78,8 @@ func main() {
 		runGrpcWebTest()
 	case "stream-error":
 		runStreamErrorTest()
+	case "protocol-version":
+		runProtocolVersionTest()
 	case "all":
 		runAllTests()
 	default:
@@ -97,6 +100,7 @@ func printUsage() {
 	fmt.Println("  connect-bidi    Test bidirectional streaming (Connect protocol)")
 	fmt.Println("  grpc-web        Test gRPC-Web protocol")
 	fmt.Println("  stream-error    Test streaming error handling (bug reproduction)")
+	fmt.Println("  protocol-version Test Connect-Protocol-Version header validation")
 	fmt.Println("  all             Run all applicable tests")
 	fmt.Println()
 	fmt.Println("Flags:")
@@ -956,6 +960,54 @@ func testStreamingErrorWithConnectClient(name string) {
 	}
 
 	fmt.Printf("Stream completed with %d messages\n", msgCount)
+}
+
+// ============================================================================
+// Protocol Version Tests
+// ============================================================================
+
+func runProtocolVersionTest() {
+	printHeader("PROTOCOL VERSION HEADER TEST", "connect")
+
+	fmt.Println("Testing Connect-Protocol-Version header validation:")
+	fmt.Println("  - Server requires: Connect-Protocol-Version: 1")
+	fmt.Println("  - connect-go library automatically sends this header")
+	fmt.Println()
+
+	// Test using connect-go client - should succeed because connect-go
+	// automatically sends Connect-Protocol-Version: 1 header
+	fmt.Println("--- Using connect-go client (sends header automatically) ---")
+	testProtocolVersionWithConnectClient()
+
+	fmt.Println("\nProtocol version test passed!")
+}
+
+func testProtocolVersionWithConnectClient() {
+	// The connect-go library automatically sends Connect-Protocol-Version: 1
+	// This test verifies the server correctly accepts it
+	client := genconnect.NewHelloWorldServiceClient(
+		http.DefaultClient,
+		*serverURL,
+	)
+
+	name := "Protocol Version Tester"
+	resp, err := client.SayHello(context.Background(), connect.NewRequest(&gen.HelloRequest{
+		Name: &name,
+	}))
+	if err != nil {
+		log.Fatalf("Connect client failed: %v", err)
+	}
+
+	// Validate response
+	if resp.Msg.Message == "" {
+		log.Fatalf("Protocol version test: empty response message")
+	}
+	if !strings.Contains(resp.Msg.Message, name) {
+		log.Fatalf("Protocol version test: response doesn't contain name: got %q", resp.Msg.Message)
+	}
+
+	fmt.Printf("Response: %s\n", resp.Msg.Message)
+	fmt.Println("PASS: connect-go client successfully called server with protocol version validation")
 }
 
 // ============================================================================

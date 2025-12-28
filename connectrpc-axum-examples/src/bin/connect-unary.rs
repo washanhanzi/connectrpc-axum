@@ -25,8 +25,13 @@ async fn say_hello(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let connect_router = helloworldservice::HelloWorldServiceBuilder::new()
+    let router = helloworldservice::HelloWorldServiceBuilder::new()
         .say_hello(say_hello)
+        .build();
+
+    // MakeServiceBuilder applies ConnectLayer for protocol detection
+    let app = connectrpc_axum::MakeServiceBuilder::new()
+        .add_router(router)
         .build();
 
     let addr: SocketAddr = "0.0.0.0:3000".parse()?;
@@ -43,6 +48,6 @@ async fn main() -> anyhow::Result<()> {
     println!("    -H 'Content-Type: application/json' \\");
     println!("    -d '{{\"name\": \"Alice\"}}'");
 
-    axum::serve(listener, connect_router.into_make_service()).await?;
+    axum::serve(listener, tower::make::Shared::new(app)).await?;
     Ok(())
 }

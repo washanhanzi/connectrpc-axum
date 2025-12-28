@@ -1,3 +1,8 @@
+---
+name: connect-go-reference
+description: Reference the official connect-go implementation for understanding the ConnectRPC protocol. Use when implementing protocol features, debugging wire format issues, or comparing behavior with the Go reference.
+---
+
 # connect-go-reference
 
 Reference the official connect-go implementation for understanding the ConnectRPC protocol. Use when implementing protocol features, debugging wire format issues, or comparing behavior with the Go reference.

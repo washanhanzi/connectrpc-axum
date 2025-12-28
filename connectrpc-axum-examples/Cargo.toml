@@ -57,6 +57,11 @@ required-features = ["tonic-web"]
 name = "streaming-error-repro"
 path = "src/bin/streaming-error-repro.rs"
 
+# Protocol version validation example
+[[bin]]
+name = "protocol-version"
+path = "src/bin/protocol-version.rs"
+
 [dependencies]
 # Application dependency for error handling
 anyhow = "1"

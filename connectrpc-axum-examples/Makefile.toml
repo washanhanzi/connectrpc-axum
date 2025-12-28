@@ -3,7 +3,7 @@ default_to_workspace = false
 skip_core_tasks = true
 
 # ============================================================================
-# New Example Rust Servers
+# Example Rust Servers
 # ============================================================================
 
 [tasks.run-connect-unary]
@@ -55,9 +55,7 @@ args = ["build", "--bins", "--features", "tonic-web"]
 [tasks.go-generate]
 description = "Generate Go protobuf code from .proto files (using buf managed mode)"
 category = "Go Client"
-script = [
-  "buf generate",
-]
+script = ["buf generate"]
 
 [tasks.go-deps]
 description = "Download Go dependencies"
@@ -86,174 +84,3 @@ dependencies = ["go-generate"]
 description = "Build both Go client and server"
 category = "Go Client"
 dependencies = ["go-build-client", "go-build-server"]
-
-# ============================================================================
-# Go Client Test Commands
-# ============================================================================
-
-[tasks.go-test-unary]
-description = "Test unary RPC with Connect protocol"
-category = "Go Tests"
-cwd = "go-client"
-script = ["./go-client -protocol connect unary"]
-dependencies = ["go-build-client"]
-
-[tasks.go-test-unary-grpc]
-description = "Test unary RPC with gRPC protocol"
-category = "Go Tests"
-cwd = "go-client"
-script = ["./go-client -protocol grpc unary"]
-dependencies = ["go-build-client"]
-
-[tasks.go-test-server-stream]
-description = "Test server streaming with Connect protocol"
-category = "Go Tests"
-cwd = "go-client"
-script = ["./go-client -protocol connect server-stream"]
-dependencies = ["go-build-client"]
-
-[tasks.go-test-server-stream-grpc]
-description = "Test server streaming with gRPC protocol"
-category = "Go Tests"
-cwd = "go-client"
-script = ["./go-client -protocol grpc server-stream"]
-dependencies = ["go-build-client"]
-
-[tasks.go-test-bidi-stream]
-description = "Test bidi streaming with gRPC protocol"
-category = "Go Tests"
-cwd = "go-client"
-script = ["./go-client -protocol grpc bidi-stream"]
-dependencies = ["go-build-client"]
-
-[tasks.go-test-grpc-web]
-description = "Test gRPC-Web protocol"
-category = "Go Tests"
-cwd = "go-client"
-script = ["./go-client grpc-web"]
-dependencies = ["go-build-client"]
-
-[tasks.go-test-all]
-description = "Run all Go tests with Connect protocol"
-category = "Go Tests"
-cwd = "go-client"
-script = ["./go-client -protocol connect all"]
-dependencies = ["go-build-client"]
-
-[tasks.go-test-all-grpc]
-description = "Run all Go tests with gRPC protocol"
-category = "Go Tests"
-cwd = "go-client"
-script = ["./go-client -protocol grpc all"]
-dependencies = ["go-build-client"]
-
-[tasks.go-run-server]
-description = "Run the Go reference server"
-category = "Go Server"
-cwd = "go-client"
-script = ["./go-server"]
-dependencies = ["go-build-server"]
-
-[tasks.go-clean]
-description = "Clean Go generated files and binaries"
-category = "Go Client"
-script = [
-  "cd go-client",
-  "rm -rf gen/",
-  "rm -f go-client go-server",
-  "echo 'Cleaned Go client and server artifacts'"
-]
-
-# ============================================================================
-# Combined Tasks
-# ============================================================================
-
-[tasks.build-all]
-description = "Build all Rust servers and Go client"
-category = "Build"
-dependencies = ["build-servers", "go-build"]
-
-[tasks.clean-all]
-description = "Clean all generated files and binaries"
-category = "Clean"
-dependencies = ["go-clean"]
-script = ["cargo clean", "echo 'Cleaned all artifacts'"]
-
-# ============================================================================
-# Help and Documentation
-# ============================================================================
-
-[tasks.default]
-description = "Show available tasks"
-alias = "help"
-
-[tasks.help]
-description = "Show all available tasks with descriptions"
-script = [
-  "echo '================================================================================'",
-  "echo '         ConnectRPC Axum Examples - Task Runner (cargo-make)               '",
-  "echo '================================================================================'",
-  "echo ''",
-  "echo 'RUST SERVERS (New Examples)'",
-  "echo '  cargo make run-connect-unary        - Example 1: Pure ConnectRPC unary'",
-  "echo '  cargo make run-connect-server-stream- Example 2: Pure ConnectRPC streaming'",
-  "echo '  cargo make run-tonic-unary          - Example 3: gRPC + Connect unary'",
-  "echo '  cargo make run-tonic-server-stream  - Example 4: gRPC + Connect streaming'",
-  "echo '  cargo make run-tonic-bidi-stream    - Example 5: gRPC bidi streaming'",
-  "echo '  cargo make run-grpc-web             - Example 6: gRPC-Web'",
-  "echo '  cargo make build-servers            - Build all server examples'",
-  "echo ''",
-  "echo 'GO CLIENT TESTS'",
-  "echo '  cargo make go-test-unary            - Test unary (Connect)'",
-  "echo '  cargo make go-test-unary-grpc       - Test unary (gRPC)'",
-  "echo '  cargo make go-test-server-stream    - Test server streaming (Connect)'",
-  "echo '  cargo make go-test-server-stream-grpc - Test server streaming (gRPC)'",
-  "echo '  cargo make go-test-bidi-stream      - Test bidi streaming (gRPC only)'",
-  "echo '  cargo make go-test-grpc-web         - Test gRPC-Web'",
-  "echo '  cargo make go-test-all              - Run all tests (Connect)'",
-  "echo '  cargo make go-test-all-grpc         - Run all tests (gRPC)'",
-  "echo ''",
-  "echo 'GO CLIENT BUILD'",
-  "echo '  cargo make go-generate              - Generate Go protobuf code'",
-  "echo '  cargo make go-build                 - Build Go client and server'",
-  "echo '  cargo make go-deps                  - Download Go dependencies'",
-  "echo '  cargo make go-clean                 - Clean Go generated files'",
-  "echo ''",
-  "echo 'BUILD & CLEAN'",
-  "echo '  cargo make build-all                - Build all Rust servers and Go client'",
-  "echo '  cargo make clean-all                - Clean all generated files'",
-  "echo ''",
-  "echo 'QUICK START'",
-  "echo '  Terminal 1: cargo make run-tonic-unary'",
-  "echo '  Terminal 2: cargo make go-test-unary && cargo make go-test-unary-grpc'",
-  "echo ''",
-]
-
-# ============================================================================
-# Setup Task
-# ============================================================================
-
-[tasks.setup]
-description = "Initial setup - install dependencies and generate code"
-category = "Setup"
-script = [
-  "echo 'Setting up ConnectRPC Axum Examples...'",
-  "echo ''",
-  "echo '1. Generating Go protobuf code...'",
-  "cargo make go-generate",
-  "echo ''",
-  "echo '2. Building Rust servers...'",
-  "cargo make build-servers",
-  "echo ''",
-  "echo '3. Building Go client...'",
-  "cargo make go-build",
-  "echo ''",
-  "echo 'Setup complete! Run cargo make help to see available tasks'"
-]
-
-[tasks.watch-server]
-description = "Watch and auto-restart connect-unary server on changes"
-category = "Development"
-install_crate = { crate_name = "cargo-watch", binary = "cargo-watch", test_arg = "--version" }
-command = "cargo"
-args = ["watch", "-x", "run --bin connect-unary"]
