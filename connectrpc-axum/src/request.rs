@@ -1,8 +1,7 @@
 //! Extractor for Connect requests.
+use crate::context::{MessageLimits, RequestProtocol};
 use crate::error::Code;
 use crate::error::ConnectError;
-use crate::limits::MessageLimits;
-use crate::protocol::RequestProtocol;
 use axum::{
     body::Body,
     extract::{FromRequest, Request},

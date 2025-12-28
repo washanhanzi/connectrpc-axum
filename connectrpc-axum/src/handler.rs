@@ -7,8 +7,8 @@ use axum::{
 use std::{future::Future, pin::Pin};
 
 use crate::{
+    context::RequestProtocol,
     error::ConnectError,
-    protocol::RequestProtocol,
     request::{ConnectRequest, ConnectStreamingRequest},
     response::{ConnectResponse, StreamBody},
 };
@@ -83,6 +83,7 @@ where
             };
 
             // Call the handler function
+            // Note: Timeout is enforced by ConnectLayer, not here
             let result = (self.0)(connect_req).await;
 
             // Convert result to response with protocol
@@ -148,6 +149,7 @@ macro_rules! impl_handler_for_connect_handler_wrapper {
                     };
 
                     // Call the handler function
+                    // Note: Timeout is enforced by ConnectLayer, not here
                     let result = (self.0)($($A,)* connect_req).await;
 
                     // Convert result to response with protocol
@@ -216,6 +218,7 @@ where
             };
 
             // Call the handler function
+            // Note: Timeout is enforced by ConnectLayer, not here
             let result = (self.0)(connect_req).await;
 
             // Convert result to response with protocol
@@ -285,6 +288,7 @@ macro_rules! impl_handler_for_connect_stream_handler_wrapper {
                     };
 
                     // Call the handler function
+                    // Note: Timeout is enforced by ConnectLayer, not here
                     let result = (self.0)($($A,)* connect_req).await;
 
                     // Convert result to response with protocol
@@ -357,6 +361,7 @@ where
             };
 
             // Call the handler function
+            // Note: Timeout is enforced by ConnectLayer, not here
             let result = (self.0)(streaming_req).await;
 
             // Convert result to streaming response format
@@ -427,6 +432,7 @@ where
             };
 
             // Call the handler function
+            // Note: Timeout is enforced by ConnectLayer, not here
             let result = (self.0)(streaming_req).await;
 
             // Convert result to response with protocol

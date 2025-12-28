@@ -1,8 +1,8 @@
+pub mod context;
 pub mod error;
 pub mod handler;
 pub mod layer;
 pub mod limits;
-pub mod protocol;
 pub mod request;
 pub mod response;
 pub mod service_builder;
@@ -13,6 +13,7 @@ pub mod tonic;
 // Re-export key types at the crate root for convenience
 #[cfg(feature = "tonic")]
 pub use crate::tonic::{ContentTypeSwitch, TonicCompatible};
+pub use context::{ConnectTimeout, DEFAULT_MAX_MESSAGE_SIZE, MessageLimits, RequestProtocol};
 #[cfg(feature = "tonic")]
 pub use handler::{
     BoxedCall, IntoFactory, TonicCompatibleHandlerWrapper, post_connect_tonic,
@@ -24,8 +25,6 @@ pub use handler::{
     post_connect_bidi_stream, post_connect_client_stream,
 };
 pub use layer::{ConnectLayer, ConnectService};
-pub use limits::{MessageLimits, DEFAULT_MAX_MESSAGE_SIZE};
-pub use protocol::RequestProtocol;
 pub use service_builder::MakeServiceBuilder;
 
 // Re-export several crates
@@ -39,6 +38,9 @@ pub use prelude::*;
 
 pub mod prelude {
     //! A prelude for `axum-connect` providing the most common types.
+    pub use crate::context::{
+        ConnectTimeout, DEFAULT_MAX_MESSAGE_SIZE, MessageLimits, RequestProtocol,
+    };
     pub use crate::error::{Code, ConnectError};
     #[cfg(feature = "tonic")]
     pub use crate::handler::{
@@ -52,8 +54,6 @@ pub mod prelude {
         post_connect_client_stream, post_connect_stream,
     };
     pub use crate::layer::{ConnectLayer, ConnectService};
-    pub use crate::limits::{MessageLimits, DEFAULT_MAX_MESSAGE_SIZE};
-    pub use crate::protocol::RequestProtocol;
     pub use crate::request::{ConnectRequest, ConnectStreamingRequest};
     pub use crate::response::{ConnectResponse, StreamBody};
     pub use crate::service_builder::MakeServiceBuilder;

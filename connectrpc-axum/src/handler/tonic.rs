@@ -8,8 +8,8 @@ use futures::Stream;
 use std::{future::Future, pin::Pin};
 
 use crate::{
+    context::RequestProtocol,
     error::ConnectError,
-    protocol::RequestProtocol,
     request::ConnectRequest,
     response::{ConnectResponse, StreamBody},
 };
@@ -38,9 +38,7 @@ pub type BoxedCall<Req, Resp> = Box<
     dyn Fn(
             ConnectRequest<Req>,
         ) -> Pin<
-            Box<
-                dyn Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
-            >,
+            Box<dyn Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static>,
         > + Send
         + Sync,
 >;
@@ -101,8 +99,7 @@ where
 }
 
 // with-state: (State<S>, ConnectRequest<Req>)
-impl<F, Fut, Req, Resp, S>
-    IntoFactory<(axum::extract::State<S>, ConnectRequest<Req>), Req, Resp, S>
+impl<F, Fut, Req, Resp, S> IntoFactory<(axum::extract::State<S>, ConnectRequest<Req>), Req, Resp, S>
     for TonicCompatibleHandlerWrapper<F>
 where
     F: Fn(axum::extract::State<S>, ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
@@ -218,6 +215,7 @@ macro_rules! impl_handler_for_tonic_compatible_wrapper {
                     };
 
                     // Call the handler function
+                    // Note: Timeout is enforced by ConnectLayer, not here
                     let result = (self.0)(connect_req).await;
 
                     // Convert result to response with protocol
@@ -266,6 +264,7 @@ macro_rules! impl_handler_for_tonic_compatible_wrapper {
                     };
 
                     // Call the handler function
+                    // Note: Timeout is enforced by ConnectLayer, not here
                     let result = (self.0)(state_extractor, connect_req).await;
 
                     // Convert result to response with protocol
@@ -334,6 +333,7 @@ where
             };
 
             // Call the handler function
+            // Note: Timeout is enforced by ConnectLayer, not here
             let result = (self.0)(connect_req).await;
 
             // Convert result to response with protocol
@@ -382,6 +382,7 @@ where
             };
 
             // Call the handler function
+            // Note: Timeout is enforced by ConnectLayer, not here
             let result = (self.0)(state_extractor, connect_req).await;
 
             // Convert result to response with protocol

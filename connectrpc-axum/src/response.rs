@@ -1,6 +1,6 @@
 //! Response types for Connect.
 use crate::error::{ConnectError, internal_error_response, internal_error_end_stream_frame, internal_error_streaming_response};
-use crate::protocol::RequestProtocol;
+use crate::context::RequestProtocol;
 use axum::{
     body::{Body, Bytes},
     http::{HeaderValue, StatusCode, header},

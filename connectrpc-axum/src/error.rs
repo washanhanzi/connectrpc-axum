@@ -6,7 +6,7 @@ use axum::{
 };
 use serde::{Serialize, Serializer};
 
-use crate::protocol::RequestProtocol;
+use crate::context::RequestProtocol;
 
 /// Connect RPC error codes, matching the codes defined in the Connect protocol.
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -215,7 +215,7 @@ impl ConnectError {
     }
 
     /// Internal helper for creating streaming error responses.
-    fn into_streaming_error_response(self, protocol: crate::protocol::RequestProtocol) -> Response {
+    fn into_streaming_error_response(self, protocol: crate::context::RequestProtocol) -> Response {
         self.into_streaming_error_response_with_content_type(protocol.error_content_type())
     }
 

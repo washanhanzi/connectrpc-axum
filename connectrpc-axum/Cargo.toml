@@ -26,7 +26,7 @@ prost = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_qs = { workspace = true }
-tokio = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["time"] }
 tokio-stream = { workspace = true, optional = true }
 tokio-util = { workspace = true, features = ["io"] }
 tonic = { workspace = true, optional = true }
@@ -36,5 +36,5 @@ tower = { workspace = true, features = ["full"] }
 tower-http = { workspace = true, features = ["cors"] }
 
 [features]
-tonic = ["dep:tokio", "dep:tokio-stream", "dep:tonic", "dep:tonic-prost"]
+tonic = ["dep:tokio-stream", "dep:tonic", "dep:tonic-prost"]
 tonic-web = ["tonic", "dep:tonic-web"]

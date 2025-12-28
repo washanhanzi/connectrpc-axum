@@ -3,23 +3,21 @@
 //! The [`ConnectLayer`] middleware detects the protocol variant from incoming requests
 //! and stores it in request extensions so that response encoding can match the request format.
 
+mod protocol;
+mod protocol_version;
+mod timeout;
+
+use crate::context::MessageLimits;
 use crate::error::{Code, ConnectError};
-use crate::limits::MessageLimits;
-use crate::protocol::RequestProtocol;
-use axum::http::{header, Method, Request};
+use axum::http::{Method, Request};
 use axum::response::Response;
+use std::time::Duration;
 use std::{
     future::Future,
     pin::Pin,
     task::{Context, Poll},
 };
 use tower::{Layer, Service, ServiceExt};
-
-/// The expected Connect protocol version.
-const CONNECT_PROTOCOL_VERSION: &str = "1";
-
-/// Header name for Connect protocol version.
-const CONNECT_PROTOCOL_VERSION_HEADER: &str = "connect-protocol-version";
 
 /// Layer that wraps services with Connect protocol detection and message limits.
 ///
@@ -54,6 +52,10 @@ const CONNECT_PROTOCOL_VERSION_HEADER: &str = "connect-protocol-version";
 pub struct ConnectLayer {
     limits: MessageLimits,
     require_protocol_header: bool,
+    /// Server-side maximum timeout. If set, the effective timeout is
+    /// min(server_timeout, client_timeout) where client_timeout comes from
+    /// the Connect-Timeout-Ms header.
+    server_timeout: Option<Duration>,
 }
 
 impl Default for ConnectLayer {
@@ -68,6 +70,7 @@ impl ConnectLayer {
         Self {
             limits: MessageLimits::default(),
             require_protocol_header: false,
+            server_timeout: None,
         }
     }
 
@@ -87,6 +90,29 @@ impl ConnectLayer {
         self.require_protocol_header = require;
         self
     }
+
+    /// Set the server-side maximum timeout.
+    ///
+    /// When set, the effective timeout for each request is the minimum of:
+    /// - This server timeout
+    /// - The client's `Connect-Timeout-Ms` header (if present)
+    ///
+    /// This ensures the smaller timeout always wins, matching Connect-Go's behavior.
+    /// On timeout, a Connect `deadline_exceeded` error is returned.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use std::time::Duration;
+    /// use connectrpc_axum::ConnectLayer;
+    ///
+    /// let layer = ConnectLayer::new()
+    ///     .timeout(Duration::from_secs(30));
+    /// ```
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.server_timeout = Some(timeout);
+        self
+    }
 }
 
 impl<S> Layer<S> for ConnectLayer {
@@ -97,6 +123,7 @@ impl<S> Layer<S> for ConnectLayer {
             inner,
             limits: self.limits,
             require_protocol_header: self.require_protocol_header,
+            server_timeout: self.server_timeout,
         }
     }
 }
@@ -107,6 +134,7 @@ pub struct ConnectService<S> {
     inner: S,
     limits: MessageLimits,
     require_protocol_header: bool,
+    server_timeout: Option<Duration>,
 }
 
 impl<S, ReqBody> Service<Request<ReqBody>> for ConnectService<S>
@@ -126,209 +154,54 @@ where
 
     fn call(&mut self, mut req: Request<ReqBody>) -> Self::Future {
         // Detect protocol from request and store in extensions
-        let protocol = detect_protocol(&req);
+        let protocol = protocol::detect_protocol(&req);
         req.extensions_mut().insert(protocol);
 
         // Validate protocol version for POST requests
         // GET requests use ?connect=v1 query param, validated in request.rs
-        if *req.method() == Method::POST {
-            if let Some(err) = validate_protocol_version(&req, self.require_protocol_header) {
-                // Return error response immediately without calling inner service
-                let response = err.into_response_with_protocol(protocol);
-                return Box::pin(async move { Ok(response) });
-            }
+        if *req.method() == Method::POST
+            && let Some(err) =
+                protocol_version::validate_protocol_version(&req, self.require_protocol_header)
+        {
+            // Return error response immediately without calling inner service
+            let response = err.into_response_with_protocol(protocol);
+            return Box::pin(async move { Ok(response) });
         }
 
         // Store message limits in extensions for request extractors
         req.extensions_mut().insert(self.limits);
+
+        // Parse Connect-Timeout-Ms header and compute effective timeout
+        let client_timeout = timeout::parse_timeout(&req);
+        let effective_timeout =
+            timeout::compute_effective_timeout(self.server_timeout, client_timeout);
+
+        // Store effective timeout in extensions (for handlers that need to know)
+        // req.extensions_mut().insert(effective_timeout);
 
         // Clone inner service for the async block
         let inner = self.inner.clone();
         // Replace self.inner with the clone so it's ready for the next request
         let inner = std::mem::replace(&mut self.inner, inner);
 
-        Box::pin(async move { inner.oneshot(req).await })
-    }
-}
-
-/// Detect the protocol variant from an incoming request.
-fn detect_protocol<B>(req: &Request<B>) -> RequestProtocol {
-    // GET requests: check query param for encoding
-    if *req.method() == Method::GET {
-        if let Some(query) = req.uri().query() {
-            // Parse the encoding parameter
-            // Query format: ?connect=v1&encoding=proto&message=...&base64=1
-            for pair in query.split('&') {
-                if let Some(value) = pair.strip_prefix("encoding=") {
-                    return if value == "proto" {
-                        RequestProtocol::ConnectUnaryProto
-                    } else {
-                        RequestProtocol::ConnectUnaryJson
-                    };
+        Box::pin(async move {
+            // Apply timeout if configured
+            match effective_timeout.duration() {
+                Some(duration) => {
+                    match tokio::time::timeout(duration, inner.oneshot(req)).await {
+                        Ok(result) => result,
+                        Err(_elapsed) => {
+                            // Timeout exceeded - return Connect deadline_exceeded error
+                            let err = ConnectError::new(
+                                Code::DeadlineExceeded,
+                                "request timeout exceeded",
+                            );
+                            Ok(err.into_response_with_protocol(protocol))
+                        }
+                    }
                 }
+                None => inner.oneshot(req).await,
             }
-        }
-        // GET without encoding param defaults to JSON
-        return RequestProtocol::ConnectUnaryJson;
-    }
-
-    // POST requests: check Content-Type header
-    let content_type = req
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    RequestProtocol::from_content_type(content_type)
-}
-
-/// Validate the Connect-Protocol-Version header for POST requests.
-///
-/// Returns `Some(ConnectError)` if validation fails, `None` if valid.
-///
-/// When `require_header` is false (default), the header is optional but if present must be "1".
-/// When `require_header` is true, the header is required and must be "1".
-fn validate_protocol_version<B>(req: &Request<B>, require_header: bool) -> Option<ConnectError> {
-    let version = req
-        .headers()
-        .get(CONNECT_PROTOCOL_VERSION_HEADER)
-        .and_then(|v| v.to_str().ok());
-
-    match version {
-        // Header present with correct value
-        Some(v) if v == CONNECT_PROTOCOL_VERSION => None,
-        // Header present with wrong value
-        Some(v) => Some(ConnectError::new(
-            Code::InvalidArgument,
-            format!(
-                "connect-protocol-version must be \"{}\": got \"{}\"",
-                CONNECT_PROTOCOL_VERSION, v
-            ),
-        )),
-        // Header not present
-        None if require_header => Some(ConnectError::new(
-            Code::InvalidArgument,
-            format!(
-                "missing required header: set {} to \"{}\"",
-                CONNECT_PROTOCOL_VERSION_HEADER, CONNECT_PROTOCOL_VERSION
-            ),
-        )),
-        None => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use axum::http::Request;
-
-    #[test]
-    fn test_detect_protocol_post_json() {
-        let req = Request::builder()
-            .method(Method::POST)
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(())
-            .unwrap();
-        assert_eq!(detect_protocol(&req), RequestProtocol::ConnectUnaryJson);
-    }
-
-    #[test]
-    fn test_detect_protocol_post_proto() {
-        let req = Request::builder()
-            .method(Method::POST)
-            .header(header::CONTENT_TYPE, "application/proto")
-            .body(())
-            .unwrap();
-        assert_eq!(detect_protocol(&req), RequestProtocol::ConnectUnaryProto);
-    }
-
-    #[test]
-    fn test_detect_protocol_post_connect_stream_json() {
-        let req = Request::builder()
-            .method(Method::POST)
-            .header(header::CONTENT_TYPE, "application/connect+json")
-            .body(())
-            .unwrap();
-        assert_eq!(detect_protocol(&req), RequestProtocol::ConnectStreamJson);
-    }
-
-    #[test]
-    fn test_detect_protocol_get_json() {
-        let req = Request::builder()
-            .method(Method::GET)
-            .uri("/svc/Method?connect=v1&encoding=json&message=abc")
-            .body(())
-            .unwrap();
-        assert_eq!(detect_protocol(&req), RequestProtocol::ConnectUnaryJson);
-    }
-
-    #[test]
-    fn test_detect_protocol_get_proto() {
-        let req = Request::builder()
-            .method(Method::GET)
-            .uri("/svc/Method?connect=v1&encoding=proto&message=abc&base64=1")
-            .body(())
-            .unwrap();
-        assert_eq!(detect_protocol(&req), RequestProtocol::ConnectUnaryProto);
-    }
-
-    #[test]
-    fn test_detect_protocol_get_no_encoding() {
-        let req = Request::builder()
-            .method(Method::GET)
-            .uri("/svc/Method?connect=v1&message=abc")
-            .body(())
-            .unwrap();
-        assert_eq!(detect_protocol(&req), RequestProtocol::ConnectUnaryJson);
-    }
-
-    #[test]
-    fn test_validate_protocol_version_valid() {
-        let req = Request::builder()
-            .method(Method::POST)
-            .header(CONNECT_PROTOCOL_VERSION_HEADER, "1")
-            .body(())
-            .unwrap();
-        assert!(validate_protocol_version(&req, false).is_none());
-        assert!(validate_protocol_version(&req, true).is_none());
-    }
-
-    #[test]
-    fn test_validate_protocol_version_missing_not_required() {
-        // When require_header=false, missing header is OK
-        let req = Request::builder()
-            .method(Method::POST)
-            .body(())
-            .unwrap();
-        assert!(validate_protocol_version(&req, false).is_none());
-    }
-
-    #[test]
-    fn test_validate_protocol_version_missing_required() {
-        // When require_header=true, missing header is an error
-        let req = Request::builder()
-            .method(Method::POST)
-            .body(())
-            .unwrap();
-        let err = validate_protocol_version(&req, true);
-        assert!(err.is_some());
-        let err = err.unwrap();
-        assert!(matches!(err.code(), Code::InvalidArgument));
-        assert!(err.message().unwrap().contains("missing required header"));
-    }
-
-    #[test]
-    fn test_validate_protocol_version_wrong_version() {
-        let req = Request::builder()
-            .method(Method::POST)
-            .header(CONNECT_PROTOCOL_VERSION_HEADER, "2")
-            .body(())
-            .unwrap();
-        // Wrong version is an error regardless of require_header setting
-        let err = validate_protocol_version(&req, false);
-        assert!(err.is_some());
-        let err = err.unwrap();
-        assert!(matches!(err.code(), Code::InvalidArgument));
-        assert!(err.message().unwrap().contains("connect-protocol-version must be"));
+        })
     }
 }

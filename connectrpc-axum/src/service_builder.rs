@@ -42,8 +42,8 @@
 
 use axum::Router;
 
+use crate::context::MessageLimits;
 use crate::layer::ConnectLayer;
-use crate::limits::MessageLimits;
 
 #[cfg(feature = "tonic")]
 use crate::tonic::ContentTypeSwitch;
