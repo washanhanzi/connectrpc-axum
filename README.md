@@ -335,7 +335,7 @@ cargo run --bin connect-unary
 
 ## Acknowledgments
 
-This project was inspired by [AThilenius/axum-connect](https://github.com/AThilenius/axum-connect).
+This project started as a fork of [AThilenius/axum-connect](https://github.com/AThilenius/axum-connect). If you have a simple use case, you may also want to check out that repository.
 
 ## Learn More
 
