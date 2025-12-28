@@ -170,14 +170,22 @@ async fn say_hello_stream(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let router = helloworldservice::HelloWorldServiceBuilder::new()
+    // Build the service router (bare router without middleware)
+    let hello_router = helloworldservice::HelloWorldServiceBuilder::new()
         .say_hello(say_hello)
         .say_hello_stream(say_hello_stream)
         .with_state(AppState::default())
         .build();
 
+    // Use MakeServiceBuilder to apply ConnectLayer and configure options
+    let app = connectrpc_axum::MakeServiceBuilder::new()
+        .add_router(hello_router)
+        // .message_limits(connectrpc_axum::MessageLimits::new(16 * 1024 * 1024))
+        // .require_protocol_header(true)
+        .build();
+
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-    axum::serve(listener, router).await?;
+    axum::serve(listener, app).await?;
     Ok(())
 }
 ```
@@ -216,10 +224,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create gRPC server
     let grpc = hello_world_service_server::HelloWorldServiceServer::new(svc);
 
-    // ContentTypeSwitch routes by Content-Type:
+    // Use MakeServiceBuilder to apply ConnectLayer and combine with gRPC
+    // Routes by Content-Type:
     // - application/grpc* -> Tonic gRPC server
     // - Otherwise -> Axum routes (Connect protocol)
-    let dispatch = connectrpc_axum::ContentTypeSwitch::new(grpc, router);
+    let dispatch = connectrpc_axum::MakeServiceBuilder::new()
+        .add_router(router)
+        .add_grpc_service(grpc)
+        .build();
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     axum::serve(listener, tower::make::Shared::new(dispatch)).await?;
@@ -281,10 +293,15 @@ let connect_router = userservice::UserServiceBuilder::new()
     .build();
 
 // Merge with existing route path for backwards compatibility
-let router = Router::new()
+let merged_router = Router::new()
     .route("/getUser", post(get_user))  // Keep legacy path: /getUser
     .merge(connect_router)               // Add ConnectRPC path: /user.v1.UserService/GetUser
     .with_state(AppState);
+
+// Use MakeServiceBuilder to apply ConnectLayer
+let app = connectrpc_axum::MakeServiceBuilder::new()
+    .add_router(merged_router)
+    .build();
 ```
 
 This serves both paths with the same handler (both use JSON):
@@ -297,6 +314,7 @@ This serves both paths with the same handler (both use JSON):
 - Use `ConnectResponse<T>` instead of `Json<T>` for response
 - Return `Result<_, ConnectError>` for proper error handling
 - Use generated service builders for type-safe routing
+- Use `MakeServiceBuilder` to apply `ConnectLayer` middleware
 - ConnectRPC routes are `/<package>.<Service>/<Method>`
 - Use `Router::merge()` to combine existing and ConnectRPC routes
 
@@ -335,7 +353,7 @@ cargo run --bin connect-unary
 
 ## Acknowledgments
 
-This project started as a fork of [AThilenius/axum-connect](https://github.com/AThilenius/axum-connect). If you have a simple use case, you may also want to check out that repository.
+This project started as a fork of [AThilenius/axum-connect](https://github.com/AThilenius/axum-connect). If you require only ConnectRPC support, you may also want to check it out.
 
 ## Learn More
 

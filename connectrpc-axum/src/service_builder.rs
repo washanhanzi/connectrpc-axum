@@ -42,6 +42,9 @@
 
 use axum::Router;
 
+use crate::layer::ConnectLayer;
+use crate::limits::MessageLimits;
+
 #[cfg(feature = "tonic")]
 use crate::tonic::ContentTypeSwitch;
 
@@ -86,6 +89,10 @@ pub struct MakeServiceBuilder<S = ()> {
     connect_router: Router<S>,
     #[cfg(feature = "tonic")]
     grpc_routes: tonic::service::Routes,
+    /// Message size limits for requests
+    limits: MessageLimits,
+    /// Whether to require the Connect-Protocol-Version header
+    require_protocol_header: bool,
 }
 
 impl<S> Default for MakeServiceBuilder<S>
@@ -115,7 +122,28 @@ where
             connect_router: Router::new(),
             #[cfg(feature = "tonic")]
             grpc_routes: tonic::service::Routes::default(),
+            limits: MessageLimits::default(),
+            require_protocol_header: false,
         }
+    }
+
+    /// Set custom message size limits.
+    ///
+    /// Default is 4 MB.
+    pub fn message_limits(mut self, limits: MessageLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    /// Require the `Connect-Protocol-Version` header on Connect protocol requests.
+    ///
+    /// When enabled, requests must include the `Connect-Protocol-Version: 1` header.
+    /// This helps HTTP proxies and middleware identify valid Connect requests.
+    ///
+    /// Disabled by default to allow easy ad-hoc requests (e.g., with cURL).
+    pub fn require_protocol_header(mut self, require: bool) -> Self {
+        self.require_protocol_header = require;
+        self
     }
 
     /// Adds a single Connect RPC router to the builder.
@@ -208,6 +236,9 @@ where
     /// - Requests with `content-type: application/grpc*` → routed to gRPC services
     /// - All other requests → routed to Connect routers
     ///
+    /// The Connect router will have [`ConnectLayer`] applied with the configured
+    /// message limits and protocol header requirements.
+    ///
     /// # Examples
     ///
     /// ```rust,ignore
@@ -226,7 +257,11 @@ where
     /// ```
     pub fn build(self) -> ContentTypeSwitch<tonic::service::Routes, Router<S>> {
         let grpc_service = self.grpc_routes.prepare();
-        ContentTypeSwitch::new(grpc_service, self.connect_router)
+        let layer = ConnectLayer::new()
+            .limits(self.limits)
+            .require_protocol_header(self.require_protocol_header);
+        let connect_router = self.connect_router.layer(layer);
+        ContentTypeSwitch::new(grpc_service, connect_router)
     }
 }
 
@@ -242,6 +277,9 @@ where
     /// that were added via [`add_router`](Self::add_router) or
     /// [`add_routers`](Self::add_routers).
     ///
+    /// The router will have [`ConnectLayer`] applied with the configured
+    /// message limits and protocol header requirements.
+    ///
     /// # Examples
     ///
     /// ```rust,no_run
@@ -256,7 +294,10 @@ where
     ///     .build();
     /// ```
     pub fn build(self) -> Router<S> {
-        self.connect_router
+        let layer = ConnectLayer::new()
+            .limits(self.limits)
+            .require_protocol_header(self.require_protocol_header);
+        self.connect_router.layer(layer)
     }
 }
 

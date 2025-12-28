@@ -436,8 +436,10 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                     impl #tonic_builder_name<()> {
                         /// Build without state by converting factories with `()`
                         ///
-                        /// The router is wrapped with [`ConnectLayer`] middleware.
+                        /// Returns the router and gRPC server. Use [`MakeServiceBuilder`] to
+                        /// apply [`ConnectLayer`] and combine with other services.
                         ///
+                        /// [`MakeServiceBuilder`]: connectrpc_axum::MakeServiceBuilder
                         /// [`ConnectLayer`]: connectrpc_axum::ConnectLayer
                         pub fn build(self) -> (axum::Router, #server_mod_name::#tonic_server_type_name<#tonic_service_name>) {
                             let router = self.router;
@@ -448,15 +450,17 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                             };
 
                             let grpc_server = #server_mod_name::#tonic_server_type_name::new(tonic_service);
-                            (router.layer(connectrpc_axum::ConnectLayer::new()), grpc_server)
+                            (router, grpc_server)
                         }
                     }
 
                     impl #tonic_server_builder_name {
                         /// Build with state already captured in handlers
                         ///
-                        /// The router is wrapped with [`ConnectLayer`] middleware.
+                        /// Returns the router and gRPC server. Use [`MakeServiceBuilder`] to
+                        /// apply [`ConnectLayer`] and combine with other services.
                         ///
+                        /// [`MakeServiceBuilder`]: connectrpc_axum::MakeServiceBuilder
                         /// [`ConnectLayer`]: connectrpc_axum::ConnectLayer
                         pub fn build(self) -> (axum::Router, #server_mod_name::#tonic_server_type_name<#tonic_service_name>) {
                             let router = self.router;
@@ -467,7 +471,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                             };
 
                             let grpc_server = #server_mod_name::#tonic_server_type_name::new(tonic_service);
-                            (router.layer(connectrpc_axum::ConnectLayer::new()), grpc_server)
+                            (router, grpc_server)
                         }
                     }
                 };
@@ -553,12 +557,13 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                 impl #service_builder_name<()> {
                     /// Build the final Connect RPC router with all registered handlers.
                     ///
-                    /// The router is wrapped with [`ConnectLayer`] middleware to enable
-                    /// per-request protocol context propagation.
+                    /// Use [`MakeServiceBuilder`] to apply [`ConnectLayer`] and combine
+                    /// with other services.
                     ///
+                    /// [`MakeServiceBuilder`]: connectrpc_axum::MakeServiceBuilder
                     /// [`ConnectLayer`]: connectrpc_axum::ConnectLayer
                     pub fn build(self) -> axum::Router<()> {
-                        self.router.layer(connectrpc_axum::ConnectLayer::new())
+                        self.router
                     }
                 }
 
