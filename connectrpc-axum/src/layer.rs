@@ -10,8 +10,12 @@ mod timeout;
 
 pub(crate) use content_type::{validate_streaming_content_type, validate_unary_content_type};
 
+use crate::compression::{
+    negotiate_response_encoding, Compression, CompressionConfig, CompressionEncoding,
+};
 use crate::context::MessageLimits;
 use crate::error::{Code, ConnectError};
+use axum::http::header::{ACCEPT_ENCODING, CONTENT_ENCODING};
 use axum::http::{Method, Request};
 use axum::response::Response;
 use std::time::Duration;
@@ -59,6 +63,7 @@ pub struct ConnectLayer {
     /// min(server_timeout, client_timeout) where client_timeout comes from
     /// the Connect-Timeout-Ms header.
     server_timeout: Option<Duration>,
+    compression: CompressionConfig,
 }
 
 impl Default for ConnectLayer {
@@ -74,6 +79,7 @@ impl ConnectLayer {
             limits: MessageLimits::default(),
             require_protocol_header: false,
             server_timeout: None,
+            compression: CompressionConfig::default(),
         }
     }
 
@@ -116,6 +122,29 @@ impl ConnectLayer {
         self.server_timeout = Some(timeout);
         self
     }
+
+    /// Set compression configuration.
+    ///
+    /// Controls response compression behavior:
+    /// - `min_bytes`: Minimum response size before compression is applied (default: 1024)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use connectrpc_axum::{ConnectLayer, CompressionConfig};
+    ///
+    /// // Compress responses >= 512 bytes
+    /// let layer = ConnectLayer::new()
+    ///     .compression(CompressionConfig::new(512));
+    ///
+    /// // Disable compression entirely
+    /// let layer = ConnectLayer::new()
+    ///     .compression(CompressionConfig::disabled());
+    /// ```
+    pub fn compression(mut self, config: CompressionConfig) -> Self {
+        self.compression = config;
+        self
+    }
 }
 
 impl<S> Layer<S> for ConnectLayer {
@@ -127,6 +156,7 @@ impl<S> Layer<S> for ConnectLayer {
             limits: self.limits,
             require_protocol_header: self.require_protocol_header,
             server_timeout: self.server_timeout,
+            compression: self.compression,
         }
     }
 }
@@ -138,6 +168,7 @@ pub struct ConnectService<S> {
     limits: MessageLimits,
     require_protocol_header: bool,
     server_timeout: Option<Duration>,
+    compression: CompressionConfig,
 }
 
 impl<S, ReqBody> Service<Request<ReqBody>> for ConnectService<S>
@@ -179,10 +210,51 @@ where
                 let response = err.into_response_with_protocol(protocol);
                 return Box::pin(async move { Ok(response) });
             }
+
+            // Handle compression for unary requests only
+            // Streaming uses Connect-Content-Encoding/Connect-Accept-Encoding instead
+            if protocol.is_unary() {
+                // Validate Content-Encoding header
+                let content_encoding = req
+                    .headers()
+                    .get(CONTENT_ENCODING)
+                    .and_then(|v| v.to_str().ok());
+
+                let request_encoding = match CompressionEncoding::from_header(content_encoding) {
+                    Some(enc) => enc,
+                    None => {
+                        let err = ConnectError::new(
+                            Code::Unimplemented,
+                            format!(
+                                "unsupported compression \"{}\": supported encodings are gzip, identity",
+                                content_encoding.unwrap_or("")
+                            ),
+                        );
+                        let response = err.into_response_with_protocol(protocol);
+                        return Box::pin(async move { Ok(response) });
+                    }
+                };
+
+                // Negotiate response encoding from Accept-Encoding
+                let accept_encoding = req
+                    .headers()
+                    .get(ACCEPT_ENCODING)
+                    .and_then(|v| v.to_str().ok());
+                let response_encoding = negotiate_response_encoding(accept_encoding);
+
+                // Store compression context in extensions
+                req.extensions_mut().insert(Compression {
+                    response: response_encoding,
+                    request: request_encoding,
+                });
+            }
         }
 
         // Store message limits in extensions for request extractors
         req.extensions_mut().insert(self.limits);
+
+        // Store compression config in extensions for response handling
+        req.extensions_mut().insert(self.compression);
 
         // Parse Connect-Timeout-Ms header and compute effective timeout
         let client_timeout = timeout::parse_timeout(&req);

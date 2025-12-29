@@ -1,4 +1,5 @@
 //! Extractor for Connect requests.
+use crate::compression::{decompress, Compression, CompressionEncoding};
 use crate::context::{MessageLimits, RequestProtocol};
 use crate::error::Code;
 use crate::error::ConnectError;
@@ -59,11 +60,25 @@ where
         .copied()
         .unwrap_or_default();
 
+    // Get compression context from extensions (set by ConnectLayer for unary)
+    let compression = req
+        .extensions()
+        .get::<Compression>()
+        .copied()
+        .unwrap_or_default();
+
     let mut bytes = Bytes::from_request(req, _state)
         .await
         .map_err(|err| ConnectError::new(Code::Internal, err.to_string()))?;
 
-    // Check body size against limits
+    // Decompress if request body is compressed (unary only, streaming handled separately)
+    if compression.request != CompressionEncoding::Identity {
+        let decompressed = decompress(&bytes, compression.request)
+            .map_err(|err| ConnectError::new(Code::InvalidArgument, err.to_string()))?;
+        bytes = Bytes::from(decompressed);
+    }
+
+    // Check body size against limits (after decompression)
     limits
         .check_size(bytes.len())
         .map_err(|err| ConnectError::new(Code::ResourceExhausted, err))?;

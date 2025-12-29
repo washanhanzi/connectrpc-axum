@@ -257,6 +257,7 @@ dependencies = [
  "axum-extra",
  "base64",
  "bytes",
+ "flate2",
  "futures",
  "http",
  "http-body",

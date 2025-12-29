@@ -7,6 +7,7 @@ use axum::{
 use std::{future::Future, pin::Pin};
 
 use crate::{
+    compression::{Compression, CompressionConfig},
     context::RequestProtocol,
     error::ConnectError,
     layer::{validate_streaming_content_type, validate_unary_content_type},
@@ -96,6 +97,19 @@ where
                 .copied()
                 .unwrap_or_default();
 
+            // Extract compression context from extensions (set by ConnectLayer for unary)
+            let compression = req
+                .extensions()
+                .get::<Compression>()
+                .copied()
+                .unwrap_or_default();
+
+            let compression_config = req
+                .extensions()
+                .get::<CompressionConfig>()
+                .copied()
+                .unwrap_or_default();
+
             // Validate: unary handlers only accept unary content-types
             if let Some(err_response) = validate_unary_protocol(protocol) {
                 return err_response;
@@ -111,9 +125,11 @@ where
             // Note: Timeout is enforced by ConnectLayer, not here
             let result = (self.0)(connect_req).await;
 
-            // Convert result to response with protocol
+            // Convert result to response with compression
             match result {
-                Ok(response) => response.into_response_with_protocol(protocol),
+                Ok(response) => {
+                    response.into_response_with_compression(protocol, compression, compression_config)
+                }
                 Err(err) => err.into_response_with_protocol(protocol),
             }
         })
@@ -153,6 +169,19 @@ macro_rules! impl_handler_for_connect_handler_wrapper {
                         .copied()
                         .unwrap_or_default();
 
+                    // Extract compression context from extensions (set by ConnectLayer for unary)
+                    let compression = req
+                        .extensions()
+                        .get::<Compression>()
+                        .copied()
+                        .unwrap_or_default();
+
+                    let compression_config = req
+                        .extensions()
+                        .get::<CompressionConfig>()
+                        .copied()
+                        .unwrap_or_default();
+
                     // Validate: unary handlers only accept unary content-types
                     if let Some(err_response) = validate_unary_protocol(protocol) {
                         return err_response;
@@ -182,9 +211,11 @@ macro_rules! impl_handler_for_connect_handler_wrapper {
                     // Note: Timeout is enforced by ConnectLayer, not here
                     let result = (self.0)($($A,)* connect_req).await;
 
-                    // Convert result to response with protocol
+                    // Convert result to response with compression
                     match result {
-                        Ok(response) => response.into_response_with_protocol(protocol),
+                        Ok(response) => {
+                            response.into_response_with_compression(protocol, compression, compression_config)
+                        }
                         Err(err) => err.into_response_with_protocol(protocol),
                     }
                 })

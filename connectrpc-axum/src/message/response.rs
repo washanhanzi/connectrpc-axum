@@ -1,9 +1,13 @@
 //! Response types for Connect.
-use crate::error::{ConnectError, internal_error_response, internal_error_end_stream_frame, internal_error_streaming_response};
+use crate::compression::{compress, Compression, CompressionConfig, CompressionEncoding};
 use crate::context::RequestProtocol;
+use crate::error::{
+    internal_error_end_stream_frame, internal_error_response, internal_error_streaming_response,
+    ConnectError,
+};
 use axum::{
     body::{Body, Bytes},
-    http::{HeaderValue, StatusCode, header},
+    http::{header, HeaderValue, StatusCode},
     response::Response,
 };
 use futures::Stream;
@@ -57,6 +61,59 @@ where
                 HeaderValue::from_static(protocol.response_content_type()),
             )
             .body(Body::from(body))
+            .unwrap_or_else(|_| internal_error_response(protocol.error_content_type()))
+    }
+
+    /// Encode the response with compression support.
+    /// This is called by handler wrappers for unary responses.
+    pub(crate) fn into_response_with_compression(
+        self,
+        protocol: RequestProtocol,
+        compression: Compression,
+        config: CompressionConfig,
+    ) -> Response {
+        let body = if protocol.is_proto() {
+            self.0.encode_to_vec()
+        } else {
+            match serde_json::to_vec(&self.0) {
+                Ok(bytes) => bytes,
+                Err(_) => {
+                    return internal_error_response(protocol.error_content_type());
+                }
+            }
+        };
+
+        // Compress if conditions are met:
+        // 1. Client requested compression (Accept-Encoding: gzip)
+        // 2. Response is large enough (>= min_bytes threshold)
+        let (final_body, content_encoding) =
+            if compression.response != CompressionEncoding::Identity
+                && body.len() >= config.min_bytes
+            {
+                match compress(&body, compression.response) {
+                    Ok(compressed) => (compressed, Some(compression.response)),
+                    Err(_) => (body, None), // Fall back to uncompressed on error
+                }
+            } else {
+                (body, None)
+            };
+
+        let mut builder = Response::builder()
+            .status(StatusCode::OK)
+            .header(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static(protocol.response_content_type()),
+            );
+
+        if let Some(encoding) = content_encoding {
+            builder = builder.header(
+                header::CONTENT_ENCODING,
+                HeaderValue::from_static(encoding.as_str()),
+            );
+        }
+
+        builder
+            .body(Body::from(final_body))
             .unwrap_or_else(|_| internal_error_response(protocol.error_content_type()))
     }
 

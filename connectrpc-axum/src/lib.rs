@@ -1,3 +1,4 @@
+pub mod compression;
 pub mod context;
 pub mod error;
 pub mod handler;
@@ -10,6 +11,7 @@ pub mod tonic;
 // Re-export key types at the crate root for convenience
 #[cfg(feature = "tonic")]
 pub use crate::tonic::{ContentTypeSwitch, TonicCompatible};
+pub use compression::{CompressionConfig, CompressionEncoding};
 pub use context::{ConnectTimeout, DEFAULT_MAX_MESSAGE_SIZE, MessageLimits, RequestProtocol};
 #[cfg(feature = "tonic")]
 pub use handler::{
@@ -35,6 +37,7 @@ pub use prelude::*;
 
 pub mod prelude {
     //! A prelude for `axum-connect` providing the most common types.
+    pub use crate::compression::{CompressionConfig, CompressionEncoding};
     pub use crate::context::{
         ConnectTimeout, DEFAULT_MAX_MESSAGE_SIZE, MessageLimits, RequestProtocol,
     };
