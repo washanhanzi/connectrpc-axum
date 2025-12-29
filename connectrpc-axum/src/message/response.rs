@@ -1,6 +1,5 @@
 //! Response types for Connect.
-use crate::compression::{compress, Compression, CompressionConfig, CompressionEncoding};
-use crate::context::RequestProtocol;
+use crate::context::{compress, CompressionEncoding, Context, RequestProtocol};
 use crate::error::{
     internal_error_end_stream_frame, internal_error_response, internal_error_streaming_response,
     ConnectError,
@@ -64,21 +63,16 @@ where
             .unwrap_or_else(|_| internal_error_response(protocol.error_content_type()))
     }
 
-    /// Encode the response with compression support.
+    /// Encode the response using pipeline context.
     /// This is called by handler wrappers for unary responses.
-    pub(crate) fn into_response_with_compression(
-        self,
-        protocol: RequestProtocol,
-        compression: Compression,
-        config: CompressionConfig,
-    ) -> Response {
-        let body = if protocol.is_proto() {
+    pub(crate) fn into_response_with_context(self, ctx: &Context) -> Response {
+        let body = if ctx.protocol.is_proto() {
             self.0.encode_to_vec()
         } else {
             match serde_json::to_vec(&self.0) {
                 Ok(bytes) => bytes,
                 Err(_) => {
-                    return internal_error_response(protocol.error_content_type());
+                    return internal_error_response(ctx.protocol.error_content_type());
                 }
             }
         };
@@ -87,11 +81,11 @@ where
         // 1. Client requested compression (Accept-Encoding: gzip)
         // 2. Response is large enough (>= min_bytes threshold)
         let (final_body, content_encoding) =
-            if compression.response != CompressionEncoding::Identity
-                && body.len() >= config.min_bytes
+            if ctx.compression.response_encoding != CompressionEncoding::Identity
+                && body.len() >= ctx.compression.min_compress_bytes
             {
-                match compress(&body, compression.response) {
-                    Ok(compressed) => (compressed, Some(compression.response)),
+                match compress(&body, ctx.compression.response_encoding) {
+                    Ok(compressed) => (compressed, Some(ctx.compression.response_encoding)),
                     Err(_) => (body, None), // Fall back to uncompressed on error
                 }
             } else {
@@ -102,7 +96,7 @@ where
             .status(StatusCode::OK)
             .header(
                 header::CONTENT_TYPE,
-                HeaderValue::from_static(protocol.response_content_type()),
+                HeaderValue::from_static(ctx.protocol.response_content_type()),
             );
 
         if let Some(encoding) = content_encoding {
@@ -114,7 +108,7 @@ where
 
         builder
             .body(Body::from(final_body))
-            .unwrap_or_else(|_| internal_error_response(protocol.error_content_type()))
+            .unwrap_or_else(|_| internal_error_response(ctx.protocol.error_content_type()))
     }
 
     /// Encode the response as a streaming response (single message frame + EndStreamResponse).

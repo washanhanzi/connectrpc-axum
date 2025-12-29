@@ -1,10 +1,26 @@
-//! Protocol detection for Connect RPC.
+//! Protocol detection and validation for Connect RPC.
 //!
-//! This module provides the [`RequestProtocol`] enum for identifying the wire protocol
-//! variant from incoming requests. The protocol is stored in request extensions by
-//! [`ConnectLayer`] and injected into response types by handler wrappers.
-//!
-//! [`ConnectLayer`]: crate::layer::ConnectLayer
+//! This module provides:
+//! - [`RequestProtocol`] enum for identifying wire protocol variants
+//! - [`detect_protocol`] for detecting protocol from incoming requests
+//! - Validation functions for protocol version and content-type
+
+use crate::error::{Code, ConnectError};
+use axum::http::{header, Method, Request};
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+/// The expected Connect protocol version.
+pub const CONNECT_PROTOCOL_VERSION: &str = "1";
+
+/// Header name for Connect protocol version.
+pub const CONNECT_PROTOCOL_VERSION_HEADER: &str = "connect-protocol-version";
+
+// ============================================================================
+// RequestProtocol enum
+// ============================================================================
 
 /// Protocol variant detected from the incoming request.
 ///
@@ -128,9 +144,153 @@ impl RequestProtocol {
     }
 }
 
+// ============================================================================
+// Protocol detection
+// ============================================================================
+
+/// Detect the protocol variant from an incoming request.
+///
+/// For GET requests, checks the `encoding` query parameter.
+/// For POST requests, checks the `Content-Type` header.
+pub fn detect_protocol<B>(req: &Request<B>) -> RequestProtocol {
+    // GET requests: check query param for encoding
+    if *req.method() == Method::GET {
+        if let Some(query) = req.uri().query() {
+            // Parse the encoding parameter
+            // Query format: ?connect=v1&encoding=proto&message=...&base64=1
+            for pair in query.split('&') {
+                if let Some(value) = pair.strip_prefix("encoding=") {
+                    return if value == "proto" {
+                        RequestProtocol::ConnectUnaryProto
+                    } else {
+                        RequestProtocol::ConnectUnaryJson
+                    };
+                }
+            }
+        }
+        // GET without encoding param defaults to JSON
+        return RequestProtocol::ConnectUnaryJson;
+    }
+
+    // POST requests: check Content-Type header
+    let content_type = req
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    RequestProtocol::from_content_type(content_type)
+}
+
+// ============================================================================
+// Protocol version validation
+// ============================================================================
+
+/// Validate the Connect-Protocol-Version header for POST requests.
+///
+/// Returns `Some(ConnectError)` if validation fails, `None` if valid.
+///
+/// When `require_header` is false (default), the header is optional but if present must be "1".
+/// When `require_header` is true, the header is required and must be "1".
+pub fn validate_protocol_version<B>(req: &Request<B>, require_header: bool) -> Option<ConnectError> {
+    let version = req
+        .headers()
+        .get(CONNECT_PROTOCOL_VERSION_HEADER)
+        .and_then(|v| v.to_str().ok());
+
+    match version {
+        // Header present with correct value
+        Some(v) if v == CONNECT_PROTOCOL_VERSION => None,
+        // Header present with wrong value
+        Some(v) => Some(ConnectError::new(
+            Code::InvalidArgument,
+            format!(
+                "connect-protocol-version must be \"{}\": got \"{}\"",
+                CONNECT_PROTOCOL_VERSION, v
+            ),
+        )),
+        // Header not present
+        None if require_header => Some(ConnectError::new(
+            Code::InvalidArgument,
+            format!(
+                "missing required header: set {} to \"{}\"",
+                CONNECT_PROTOCOL_VERSION_HEADER, CONNECT_PROTOCOL_VERSION
+            ),
+        )),
+        None => None,
+    }
+}
+
+// ============================================================================
+// Content-Type validation
+// ============================================================================
+
+/// Validate that the detected protocol is a known Connect content-type.
+///
+/// Returns `Some(ConnectError)` if the content-type is unknown/unsupported.
+/// Returns `None` if the content-type is valid.
+///
+/// Per Connect protocol spec (matching connect-go), unknown content-types
+/// are rejected with `Code::Unknown` (HTTP 500).
+pub fn validate_content_type(protocol: RequestProtocol) -> Option<ConnectError> {
+    if protocol.is_valid() {
+        None
+    } else {
+        Some(ConnectError::new(Code::Unknown, "unsupported content-type"))
+    }
+}
+
+/// Validate that the protocol is appropriate for unary RPC.
+///
+/// Returns `Some(ConnectError)` if a streaming content-type is used for a unary RPC.
+/// Returns `None` if the content-type is valid for unary.
+///
+/// Unary RPCs accept: `application/json`, `application/proto`
+/// Unary RPCs reject: `application/connect+json`, `application/connect+proto`
+pub fn validate_unary_content_type(protocol: RequestProtocol) -> Option<ConnectError> {
+    if protocol.is_unary() {
+        None
+    } else if protocol.is_streaming() {
+        Some(ConnectError::new(
+            Code::Unknown,
+            "streaming content-type not allowed for unary RPC",
+        ))
+    } else {
+        // Unknown protocol - already handled by validate_content_type
+        Some(ConnectError::new(Code::Unknown, "unsupported content-type"))
+    }
+}
+
+/// Validate that the protocol is appropriate for streaming RPC.
+///
+/// Returns `Some(ConnectError)` if a unary content-type is used for a streaming RPC.
+/// Returns `None` if the content-type is valid for streaming.
+///
+/// Streaming RPCs accept: `application/connect+json`, `application/connect+proto`
+/// Streaming RPCs reject: `application/json`, `application/proto`
+pub fn validate_streaming_content_type(protocol: RequestProtocol) -> Option<ConnectError> {
+    if protocol.is_streaming() {
+        None
+    } else if protocol.is_unary() {
+        Some(ConnectError::new(
+            Code::Unknown,
+            "unary content-type not allowed for streaming RPC",
+        ))
+    } else {
+        // Unknown protocol
+        Some(ConnectError::new(Code::Unknown, "unsupported content-type"))
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- RequestProtocol tests ---
 
     #[test]
     fn test_from_content_type() {
@@ -158,7 +318,6 @@ mod tests {
 
     #[test]
     fn test_from_content_type_unknown() {
-        // Unknown content-types should return Unknown variant
         assert_eq!(
             RequestProtocol::from_content_type("text/plain"),
             RequestProtocol::Unknown
@@ -267,5 +426,190 @@ mod tests {
         assert!(RequestProtocol::ConnectStreamJson.is_valid());
         assert!(RequestProtocol::ConnectStreamProto.is_valid());
         assert!(!RequestProtocol::Unknown.is_valid());
+    }
+
+    // --- detect_protocol tests ---
+
+    #[test]
+    fn test_detect_protocol_post_json() {
+        let req = Request::builder()
+            .method(Method::POST)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(())
+            .unwrap();
+        assert_eq!(detect_protocol(&req), RequestProtocol::ConnectUnaryJson);
+    }
+
+    #[test]
+    fn test_detect_protocol_post_proto() {
+        let req = Request::builder()
+            .method(Method::POST)
+            .header(header::CONTENT_TYPE, "application/proto")
+            .body(())
+            .unwrap();
+        assert_eq!(detect_protocol(&req), RequestProtocol::ConnectUnaryProto);
+    }
+
+    #[test]
+    fn test_detect_protocol_post_connect_stream_json() {
+        let req = Request::builder()
+            .method(Method::POST)
+            .header(header::CONTENT_TYPE, "application/connect+json")
+            .body(())
+            .unwrap();
+        assert_eq!(detect_protocol(&req), RequestProtocol::ConnectStreamJson);
+    }
+
+    #[test]
+    fn test_detect_protocol_get_json() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?connect=v1&encoding=json&message=abc")
+            .body(())
+            .unwrap();
+        assert_eq!(detect_protocol(&req), RequestProtocol::ConnectUnaryJson);
+    }
+
+    #[test]
+    fn test_detect_protocol_get_proto() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?connect=v1&encoding=proto&message=abc&base64=1")
+            .body(())
+            .unwrap();
+        assert_eq!(detect_protocol(&req), RequestProtocol::ConnectUnaryProto);
+    }
+
+    #[test]
+    fn test_detect_protocol_get_no_encoding() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?connect=v1&message=abc")
+            .body(())
+            .unwrap();
+        assert_eq!(detect_protocol(&req), RequestProtocol::ConnectUnaryJson);
+    }
+
+    // --- validate_protocol_version tests ---
+
+    #[test]
+    fn test_validate_protocol_version_valid() {
+        let req = Request::builder()
+            .method(Method::POST)
+            .header(CONNECT_PROTOCOL_VERSION_HEADER, "1")
+            .body(())
+            .unwrap();
+        assert!(validate_protocol_version(&req, false).is_none());
+        assert!(validate_protocol_version(&req, true).is_none());
+    }
+
+    #[test]
+    fn test_validate_protocol_version_missing_not_required() {
+        let req = Request::builder().method(Method::POST).body(()).unwrap();
+        assert!(validate_protocol_version(&req, false).is_none());
+    }
+
+    #[test]
+    fn test_validate_protocol_version_missing_required() {
+        let req = Request::builder().method(Method::POST).body(()).unwrap();
+        let err = validate_protocol_version(&req, true);
+        assert!(err.is_some());
+        let err = err.unwrap();
+        assert!(matches!(err.code(), Code::InvalidArgument));
+        assert!(err.message().unwrap().contains("missing required header"));
+    }
+
+    #[test]
+    fn test_validate_protocol_version_wrong_version() {
+        let req = Request::builder()
+            .method(Method::POST)
+            .header(CONNECT_PROTOCOL_VERSION_HEADER, "2")
+            .body(())
+            .unwrap();
+        let err = validate_protocol_version(&req, false);
+        assert!(err.is_some());
+        let err = err.unwrap();
+        assert!(matches!(err.code(), Code::InvalidArgument));
+        assert!(err
+            .message()
+            .unwrap()
+            .contains("connect-protocol-version must be"));
+    }
+
+    // --- validate_content_type tests ---
+
+    #[test]
+    fn test_validate_content_type_known() {
+        assert!(validate_content_type(RequestProtocol::ConnectUnaryJson).is_none());
+        assert!(validate_content_type(RequestProtocol::ConnectUnaryProto).is_none());
+        assert!(validate_content_type(RequestProtocol::ConnectStreamJson).is_none());
+        assert!(validate_content_type(RequestProtocol::ConnectStreamProto).is_none());
+    }
+
+    #[test]
+    fn test_validate_content_type_unknown() {
+        let err = validate_content_type(RequestProtocol::Unknown);
+        assert!(err.is_some());
+        let err = err.unwrap();
+        assert!(matches!(err.code(), Code::Unknown));
+        assert!(err.message().unwrap().contains("unsupported content-type"));
+    }
+
+    #[test]
+    fn test_validate_unary_accepts_unary() {
+        assert!(validate_unary_content_type(RequestProtocol::ConnectUnaryJson).is_none());
+        assert!(validate_unary_content_type(RequestProtocol::ConnectUnaryProto).is_none());
+    }
+
+    #[test]
+    fn test_validate_unary_rejects_streaming() {
+        let err = validate_unary_content_type(RequestProtocol::ConnectStreamJson);
+        assert!(err.is_some());
+        let err = err.unwrap();
+        assert!(matches!(err.code(), Code::Unknown));
+        assert!(err
+            .message()
+            .unwrap()
+            .contains("streaming content-type not allowed for unary"));
+
+        let err = validate_unary_content_type(RequestProtocol::ConnectStreamProto);
+        assert!(err.is_some());
+        assert!(matches!(err.unwrap().code(), Code::Unknown));
+    }
+
+    #[test]
+    fn test_validate_unary_rejects_unknown() {
+        let err = validate_unary_content_type(RequestProtocol::Unknown);
+        assert!(err.is_some());
+        assert!(matches!(err.unwrap().code(), Code::Unknown));
+    }
+
+    #[test]
+    fn test_validate_streaming_accepts_streaming() {
+        assert!(validate_streaming_content_type(RequestProtocol::ConnectStreamJson).is_none());
+        assert!(validate_streaming_content_type(RequestProtocol::ConnectStreamProto).is_none());
+    }
+
+    #[test]
+    fn test_validate_streaming_rejects_unary() {
+        let err = validate_streaming_content_type(RequestProtocol::ConnectUnaryJson);
+        assert!(err.is_some());
+        let err = err.unwrap();
+        assert!(matches!(err.code(), Code::Unknown));
+        assert!(err
+            .message()
+            .unwrap()
+            .contains("unary content-type not allowed for streaming"));
+
+        let err = validate_streaming_content_type(RequestProtocol::ConnectUnaryProto);
+        assert!(err.is_some());
+        assert!(matches!(err.unwrap().code(), Code::Unknown));
+    }
+
+    #[test]
+    fn test_validate_streaming_rejects_unknown() {
+        let err = validate_streaming_content_type(RequestProtocol::Unknown);
+        assert!(err.is_some());
+        assert!(matches!(err.unwrap().code(), Code::Unknown));
     }
 }

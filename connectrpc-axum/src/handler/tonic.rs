@@ -8,7 +8,7 @@ use futures::Stream;
 use std::{future::Future, pin::Pin};
 
 use crate::{
-    context::RequestProtocol,
+    context::Context,
     error::ConnectError,
     message::{ConnectRequest, ConnectResponse, StreamBody},
 };
@@ -200,10 +200,10 @@ macro_rules! impl_handler_for_tonic_compatible_wrapper {
 
             fn call(self, req: Request, state: ()) -> Self::Future {
                 Box::pin(async move {
-                    // Extract protocol from extensions (set by ConnectLayer)
-                    let protocol = req
+                    // Extract pipeline context from extensions (set by ConnectLayer)
+                    let ctx = req
                         .extensions()
-                        .get::<RequestProtocol>()
+                        .get::<Context>()
                         .copied()
                         .unwrap_or_default();
 
@@ -219,8 +219,8 @@ macro_rules! impl_handler_for_tonic_compatible_wrapper {
 
                     // Convert result to response with protocol
                     match result {
-                        Ok(response) => response.into_response_with_protocol(protocol),
-                        Err(err) => err.into_response_with_protocol(protocol),
+                        Ok(response) => response.into_response_with_protocol(ctx.protocol),
+                        Err(err) => err.into_response_with_protocol(ctx.protocol),
                     }
                 })
             }
@@ -246,10 +246,10 @@ macro_rules! impl_handler_for_tonic_compatible_wrapper {
 
             fn call(self, req: Request, state: S) -> Self::Future {
                 Box::pin(async move {
-                    // Extract protocol from extensions (set by ConnectLayer)
-                    let protocol = req
+                    // Extract pipeline context from extensions (set by ConnectLayer)
+                    let ctx = req
                         .extensions()
-                        .get::<RequestProtocol>()
+                        .get::<Context>()
                         .copied()
                         .unwrap_or_default();
 
@@ -268,8 +268,8 @@ macro_rules! impl_handler_for_tonic_compatible_wrapper {
 
                     // Convert result to response with protocol
                     match result {
-                        Ok(response) => response.into_response_with_protocol(protocol),
-                        Err(err) => err.into_response_with_protocol(protocol),
+                        Ok(response) => response.into_response_with_protocol(ctx.protocol),
+                        Err(err) => err.into_response_with_protocol(ctx.protocol),
                     }
                 })
             }
@@ -318,10 +318,10 @@ where
 
     fn call(self, req: Request, _state: ()) -> Self::Future {
         Box::pin(async move {
-            // Extract protocol from extensions (set by ConnectLayer)
-            let protocol = req
+            // Extract pipeline context from extensions (set by ConnectLayer)
+            let ctx = req
                 .extensions()
-                .get::<RequestProtocol>()
+                .get::<Context>()
                 .copied()
                 .unwrap_or_default();
 
@@ -338,9 +338,9 @@ where
             // Convert result to response with protocol
             // For streaming handlers, errors must use streaming framing (EndStream frame)
             match result {
-                Ok(response) => response.into_response_with_protocol(protocol),
+                Ok(response) => response.into_response_with_protocol(ctx.protocol),
                 Err(err) => {
-                    let use_proto = protocol.is_proto();
+                    let use_proto = ctx.protocol.is_proto();
                     err.into_streaming_response(use_proto)
                 }
             }
@@ -364,10 +364,10 @@ where
 
     fn call(self, req: Request, state: S) -> Self::Future {
         Box::pin(async move {
-            // Extract protocol from extensions (set by ConnectLayer)
-            let protocol = req
+            // Extract pipeline context from extensions (set by ConnectLayer)
+            let ctx = req
                 .extensions()
-                .get::<RequestProtocol>()
+                .get::<Context>()
                 .copied()
                 .unwrap_or_default();
 
@@ -387,9 +387,9 @@ where
             // Convert result to response with protocol
             // For streaming handlers, errors must use streaming framing (EndStream frame)
             match result {
-                Ok(response) => response.into_response_with_protocol(protocol),
+                Ok(response) => response.into_response_with_protocol(ctx.protocol),
                 Err(err) => {
-                    let use_proto = protocol.is_proto();
+                    let use_proto = ctx.protocol.is_proto();
                     err.into_streaming_response(use_proto)
                 }
             }

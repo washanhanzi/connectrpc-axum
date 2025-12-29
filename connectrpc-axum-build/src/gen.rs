@@ -565,6 +565,17 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                     pub fn build(self) -> axum::Router<()> {
                         self.router
                     }
+
+                    /// Build with default [`ConnectLayer`] applied.
+                    ///
+                    /// This is a convenience method that applies a default `ConnectLayer`
+                    /// to the router. For custom configuration, use [`build()`] and apply
+                    /// the layer manually.
+                    ///
+                    /// [`ConnectLayer`]: connectrpc_axum::ConnectLayer
+                    pub fn build_connect(self) -> axum::Router<()> {
+                        self.router.layer(connectrpc_axum::ConnectLayer::new())
+                    }
                 }
 
                 #tonic_module_bits

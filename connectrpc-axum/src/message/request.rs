@@ -1,8 +1,7 @@
 //! Extractor for Connect requests.
-use crate::compression::{decompress, Compression, CompressionEncoding};
-use crate::context::{MessageLimits, RequestProtocol};
-use crate::error::Code;
-use crate::error::ConnectError;
+use crate::context::{decompress, CompressionEncoding, Context, MessageLimits};
+use crate::pipeline::RequestPipeline;
+use crate::error::{Code, ConnectError};
 use axum::{
     body::Body,
     extract::{FromRequest, Request},
@@ -12,8 +11,8 @@ use bytes::{Bytes, BytesMut};
 use futures::Stream;
 use http_body_util::BodyExt;
 use prost::Message;
-use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use serde::Deserialize;
 use std::pin::Pin;
 
 #[derive(Debug, Clone)]
@@ -46,49 +45,48 @@ where
     S: Send + Sync,
     T: Message + DeserializeOwned + Default,
 {
-    // Protocol is detected by ConnectLayer middleware and stored in extensions
-    let protocol = req
+    // Get pipeline context from extensions (injected by ConnectLayer)
+    let ctx = req
         .extensions()
-        .get::<RequestProtocol>()
+        .get::<Context>()
         .copied()
-        .unwrap_or_default();
+        .ok_or_else(|| ConnectError::new(Code::Internal, "missing pipeline context"))?;
 
-    // Get message limits from extensions (set by ConnectLayer)
-    let limits = req
-        .extensions()
-        .get::<MessageLimits>()
-        .copied()
-        .unwrap_or_default();
+    // For unary requests without envelope, use the pipeline directly
+    if !ctx.protocol.needs_envelope() {
+        return RequestPipeline::decode::<T>(req)
+            .await
+            .map(ConnectRequest)
+            .map_err(|e| e.into_connect_error());
+    }
 
-    // Get compression context from extensions (set by ConnectLayer for unary)
-    let compression = req
-        .extensions()
-        .get::<Compression>()
-        .copied()
-        .unwrap_or_default();
-
-    let mut bytes = Bytes::from_request(req, _state)
+    // For streaming-style unary (with envelope), handle manually
+    // Read body with size limit
+    let max_size = ctx.limits.max_message_size().unwrap_or(usize::MAX);
+    let mut bytes = axum::body::to_bytes(req.into_body(), max_size)
         .await
-        .map_err(|err| ConnectError::new(Code::Internal, err.to_string()))?;
+        .map_err(|e| {
+            ConnectError::new(
+                Code::ResourceExhausted,
+                format!("failed to read request body: {e}"),
+            )
+        })?;
 
-    // Decompress if request body is compressed (unary only, streaming handled separately)
-    if compression.request != CompressionEncoding::Identity {
-        let decompressed = decompress(&bytes, compression.request)
-            .map_err(|err| ConnectError::new(Code::InvalidArgument, err.to_string()))?;
+    // Decompress if needed
+    if ctx.compression.request_encoding != CompressionEncoding::Identity {
+        let decompressed = decompress(&bytes, ctx.compression.request_encoding)
+            .map_err(|e| ConnectError::new(Code::InvalidArgument, format!("decompression failed: {e}")))?;
         bytes = Bytes::from(decompressed);
     }
 
-    // Check body size against limits (after decompression)
-    limits
+    // Check size after decompression
+    ctx.limits
         .check_size(bytes.len())
-        .map_err(|err| ConnectError::new(Code::ResourceExhausted, err))?;
+        .map_err(|e| ConnectError::new(Code::ResourceExhausted, e))?;
 
-    // For Connect streaming, unwrap the 5-byte frame envelope
+    // Unwrap the 5-byte frame envelope
     // Frame format: [flags:1][length:4][payload:length]
-    // Note: gRPC requests are handled by Tonic via ContentTypeSwitch
-    let needs_frame_unwrap = protocol.needs_envelope();
-
-    if needs_frame_unwrap && bytes.len() >= 5 {
+    if bytes.len() >= 5 {
         let flags = bytes[0];
         let length = u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]) as usize;
 
@@ -125,8 +123,8 @@ where
             ));
         }
         bytes = bytes.slice(5..5 + length);
-    } else if needs_frame_unwrap {
-        // Frame expected but body is too short - this is an error
+    } else {
+        // Frame expected but body is too short
         return Err(ConnectError::new(
             Code::InvalidArgument,
             "protocol error: incomplete envelope",
@@ -134,13 +132,13 @@ where
     }
 
     // Decode based on protocol encoding
-    if protocol.is_proto() {
+    if ctx.protocol.is_proto() {
         let message = T::decode(bytes)
-            .map_err(|err| ConnectError::new(Code::InvalidArgument, err.to_string()))?;
+            .map_err(|e| ConnectError::new(Code::InvalidArgument, e.to_string()))?;
         Ok(ConnectRequest(message))
     } else {
         let message: T = serde_json::from_slice(&bytes)
-            .map_err(|err| ConnectError::new(Code::InvalidArgument, err.to_string()))?;
+            .map_err(|e| ConnectError::new(Code::InvalidArgument, e.to_string()))?;
         Ok(ConnectRequest(message))
     }
 }
@@ -224,24 +222,17 @@ where
             ));
         }
 
-        // Protocol is detected by ConnectLayer middleware and stored in extensions
-        let protocol = req
+        // Get pipeline context from extensions (injected by ConnectLayer)
+        let ctx = req
             .extensions()
-            .get::<RequestProtocol>()
+            .get::<Context>()
             .copied()
-            .unwrap_or_default();
+            .ok_or_else(|| ConnectError::new(Code::Internal, "missing pipeline context"))?;
 
-        // Get message limits from extensions (set by ConnectLayer)
-        let limits = req
-            .extensions()
-            .get::<MessageLimits>()
-            .copied()
-            .unwrap_or_default();
-
-        let use_proto = protocol.is_proto();
+        let use_proto = ctx.protocol.is_proto();
         let body = req.into_body();
 
-        let stream = create_frame_stream::<T>(body, use_proto, limits);
+        let stream = create_frame_stream::<T>(body, use_proto, ctx.limits);
         Ok(ConnectStreamingRequest {
             stream: Box::pin(stream),
         })

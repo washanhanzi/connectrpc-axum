@@ -3,6 +3,8 @@
 //! This module provides configuration for limiting message sizes to prevent
 //! memory exhaustion attacks. The default limit of 4 MB matches gRPC's default.
 
+use crate::error::{Code, ConnectError};
+
 /// Default maximum message size (4 MB), matching gRPC's default receive limit.
 pub const DEFAULT_MAX_MESSAGE_SIZE: usize = 4 * 1024 * 1024;
 
@@ -65,16 +67,41 @@ impl MessageLimits {
         self.max_message_size
     }
 
+    /// Returns the maximum message size for use with axum::body::to_bytes.
+    ///
+    /// Returns `usize::MAX` if unlimited.
+    pub fn max_message_size_or_max(&self) -> usize {
+        self.max_message_size.unwrap_or(usize::MAX)
+    }
+
     /// Check if a message size exceeds the configured limit.
     ///
-    /// Returns `Ok(())` if the size is within limits, or `Err` with a
-    /// descriptive error message if it exceeds the limit.
+    /// Returns `Ok(())` if the size is within limits, or `Err(String)` if it exceeds.
+    /// Use this variant when you need to customize the error handling.
     pub fn check_size(&self, size: usize) -> Result<(), String> {
         if let Some(max) = self.max_message_size {
             if size > max {
                 return Err(format!(
                     "message size {} bytes exceeds maximum allowed size of {} bytes",
                     size, max
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Check if a message size exceeds the configured limit.
+    ///
+    /// Returns `Ok(())` if the size is within limits, or `Err(ConnectError)` if it exceeds.
+    pub fn check_size_connect(&self, size: usize) -> Result<(), ConnectError> {
+        if let Some(max) = self.max_message_size {
+            if size > max {
+                return Err(ConnectError::new(
+                    Code::ResourceExhausted,
+                    format!(
+                        "message size {} bytes exceeds maximum allowed size of {} bytes",
+                        size, max
+                    ),
                 ));
             }
         }
@@ -102,6 +129,7 @@ mod tests {
     fn test_unlimited() {
         let limits = MessageLimits::unlimited();
         assert_eq!(limits.max_message_size(), None);
+        assert_eq!(limits.max_message_size_or_max(), usize::MAX);
     }
 
     #[test]
@@ -119,6 +147,15 @@ mod tests {
         let err_msg = result.unwrap_err();
         assert!(err_msg.contains("1025"));
         assert!(err_msg.contains("1024"));
+    }
+
+    #[test]
+    fn test_check_size_connect_exceeds_limit() {
+        let limits = MessageLimits::new(1024);
+        let result = limits.check_size_connect(1025);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err.code(), Code::ResourceExhausted));
     }
 
     #[test]

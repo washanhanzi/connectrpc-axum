@@ -1,28 +1,17 @@
 //! Middleware layer for Connect RPC protocol handling.
 //!
-//! The [`ConnectLayer`] middleware detects the protocol variant from incoming requests
-//! and stores it in request extensions so that response encoding can match the request format.
+//! The [`ConnectLayer`] middleware detects the protocol variant from incoming requests,
+//! builds a [`Context`], and stores it in request extensions for use by pipelines.
 
-mod content_type;
-mod protocol;
-mod protocol_version;
-mod timeout;
-
-pub(crate) use content_type::{validate_streaming_content_type, validate_unary_content_type};
-
-use crate::compression::{
-    negotiate_response_encoding, Compression, CompressionConfig, CompressionEncoding,
-};
-use crate::context::MessageLimits;
+use crate::context::{CompressionConfig, Context, MessageLimits, ServerConfig};
 use crate::error::{Code, ConnectError};
-use axum::http::header::{ACCEPT_ENCODING, CONTENT_ENCODING};
-use axum::http::{Method, Request};
+use axum::http::Request;
 use axum::response::Response;
 use std::time::Duration;
 use std::{
     future::Future,
     pin::Pin,
-    task::{Context, Poll},
+    task::{Context as TaskContext, Poll},
 };
 use tower::{Layer, Service, ServiceExt};
 
@@ -31,9 +20,8 @@ use tower::{Layer, Service, ServiceExt};
 /// This layer:
 /// 1. Detects the protocol variant from the request (Content-Type header or query params)
 /// 2. Validates protocol version header (if configured)
-/// 3. Stores the [`RequestProtocol`] and [`MessageLimits`] in request extensions
-/// 4. Handler wrappers extract the protocol and inject it into response types
-/// 5. Request extractors enforce message size limits
+/// 3. Builds a [`Context`] with protocol, limits, compression, and timeout
+/// 4. Stores the context in request extensions for use by request/response pipelines
 ///
 /// # Example
 ///
@@ -57,13 +45,7 @@ use tower::{Layer, Service, ServiceExt};
 ///
 #[derive(Debug, Clone, Copy)]
 pub struct ConnectLayer {
-    limits: MessageLimits,
-    require_protocol_header: bool,
-    /// Server-side maximum timeout. If set, the effective timeout is
-    /// min(server_timeout, client_timeout) where client_timeout comes from
-    /// the Connect-Timeout-Ms header.
-    server_timeout: Option<Duration>,
-    compression: CompressionConfig,
+    config: ServerConfig,
 }
 
 impl Default for ConnectLayer {
@@ -76,16 +58,13 @@ impl ConnectLayer {
     /// Create a new ConnectLayer with default message limits (4 MB).
     pub fn new() -> Self {
         Self {
-            limits: MessageLimits::default(),
-            require_protocol_header: false,
-            server_timeout: None,
-            compression: CompressionConfig::default(),
+            config: ServerConfig::default(),
         }
     }
 
     /// Set custom message limits.
     pub fn limits(mut self, limits: MessageLimits) -> Self {
-        self.limits = limits;
+        self.config.limits = limits;
         self
     }
 
@@ -96,7 +75,7 @@ impl ConnectLayer {
     ///
     /// Disabled by default to allow easy ad-hoc requests (e.g., with cURL).
     pub fn require_protocol_header(mut self, require: bool) -> Self {
-        self.require_protocol_header = require;
+        self.config.require_protocol_header = require;
         self
     }
 
@@ -119,7 +98,7 @@ impl ConnectLayer {
     ///     .timeout(Duration::from_secs(30));
     /// ```
     pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.server_timeout = Some(timeout);
+        self.config.server_timeout = Some(timeout);
         self
     }
 
@@ -142,7 +121,7 @@ impl ConnectLayer {
     ///     .compression(CompressionConfig::disabled());
     /// ```
     pub fn compression(mut self, config: CompressionConfig) -> Self {
-        self.compression = config;
+        self.config.compression = config;
         self
     }
 }
@@ -153,10 +132,7 @@ impl<S> Layer<S> for ConnectLayer {
     fn layer(&self, inner: S) -> Self::Service {
         ConnectService {
             inner,
-            limits: self.limits,
-            require_protocol_header: self.require_protocol_header,
-            server_timeout: self.server_timeout,
-            compression: self.compression,
+            config: self.config,
         }
     }
 }
@@ -165,10 +141,7 @@ impl<S> Layer<S> for ConnectLayer {
 #[derive(Debug, Clone)]
 pub struct ConnectService<S> {
     inner: S,
-    limits: MessageLimits,
-    require_protocol_header: bool,
-    server_timeout: Option<Duration>,
-    compression: CompressionConfig,
+    config: ServerConfig,
 }
 
 impl<S, ReqBody> Service<Request<ReqBody>> for ConnectService<S>
@@ -182,87 +155,28 @@ where
     type Error = S::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Response, S::Error>> + Send>>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, cx: &mut TaskContext<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx)
     }
 
     fn call(&mut self, mut req: Request<ReqBody>) -> Self::Future {
-        // Detect protocol from request and store in extensions
-        let protocol = protocol::detect_protocol(&req);
-        req.extensions_mut().insert(protocol);
-
-        // Validate for POST requests:
-        // - Content-Type is a known Connect protocol type
-        // - Protocol version header (if configured)
-        // GET requests use ?connect=v1 query param, validated in request.rs
-        if *req.method() == Method::POST {
-            // Validate known content-type
-            if let Some(err) = content_type::validate_content_type(protocol) {
-                let response = err.into_response_with_protocol(protocol);
+        // 1. Build request context from request headers
+        let request_ctx = match Context::from_request(&req, &self.config) {
+            Ok(ctx) => ctx,
+            Err(err) => {
+                let response = err.into_response();
                 return Box::pin(async move { Ok(response) });
             }
+        };
 
-            // Validate protocol version header
-            if let Some(err) =
-                protocol_version::validate_protocol_version(&req, self.require_protocol_header)
-            {
-                // Return error response immediately without calling inner service
-                let response = err.into_response_with_protocol(protocol);
-                return Box::pin(async move { Ok(response) });
-            }
-
-            // Handle compression for unary requests only
-            // Streaming uses Connect-Content-Encoding/Connect-Accept-Encoding instead
-            if protocol.is_unary() {
-                // Validate Content-Encoding header
-                let content_encoding = req
-                    .headers()
-                    .get(CONTENT_ENCODING)
-                    .and_then(|v| v.to_str().ok());
-
-                let request_encoding = match CompressionEncoding::from_header(content_encoding) {
-                    Some(enc) => enc,
-                    None => {
-                        let err = ConnectError::new(
-                            Code::Unimplemented,
-                            format!(
-                                "unsupported compression \"{}\": supported encodings are gzip, identity",
-                                content_encoding.unwrap_or("")
-                            ),
-                        );
-                        let response = err.into_response_with_protocol(protocol);
-                        return Box::pin(async move { Ok(response) });
-                    }
-                };
-
-                // Negotiate response encoding from Accept-Encoding
-                let accept_encoding = req
-                    .headers()
-                    .get(ACCEPT_ENCODING)
-                    .and_then(|v| v.to_str().ok());
-                let response_encoding = negotiate_response_encoding(accept_encoding);
-
-                // Store compression context in extensions
-                req.extensions_mut().insert(Compression {
-                    response: response_encoding,
-                    request: request_encoding,
-                });
-            }
+        // 2. Validate protocol requirements
+        if let Err(err) = request_ctx.validate(&req, &self.config) {
+            let response = err.into_response();
+            return Box::pin(async move { Ok(response) });
         }
 
-        // Store message limits in extensions for request extractors
-        req.extensions_mut().insert(self.limits);
-
-        // Store compression config in extensions for response handling
-        req.extensions_mut().insert(self.compression);
-
-        // Parse Connect-Timeout-Ms header and compute effective timeout
-        let client_timeout = timeout::parse_timeout(&req);
-        let effective_timeout =
-            timeout::compute_effective_timeout(self.server_timeout, client_timeout);
-
-        // Store effective timeout in extensions (for handlers that need to know)
-        // req.extensions_mut().insert(effective_timeout);
+        // 3. Store context in request extensions
+        req.extensions_mut().insert(request_ctx);
 
         // Clone inner service for the async block
         let inner = self.inner.clone();
@@ -271,7 +185,7 @@ where
 
         Box::pin(async move {
             // Apply timeout if configured
-            match effective_timeout.duration() {
+            match request_ctx.timeout {
                 Some(duration) => {
                     match tokio::time::timeout(duration, inner.oneshot(req)).await {
                         Ok(result) => result,
@@ -281,7 +195,7 @@ where
                                 Code::DeadlineExceeded,
                                 "request timeout exceeded",
                             );
-                            Ok(err.into_response_with_protocol(protocol))
+                            Ok(err.into_response_with_protocol(request_ctx.protocol))
                         }
                     }
                 }

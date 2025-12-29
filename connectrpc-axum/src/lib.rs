@@ -1,9 +1,9 @@
-pub mod compression;
 pub mod context;
 pub mod error;
 pub mod handler;
 pub mod layer;
 pub mod message;
+pub mod pipeline;
 pub mod service_builder;
 #[cfg(feature = "tonic")]
 pub mod tonic;
@@ -11,17 +11,24 @@ pub mod tonic;
 // Re-export key types at the crate root for convenience
 #[cfg(feature = "tonic")]
 pub use crate::tonic::{ContentTypeSwitch, TonicCompatible};
-pub use compression::{CompressionConfig, CompressionEncoding};
-pub use context::{ConnectTimeout, DEFAULT_MAX_MESSAGE_SIZE, MessageLimits, RequestProtocol};
+// Re-export from context module
+pub use context::{
+    compress, compute_effective_timeout, decompress, detect_protocol, negotiate_response_encoding,
+    parse_timeout, Compression, CompressionConfig, CompressionContext, CompressionEncoding,
+    ConnectTimeout, ContextError, Context, MessageLimits, RequestProtocol, ServerConfig,
+    CONNECT_TIMEOUT_MS_HEADER, DEFAULT_MAX_MESSAGE_SIZE,
+};
+// Re-export from pipeline module
+pub use pipeline::{RequestPipeline, ResponsePipeline};
 #[cfg(feature = "tonic")]
 pub use handler::{
-    BoxedCall, IntoFactory, TonicCompatibleHandlerWrapper, post_connect_tonic,
-    unimplemented_boxed_call,
+    post_connect_tonic, unimplemented_boxed_call, BoxedCall, IntoFactory,
+    TonicCompatibleHandlerWrapper,
 };
 pub use handler::{
-    ConnectBidiStreamHandler, ConnectBidiStreamHandlerWrapper, ConnectClientStreamHandler,
-    ConnectClientStreamHandlerWrapper, ConnectHandler, ConnectHandlerWrapper, post_connect,
-    post_connect_bidi_stream, post_connect_client_stream,
+    post_connect, post_connect_bidi_stream, post_connect_client_stream, ConnectBidiStreamHandler,
+    ConnectBidiStreamHandlerWrapper, ConnectClientStreamHandler, ConnectClientStreamHandlerWrapper,
+    ConnectHandler, ConnectHandlerWrapper,
 };
 pub use layer::{ConnectLayer, ConnectService};
 pub use service_builder::MakeServiceBuilder;
@@ -37,24 +44,30 @@ pub use prelude::*;
 
 pub mod prelude {
     //! A prelude for `axum-connect` providing the most common types.
-    pub use crate::compression::{CompressionConfig, CompressionEncoding};
     pub use crate::context::{
-        ConnectTimeout, DEFAULT_MAX_MESSAGE_SIZE, MessageLimits, RequestProtocol,
+        compress, compute_effective_timeout, decompress, detect_protocol,
+        negotiate_response_encoding, parse_timeout, Compression, CompressionConfig,
+        CompressionContext, CompressionEncoding, ConnectTimeout, ContextError, Context,
+        MessageLimits, RequestProtocol, ServerConfig, CONNECT_TIMEOUT_MS_HEADER,
+        DEFAULT_MAX_MESSAGE_SIZE,
     };
+    pub use crate::pipeline::{RequestPipeline, ResponsePipeline};
     pub use crate::error::{Code, ConnectError};
     #[cfg(feature = "tonic")]
     pub use crate::handler::{
-        BoxedCall, IntoFactory, TonicCompatibleHandlerWrapper, post_connect_tonic,
-        unimplemented_boxed_call,
+        post_connect_tonic, unimplemented_boxed_call, BoxedCall, IntoFactory,
+        TonicCompatibleHandlerWrapper,
     };
     pub use crate::handler::{
-        ConnectBidiStreamHandler, ConnectBidiStreamHandlerWrapper, ConnectClientStreamHandler,
-        ConnectClientStreamHandlerWrapper, ConnectHandler, ConnectHandlerWrapper,
-        ConnectStreamHandlerWrapper, post_connect, post_connect_bidi_stream,
-        post_connect_client_stream, post_connect_stream,
+        post_connect, post_connect_bidi_stream, post_connect_client_stream,
+        post_connect_stream, ConnectBidiStreamHandler, ConnectBidiStreamHandlerWrapper,
+        ConnectClientStreamHandler, ConnectClientStreamHandlerWrapper, ConnectHandler,
+        ConnectHandlerWrapper, ConnectStreamHandlerWrapper,
     };
     pub use crate::layer::{ConnectLayer, ConnectService};
-    pub use crate::message::{ConnectRequest, ConnectResponse, ConnectStreamResponse, ConnectStreamingRequest, StreamBody};
+    pub use crate::message::{
+        ConnectRequest, ConnectResponse, ConnectStreamResponse, ConnectStreamingRequest, StreamBody,
+    };
     pub use crate::service_builder::MakeServiceBuilder;
     #[cfg(feature = "tonic")]
     pub use crate::tonic::{ContentTypeSwitch, TonicCompatible};

@@ -1,15 +1,153 @@
-//! Common types for Connect RPC request handling.
+//! Context and common types for Connect RPC request handling.
 //!
-//! This module provides types used by both the [`ConnectLayer`] middleware
+//! This module provides types used by the [`ConnectLayer`] middleware
 //! and request extensions, including protocol detection, timeout configuration,
-//! and message size limits.
+//! compression, and message size limits.
 //!
 //! [`ConnectLayer`]: crate::layer::ConnectLayer
 
+pub mod compression;
+pub mod config;
+pub mod error;
 pub mod limit;
 pub mod protocol;
 pub mod timeout;
 
-pub use limit::{DEFAULT_MAX_MESSAGE_SIZE, MessageLimits};
-pub use protocol::RequestProtocol;
-pub use timeout::ConnectTimeout;
+use axum::http::{Method, Request};
+use std::time::Duration;
+
+// Re-export compression types and functions
+pub use compression::{
+    compress, decompress, negotiate_response_encoding, parse_compression, Compression,
+    CompressionConfig, CompressionEncoding,
+};
+
+// Re-export config types
+pub use config::ServerConfig;
+
+// Re-export error types
+pub use error::ContextError;
+
+// Re-export limit types
+pub use limit::{MessageLimits, DEFAULT_MAX_MESSAGE_SIZE};
+
+// Re-export protocol types and functions
+pub use protocol::{
+    detect_protocol, validate_content_type, validate_protocol_version,
+    validate_streaming_content_type, validate_unary_content_type, RequestProtocol,
+    CONNECT_PROTOCOL_VERSION, CONNECT_PROTOCOL_VERSION_HEADER,
+};
+
+// Re-export timeout types and functions
+pub use timeout::{
+    compute_effective_timeout, parse_timeout, parse_timeout_ms, ConnectTimeout,
+    CONNECT_TIMEOUT_MS_HEADER,
+};
+
+// ============================================================================
+// Context - per-request negotiated state
+// ============================================================================
+
+/// Per-request context built from headers and server config.
+///
+/// Created by ConnectLayer, stored in request extensions.
+/// Used by pipelines to process messages.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Context {
+    /// Protocol variant (unary/streaming, json/proto)
+    pub protocol: RequestProtocol,
+    /// Compression settings
+    pub compression: CompressionContext,
+    /// Effective timeout (min of server and client)
+    pub timeout: Option<Duration>,
+    /// Message size limits
+    pub limits: MessageLimits,
+}
+
+/// Compression context for a single request.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CompressionContext {
+    /// Encoding of incoming request body (from Content-Encoding header)
+    pub request_encoding: CompressionEncoding,
+    /// Negotiated encoding for response (from Accept-Encoding header)
+    pub response_encoding: CompressionEncoding,
+    /// Minimum bytes before compression is applied
+    pub min_compress_bytes: usize,
+}
+
+impl CompressionContext {
+    /// Create a new compression context.
+    pub fn new(
+        request_encoding: CompressionEncoding,
+        response_encoding: CompressionEncoding,
+        min_compress_bytes: usize,
+    ) -> Self {
+        Self {
+            request_encoding,
+            response_encoding,
+            min_compress_bytes,
+        }
+    }
+}
+
+impl Context {
+    /// Build request context from request headers and server config.
+    ///
+    /// Detects protocol, parses compression headers, and computes timeout.
+    /// Returns error only for malformed headers (e.g., unsupported compression).
+    ///
+    /// Call [`validate`] after building to check protocol requirements.
+    pub fn from_request<B>(req: &Request<B>, config: &ServerConfig) -> Result<Self, ContextError> {
+        // Detect protocol from Content-Type or query params
+        let protocol = detect_protocol(req);
+
+        // Parse compression for unary POST requests
+        let compression = if protocol.is_unary() && *req.method() == Method::POST {
+            match parse_compression(req) {
+                Ok(c) => {
+                    CompressionContext::new(c.request, c.response, config.compression.min_bytes)
+                }
+                Err(err) => return Err(ContextError::from(err).with_protocol(protocol)),
+            }
+        } else {
+            CompressionContext::default()
+        };
+
+        // Compute effective timeout
+        let client_timeout = parse_timeout(req);
+        let timeout = compute_effective_timeout(config.server_timeout, client_timeout);
+
+        Ok(Self {
+            protocol,
+            compression,
+            timeout,
+            limits: config.limits,
+        })
+    }
+
+    /// Validate protocol requirements for the request.
+    ///
+    /// Checks:
+    /// - Content-Type maps to a known protocol variant
+    /// - Connect-Protocol-Version header is present (if required by config)
+    ///
+    /// Returns `Ok(())` if valid, or `Err(ContextError)` if validation fails.
+    pub fn validate<B>(&self, req: &Request<B>, config: &ServerConfig) -> Result<(), ContextError> {
+        // Only validate POST requests
+        if *req.method() != Method::POST {
+            return Ok(());
+        }
+
+        // Check content-type is known
+        if let Some(err) = validate_content_type(self.protocol) {
+            return Err(ContextError::from(err).with_protocol(self.protocol));
+        }
+
+        // Check protocol version header
+        if let Some(err) = validate_protocol_version(req, config.require_protocol_header) {
+            return Err(ContextError::from(err).with_protocol(self.protocol));
+        }
+
+        Ok(())
+    }
+}

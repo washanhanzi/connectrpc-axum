@@ -7,10 +7,8 @@ use axum::{
 use std::{future::Future, pin::Pin};
 
 use crate::{
-    compression::{Compression, CompressionConfig},
-    context::RequestProtocol,
+    context::{validate_streaming_content_type, validate_unary_content_type, Context},
     error::ConnectError,
-    layer::{validate_streaming_content_type, validate_unary_content_type},
     message::{ConnectRequest, ConnectResponse, ConnectStreamingRequest, StreamBody},
 };
 use futures::Stream;
@@ -26,8 +24,8 @@ pub use tonic::*;
 ///
 /// Unary handlers only accept unary content-types (`application/json`, `application/proto`).
 /// Streaming content-types are rejected with `Code::Unknown`.
-fn validate_unary_protocol(protocol: RequestProtocol) -> Option<Response> {
-    validate_unary_content_type(protocol).map(|err| err.into_response_with_protocol(protocol))
+fn validate_unary_protocol(ctx: &Context) -> Option<Response> {
+    validate_unary_content_type(ctx.protocol).map(|err| err.into_response_with_protocol(ctx.protocol))
 }
 
 /// Validate protocol for streaming handlers. Returns error response if invalid.
@@ -35,9 +33,9 @@ fn validate_unary_protocol(protocol: RequestProtocol) -> Option<Response> {
 /// Streaming handlers only accept streaming content-types
 /// (`application/connect+json`, `application/connect+proto`).
 /// Unary content-types are rejected with `Code::Unknown`.
-fn validate_streaming_protocol(protocol: RequestProtocol) -> Option<Response> {
-    validate_streaming_content_type(protocol).map(|err| {
-        let use_proto = protocol.is_proto();
+fn validate_streaming_protocol(ctx: &Context) -> Option<Response> {
+    validate_streaming_content_type(ctx.protocol).map(|err| {
+        let use_proto = ctx.protocol.is_proto();
         err.into_streaming_response(use_proto)
     })
 }
@@ -90,28 +88,15 @@ where
 
     fn call(self, req: Request, _state: ()) -> Self::Future {
         Box::pin(async move {
-            // Extract protocol from extensions (set by ConnectLayer)
-            let protocol = req
+            // Extract pipeline context from extensions (set by ConnectLayer)
+            let ctx = req
                 .extensions()
-                .get::<RequestProtocol>()
-                .copied()
-                .unwrap_or_default();
-
-            // Extract compression context from extensions (set by ConnectLayer for unary)
-            let compression = req
-                .extensions()
-                .get::<Compression>()
-                .copied()
-                .unwrap_or_default();
-
-            let compression_config = req
-                .extensions()
-                .get::<CompressionConfig>()
+                .get::<Context>()
                 .copied()
                 .unwrap_or_default();
 
             // Validate: unary handlers only accept unary content-types
-            if let Some(err_response) = validate_unary_protocol(protocol) {
+            if let Some(err_response) = validate_unary_protocol(&ctx) {
                 return err_response;
             }
 
@@ -125,12 +110,10 @@ where
             // Note: Timeout is enforced by ConnectLayer, not here
             let result = (self.0)(connect_req).await;
 
-            // Convert result to response with compression
+            // Convert result to response using pipeline context
             match result {
-                Ok(response) => {
-                    response.into_response_with_compression(protocol, compression, compression_config)
-                }
-                Err(err) => err.into_response_with_protocol(protocol),
+                Ok(response) => response.into_response_with_context(&ctx),
+                Err(err) => err.into_response_with_protocol(ctx.protocol),
             }
         })
     }
@@ -162,28 +145,15 @@ macro_rules! impl_handler_for_connect_handler_wrapper {
             #[allow(unused_mut)]
             fn call(self, req: Request, state: S) -> Self::Future {
                 Box::pin(async move {
-                    // Extract protocol from extensions (set by ConnectLayer)
-                    let protocol = req
+                    // Extract pipeline context from extensions (set by ConnectLayer)
+                    let ctx = req
                         .extensions()
-                        .get::<RequestProtocol>()
-                        .copied()
-                        .unwrap_or_default();
-
-                    // Extract compression context from extensions (set by ConnectLayer for unary)
-                    let compression = req
-                        .extensions()
-                        .get::<Compression>()
-                        .copied()
-                        .unwrap_or_default();
-
-                    let compression_config = req
-                        .extensions()
-                        .get::<CompressionConfig>()
+                        .get::<Context>()
                         .copied()
                         .unwrap_or_default();
 
                     // Validate: unary handlers only accept unary content-types
-                    if let Some(err_response) = validate_unary_protocol(protocol) {
+                    if let Some(err_response) = validate_unary_protocol(&ctx) {
                         return err_response;
                     }
 
@@ -211,12 +181,10 @@ macro_rules! impl_handler_for_connect_handler_wrapper {
                     // Note: Timeout is enforced by ConnectLayer, not here
                     let result = (self.0)($($A,)* connect_req).await;
 
-                    // Convert result to response with compression
+                    // Convert result to response using pipeline context
                     match result {
-                        Ok(response) => {
-                            response.into_response_with_compression(protocol, compression, compression_config)
-                        }
-                        Err(err) => err.into_response_with_protocol(protocol),
+                        Ok(response) => response.into_response_with_context(&ctx),
+                        Err(err) => err.into_response_with_protocol(ctx.protocol),
                     }
                 })
             }
@@ -265,15 +233,15 @@ where
 
     fn call(self, req: Request, _state: ()) -> Self::Future {
         Box::pin(async move {
-            // Extract protocol from extensions (set by ConnectLayer)
-            let protocol = req
+            // Extract pipeline context from extensions (set by ConnectLayer)
+            let ctx = req
                 .extensions()
-                .get::<RequestProtocol>()
+                .get::<Context>()
                 .copied()
                 .unwrap_or_default();
 
             // Validate: streaming handlers only accept streaming content-types
-            if let Some(err_response) = validate_streaming_protocol(protocol) {
+            if let Some(err_response) = validate_streaming_protocol(&ctx) {
                 return err_response;
             }
 
@@ -290,9 +258,9 @@ where
             // Convert result to response with protocol
             // For streaming handlers, errors must use streaming framing (EndStream frame)
             match result {
-                Ok(response) => response.into_response_with_protocol(protocol),
+                Ok(response) => response.into_response_with_protocol(ctx.protocol),
                 Err(err) => {
-                    let use_proto = protocol.is_proto();
+                    let use_proto = ctx.protocol.is_proto();
                     err.into_streaming_response(use_proto)
                 }
             }
@@ -326,15 +294,15 @@ macro_rules! impl_handler_for_connect_stream_handler_wrapper {
             #[allow(unused_mut)]
             fn call(self, req: Request, state: S) -> Self::Future {
                 Box::pin(async move {
-                    // Extract protocol from extensions (set by ConnectLayer)
-                    let protocol = req
+                    // Extract pipeline context from extensions (set by ConnectLayer)
+                    let ctx = req
                         .extensions()
-                        .get::<RequestProtocol>()
+                        .get::<Context>()
                         .copied()
                         .unwrap_or_default();
 
                     // Validate: streaming handlers only accept streaming content-types
-                    if let Some(err_response) = validate_streaming_protocol(protocol) {
+                    if let Some(err_response) = validate_streaming_protocol(&ctx) {
                         return err_response;
                     }
 
@@ -365,9 +333,9 @@ macro_rules! impl_handler_for_connect_stream_handler_wrapper {
                     // Convert result to response with protocol
                     // For streaming handlers, errors must use streaming framing (EndStream frame)
                     match result {
-                        Ok(response) => response.into_response_with_protocol(protocol),
+                        Ok(response) => response.into_response_with_protocol(ctx.protocol),
                         Err(err) => {
-                            let use_proto = protocol.is_proto();
+                            let use_proto = ctx.protocol.is_proto();
                             err.into_streaming_response(use_proto)
                         }
                     }
@@ -418,15 +386,15 @@ where
 
     fn call(self, req: Request, _state: ()) -> Self::Future {
         Box::pin(async move {
-            // Extract protocol from extensions (set by ConnectLayer)
-            let protocol = req
+            // Extract pipeline context from extensions (set by ConnectLayer)
+            let ctx = req
                 .extensions()
-                .get::<RequestProtocol>()
+                .get::<Context>()
                 .copied()
                 .unwrap_or_default();
 
             // Validate: streaming handlers only accept streaming content-types
-            if let Some(err_response) = validate_streaming_protocol(protocol) {
+            if let Some(err_response) = validate_streaming_protocol(&ctx) {
                 return err_response;
             }
 
@@ -444,9 +412,9 @@ where
             // Client streaming uses streaming framing for the response
             // (single message frame + EndStreamResponse)
             match result {
-                Ok(response) => response.into_streaming_response_with_protocol(protocol),
+                Ok(response) => response.into_streaming_response_with_protocol(ctx.protocol),
                 Err(err) => {
-                    let use_proto = protocol.is_proto();
+                    let use_proto = ctx.protocol.is_proto();
                     err.into_streaming_response(use_proto)
                 }
             }
@@ -494,15 +462,15 @@ where
 
     fn call(self, req: Request, _state: ()) -> Self::Future {
         Box::pin(async move {
-            // Extract protocol from extensions (set by ConnectLayer)
-            let protocol = req
+            // Extract pipeline context from extensions (set by ConnectLayer)
+            let ctx = req
                 .extensions()
-                .get::<RequestProtocol>()
+                .get::<Context>()
                 .copied()
                 .unwrap_or_default();
 
             // Validate: streaming handlers only accept streaming content-types
-            if let Some(err_response) = validate_streaming_protocol(protocol) {
+            if let Some(err_response) = validate_streaming_protocol(&ctx) {
                 return err_response;
             }
 
@@ -519,9 +487,9 @@ where
             // Convert result to response with protocol
             // For streaming responses, errors must use streaming framing (EndStream frame)
             match result {
-                Ok(response) => response.into_response_with_protocol(protocol),
+                Ok(response) => response.into_response_with_protocol(ctx.protocol),
                 Err(err) => {
-                    let use_proto = protocol.is_proto();
+                    let use_proto = ctx.protocol.is_proto();
                     err.into_streaming_response(use_proto)
                 }
             }

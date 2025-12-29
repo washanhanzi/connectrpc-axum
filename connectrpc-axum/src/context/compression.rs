@@ -2,6 +2,9 @@
 //!
 //! Uses standard HTTP headers: `Content-Encoding` / `Accept-Encoding`.
 
+use crate::error::{Code, ConnectError};
+use axum::http::header::{ACCEPT_ENCODING, CONTENT_ENCODING};
+use axum::http::Request;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression as GzipLevel;
@@ -79,6 +82,43 @@ pub fn negotiate_response_encoding(accept: Option<&str>) -> CompressionEncoding 
         Some(s) if s.contains("gzip") => CompressionEncoding::Gzip,
         _ => CompressionEncoding::Identity,
     }
+}
+
+/// Parse compression settings from request headers.
+///
+/// Extracts `Content-Encoding` and `Accept-Encoding` headers to determine
+/// request decompression and response compression encodings.
+///
+/// Returns `Err(ConnectError)` if the Content-Encoding is unsupported.
+pub fn parse_compression<B>(req: &Request<B>) -> Result<Compression, ConnectError> {
+    let content_encoding = req
+        .headers()
+        .get(CONTENT_ENCODING)
+        .and_then(|v| v.to_str().ok());
+
+    let request_encoding = match CompressionEncoding::from_header(content_encoding) {
+        Some(enc) => enc,
+        None => {
+            return Err(ConnectError::new(
+                Code::Unimplemented,
+                format!(
+                    "unsupported compression \"{}\": supported encodings are gzip, identity",
+                    content_encoding.unwrap_or("")
+                ),
+            ));
+        }
+    };
+
+    let accept_encoding = req
+        .headers()
+        .get(ACCEPT_ENCODING)
+        .and_then(|v| v.to_str().ok());
+    let response_encoding = negotiate_response_encoding(accept_encoding);
+
+    Ok(Compression {
+        request: request_encoding,
+        response: response_encoding,
+    })
 }
 
 pub fn compress(bytes: &[u8], encoding: CompressionEncoding) -> io::Result<Vec<u8>> {
