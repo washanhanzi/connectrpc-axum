@@ -10,8 +10,7 @@ use std::{future::Future, pin::Pin};
 use crate::{
     context::RequestProtocol,
     error::ConnectError,
-    request::ConnectRequest,
-    response::{ConnectResponse, StreamBody},
+    message::{ConnectRequest, ConnectResponse, StreamBody},
 };
 
 // =============== Factory trait for deferred handler boxing ===============

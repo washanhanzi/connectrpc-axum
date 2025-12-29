@@ -9,8 +9,7 @@ use std::{future::Future, pin::Pin};
 use crate::{
     context::RequestProtocol,
     error::ConnectError,
-    request::{ConnectRequest, ConnectStreamingRequest},
-    response::{ConnectResponse, StreamBody},
+    message::{ConnectRequest, ConnectResponse, ConnectStreamingRequest, StreamBody},
 };
 use futures::Stream;
 use prost::Message;

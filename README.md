@@ -36,14 +36,14 @@ This project provides [slash commands](https://docs.anthropic.com/en/docs/claude
 
 | Command | Description |
 |---------|-------------|
-| `/submit-issue` | Report bugs, request features, or ask questions |
-| `/test` | Run the full test suite |
+| `/connectrpc-axum:submit-issue` | Report bugs, request features, or ask questions |
+| `/connectrpc-axum:test` | Run the full test suite |
 
 Usage:
 
 ```bash
-claude /submit-issue "Description of your issue or feature request"
-claude /test
+claude /connectrpc-axum:submit-issue "Description of your issue or feature request"
+claude /connectrpc-axum:test
 ```
 
 If not using Claude Code, see the corresponding skill files in [`.claude/skills/`](.claude/skills/) for instructions.

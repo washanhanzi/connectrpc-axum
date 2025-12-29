@@ -9,7 +9,7 @@
 //! Test with: ./client connect-bidi
 
 use connectrpc_axum::prelude::*;
-use connectrpc_axum::request::ConnectStreamingRequest;
+use connectrpc_axum::message::ConnectStreamingRequest;
 use connectrpc_axum_examples::{EchoRequest, EchoResponse};
 use futures::{Stream, StreamExt};
 use hyper::server::conn::http2;

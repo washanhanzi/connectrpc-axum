@@ -362,7 +362,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                                         &self,
                                         request: ::tonic::Request<#request_type>,
                                     ) -> Result<::tonic::Response<Self::#assoc>, ::tonic::Status> {
-                                        let req = connectrpc_axum::request::ConnectRequest(request.into_inner());
+                                        let req = connectrpc_axum::message::ConnectRequest(request.into_inner());
                                         match (self.#method_name)(req).await {
                                             Ok(response) => {
                                                 // Extract the stream from StreamBody
@@ -385,7 +385,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                                         &self,
                                         request: ::tonic::Request<#request_type>,
                                     ) -> Result<::tonic::Response<#response_type>, ::tonic::Status> {
-                                        let req = connectrpc_axum::request::ConnectRequest(request.into_inner());
+                                        let req = connectrpc_axum::message::ConnectRequest(request.into_inner());
                                         match (self.#method_name)(req).await {
                                             Ok(response) => Ok(::tonic::Response::new(response.into_inner())),
                                             Err(err) => Err(err.into()),

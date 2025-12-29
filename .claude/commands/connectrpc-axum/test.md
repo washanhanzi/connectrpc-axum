@@ -1,3 +1,7 @@
+---
+description: Run the full test suite for connectrpc-axum
+---
+
 # Test Command
 
 Run the full test suite for connectrpc-axum.

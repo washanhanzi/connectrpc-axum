@@ -2,11 +2,8 @@ pub mod context;
 pub mod error;
 pub mod handler;
 pub mod layer;
-pub mod limits;
-pub mod request;
-pub mod response;
+pub mod message;
 pub mod service_builder;
-pub mod stream_response;
 #[cfg(feature = "tonic")]
 pub mod tonic;
 
@@ -54,10 +51,8 @@ pub mod prelude {
         post_connect_client_stream, post_connect_stream,
     };
     pub use crate::layer::{ConnectLayer, ConnectService};
-    pub use crate::request::{ConnectRequest, ConnectStreamingRequest};
-    pub use crate::response::{ConnectResponse, StreamBody};
+    pub use crate::message::{ConnectRequest, ConnectResponse, ConnectStreamResponse, ConnectStreamingRequest, StreamBody};
     pub use crate::service_builder::MakeServiceBuilder;
-    pub use crate::stream_response::ConnectStreamResponse;
     #[cfg(feature = "tonic")]
     pub use crate::tonic::{ContentTypeSwitch, TonicCompatible};
 }
