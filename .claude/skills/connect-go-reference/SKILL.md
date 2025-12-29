@@ -1,23 +1,39 @@
 ---
 name: connect-go-reference
-description: The go reference coe. Reference the official connect-go implementation for understanding the ConnectRPC protocol. Use when implementing protocol features, debugging wire format issues, or comparing behavior with the Go reference.
+description: Reference the LOCAL connect-go/ directory for ConnectRPC protocol. NEVER use WebFetch/WebSearch for github.com/connectrpc/connect-go - always read local files.
 ---
 
 # connect-go-reference
 
-Reference the official connect-go implementation for understanding the ConnectRPC protocol. Use when implementing protocol features, debugging wire format issues, or comparing behavior with the Go reference.
+Reference the LOCAL `connect-go/` directory for understanding the ConnectRPC protocol.
+
+## CRITICAL: Use Local Files Only
+
+**NEVER fetch from GitHub.** Do not use:
+- `WebFetch` with `github.com/connectrpc/connect-go`
+- `WebFetch` with `raw.githubusercontent.com/.../connect-go`
+- `WebSearch` for "connect-go" implementation details
+
+**ALWAYS use local files:**
+- `Read` tool with `connect-go/*.go` paths
+- `Grep` tool with `path="connect-go/"`
+- `Glob` tool with `path="connect-go/"`
+
+The `connect-go/` directory at the repository root is the authoritative reference.
 
 ## Instructions
 
-The `connect-go/` directory contains the official Go implementation of the ConnectRPC protocol, cloned from https://github.com/connectrpc/connect-go.git
+The `connect-go/` directory at the repository root contains the official Go implementation of the ConnectRPC protocol.
 
-### Setup
+### Setup (one-time only)
 
-If the directory doesn't exist, clone it:
+If the directory doesn't exist, clone it once:
 
 ```bash
 git clone https://github.com/connectrpc/connect-go.git connect-go
 ```
+
+After cloning, ALWAYS use the local files via Read/Grep/Glob tools.
 
 ### Key Files Reference
 
@@ -67,3 +83,22 @@ Read connect-go/protocol_grpc.go for grpc-status header and trailer handling
 - Verifying correct behavior against reference
 - Understanding edge cases in streaming
 - Checking error code mappings
+
+### How to Use (Examples)
+
+```bash
+# Search for content-type handling
+Grep pattern="Content-Type" path="connect-go/"
+
+# Read specific file
+Read file_path="connect-go/protocol_connect.go"
+
+# Find all error-related code
+Grep pattern="Code" path="connect-go/error.go"
+```
+
+**FORBIDDEN:**
+- `WebFetch("https://github.com/connectrpc/connect-go/...")` - NO
+- `WebFetch("https://raw.githubusercontent.com/connectrpc/connect-go/...")` - NO
+- `WebSearch("connect-go ...")` for implementation details - NO
+- Guessing behavior without reading local `connect-go/*.go` files - NO

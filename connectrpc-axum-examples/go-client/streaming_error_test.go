@@ -69,13 +69,20 @@ type streamResult struct {
 
 func sendStreamRequest(t *testing.T, name string) streamResult {
 	url := serverURL + "/hello.HelloWorldService/SayHelloStream"
-	reqBody := fmt.Sprintf(`{"name":"%s"}`, name)
 
-	req, err := http.NewRequest("POST", url, strings.NewReader(reqBody))
+	// Build Connect streaming envelope: [flags:1][length:4][payload]
+	jsonPayload := []byte(fmt.Sprintf(`{"name":"%s"}`, name))
+	envelope := make([]byte, 5+len(jsonPayload))
+	envelope[0] = 0x00 // flags (no compression, not end stream)
+	binary.BigEndian.PutUint32(envelope[1:5], uint32(len(jsonPayload)))
+	copy(envelope[5:], jsonPayload)
+
+	req, err := http.NewRequest("POST", url, strings.NewReader(string(envelope)))
 	if err != nil {
 		return streamResult{err: err}
 	}
-	req.Header.Set("Content-Type", "application/json")
+	// Streaming requests must use application/connect+json per Connect protocol spec
+	req.Header.Set("Content-Type", "application/connect+json")
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)

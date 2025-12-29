@@ -9,6 +9,7 @@ use std::{future::Future, pin::Pin};
 use crate::{
     context::RequestProtocol,
     error::ConnectError,
+    layer::{validate_streaming_content_type, validate_unary_content_type},
     message::{ConnectRequest, ConnectResponse, ConnectStreamingRequest, StreamBody},
 };
 use futures::Stream;
@@ -19,6 +20,26 @@ use serde::de::DeserializeOwned;
 mod tonic;
 #[cfg(feature = "tonic")]
 pub use tonic::*;
+
+/// Validate protocol for unary handlers. Returns error response if invalid.
+///
+/// Unary handlers only accept unary content-types (`application/json`, `application/proto`).
+/// Streaming content-types are rejected with `Code::Unknown`.
+fn validate_unary_protocol(protocol: RequestProtocol) -> Option<Response> {
+    validate_unary_content_type(protocol).map(|err| err.into_response_with_protocol(protocol))
+}
+
+/// Validate protocol for streaming handlers. Returns error response if invalid.
+///
+/// Streaming handlers only accept streaming content-types
+/// (`application/connect+json`, `application/connect+proto`).
+/// Unary content-types are rejected with `Code::Unknown`.
+fn validate_streaming_protocol(protocol: RequestProtocol) -> Option<Response> {
+    validate_streaming_content_type(protocol).map(|err| {
+        let use_proto = protocol.is_proto();
+        err.into_streaming_response(use_proto)
+    })
+}
 
 /// A wrapper that adapts ConnectHandler functions to work with Axum's Handler trait
 #[derive(Clone)]
@@ -75,6 +96,11 @@ where
                 .copied()
                 .unwrap_or_default();
 
+            // Validate: unary handlers only accept unary content-types
+            if let Some(err_response) = validate_unary_protocol(protocol) {
+                return err_response;
+            }
+
             // Extract the ConnectRequest (body only)
             let connect_req = match ConnectRequest::<Req>::from_request(req, &()).await {
                 Ok(value) => value,
@@ -126,6 +152,11 @@ macro_rules! impl_handler_for_connect_handler_wrapper {
                         .get::<RequestProtocol>()
                         .copied()
                         .unwrap_or_default();
+
+                    // Validate: unary handlers only accept unary content-types
+                    if let Some(err_response) = validate_unary_protocol(protocol) {
+                        return err_response;
+                    }
 
                     // Split the request into parts and body
                     let (mut parts, body) = req.into_parts();
@@ -210,6 +241,11 @@ where
                 .copied()
                 .unwrap_or_default();
 
+            // Validate: streaming handlers only accept streaming content-types
+            if let Some(err_response) = validate_streaming_protocol(protocol) {
+                return err_response;
+            }
+
             // Extract the ConnectRequest (body only)
             let connect_req = match ConnectRequest::<Req>::from_request(req, &()).await {
                 Ok(value) => value,
@@ -265,6 +301,11 @@ macro_rules! impl_handler_for_connect_stream_handler_wrapper {
                         .get::<RequestProtocol>()
                         .copied()
                         .unwrap_or_default();
+
+                    // Validate: streaming handlers only accept streaming content-types
+                    if let Some(err_response) = validate_streaming_protocol(protocol) {
+                        return err_response;
+                    }
 
                     // Split the request into parts and body
                     let (mut parts, body) = req.into_parts();
@@ -353,6 +394,11 @@ where
                 .copied()
                 .unwrap_or_default();
 
+            // Validate: streaming handlers only accept streaming content-types
+            if let Some(err_response) = validate_streaming_protocol(protocol) {
+                return err_response;
+            }
+
             // Extract the streaming request
             let streaming_req = match ConnectStreamingRequest::<Req>::from_request(req, &()).await {
                 Ok(value) => value,
@@ -423,6 +469,11 @@ where
                 .get::<RequestProtocol>()
                 .copied()
                 .unwrap_or_default();
+
+            // Validate: streaming handlers only accept streaming content-types
+            if let Some(err_response) = validate_streaming_protocol(protocol) {
+                return err_response;
+            }
 
             // Extract the streaming request
             let streaming_req = match ConnectStreamingRequest::<Req>::from_request(req, &()).await {

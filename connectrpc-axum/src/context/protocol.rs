@@ -33,6 +33,10 @@ pub enum RequestProtocol {
     /// Connect streaming with protobuf encoding (`application/connect+proto`)
     /// Response: framed protobuf messages with EndStream
     ConnectStreamProto,
+
+    /// Unknown or unsupported content-type.
+    /// Requests with this protocol should be rejected.
+    Unknown,
 }
 
 impl RequestProtocol {
@@ -40,6 +44,8 @@ impl RequestProtocol {
     ///
     /// Note: gRPC (`application/grpc*`) is handled by `ContentTypeSwitch` before
     /// reaching this code, so we don't need to detect it here.
+    ///
+    /// Returns `Unknown` for unrecognized content-types.
     pub fn from_content_type(content_type: &str) -> Self {
         if content_type.starts_with("application/connect+proto") {
             Self::ConnectStreamProto
@@ -47,16 +53,18 @@ impl RequestProtocol {
             Self::ConnectStreamJson
         } else if content_type.starts_with("application/proto") {
             Self::ConnectUnaryProto
-        } else {
-            // Default to JSON for application/json or unknown
+        } else if content_type.starts_with("application/json") {
             Self::ConnectUnaryJson
+        } else {
+            // Unknown content-type - should be rejected
+            Self::Unknown
         }
     }
 
     /// Response Content-Type for successful responses.
     pub fn response_content_type(&self) -> &'static str {
         match self {
-            Self::ConnectUnaryJson => "application/json",
+            Self::ConnectUnaryJson | Self::Unknown => "application/json",
             Self::ConnectUnaryProto => "application/proto",
             Self::ConnectStreamJson => "application/connect+json",
             Self::ConnectStreamProto => "application/connect+proto",
@@ -67,10 +75,12 @@ impl RequestProtocol {
     ///
     /// For Connect unary, errors are always JSON regardless of request encoding.
     /// For streaming, errors use the same encoding as success responses.
+    /// For unknown protocols, errors are JSON.
     pub fn error_content_type(&self) -> &'static str {
         match self {
             // Connect unary errors are always JSON per spec
-            Self::ConnectUnaryJson | Self::ConnectUnaryProto => "application/json",
+            // Unknown protocol errors also use JSON
+            Self::ConnectUnaryJson | Self::ConnectUnaryProto | Self::Unknown => "application/json",
             Self::ConnectStreamJson => "application/connect+json",
             Self::ConnectStreamProto => "application/connect+proto",
         }
@@ -80,6 +90,7 @@ impl RequestProtocol {
     ///
     /// - Connect unary: no framing (raw bytes)
     /// - Connect streaming: framing with EndStream message
+    /// - Unknown: no framing (error responses are unary-style)
     pub fn needs_envelope(&self) -> bool {
         matches!(self, Self::ConnectStreamJson | Self::ConnectStreamProto)
     }
@@ -92,6 +103,16 @@ impl RequestProtocol {
     /// Whether this is a streaming protocol variant.
     pub fn is_streaming(&self) -> bool {
         matches!(self, Self::ConnectStreamJson | Self::ConnectStreamProto)
+    }
+
+    /// Whether this is a unary protocol variant.
+    pub fn is_unary(&self) -> bool {
+        matches!(self, Self::ConnectUnaryJson | Self::ConnectUnaryProto)
+    }
+
+    /// Whether this protocol variant is valid (not Unknown).
+    pub fn is_valid(&self) -> bool {
+        !matches!(self, Self::Unknown)
     }
 
     /// Get the streaming response content-type based on the encoding.
@@ -133,10 +154,26 @@ mod tests {
             RequestProtocol::from_content_type("application/connect+proto"),
             RequestProtocol::ConnectStreamProto
         );
-        // Unknown defaults to JSON (gRPC is handled by ContentTypeSwitch)
+    }
+
+    #[test]
+    fn test_from_content_type_unknown() {
+        // Unknown content-types should return Unknown variant
         assert_eq!(
             RequestProtocol::from_content_type("text/plain"),
-            RequestProtocol::ConnectUnaryJson
+            RequestProtocol::Unknown
+        );
+        assert_eq!(
+            RequestProtocol::from_content_type("application/xml"),
+            RequestProtocol::Unknown
+        );
+        assert_eq!(
+            RequestProtocol::from_content_type(""),
+            RequestProtocol::Unknown
+        );
+        assert_eq!(
+            RequestProtocol::from_content_type("invalid"),
+            RequestProtocol::Unknown
         );
     }
 
@@ -180,6 +217,11 @@ mod tests {
             RequestProtocol::ConnectStreamProto.error_content_type(),
             "application/connect+proto"
         );
+        // Unknown uses JSON for errors
+        assert_eq!(
+            RequestProtocol::Unknown.error_content_type(),
+            "application/json"
+        );
     }
 
     #[test]
@@ -188,6 +230,7 @@ mod tests {
         assert!(!RequestProtocol::ConnectUnaryProto.needs_envelope());
         assert!(RequestProtocol::ConnectStreamJson.needs_envelope());
         assert!(RequestProtocol::ConnectStreamProto.needs_envelope());
+        assert!(!RequestProtocol::Unknown.needs_envelope());
     }
 
     #[test]
@@ -196,5 +239,33 @@ mod tests {
         assert!(RequestProtocol::ConnectUnaryProto.is_proto());
         assert!(!RequestProtocol::ConnectStreamJson.is_proto());
         assert!(RequestProtocol::ConnectStreamProto.is_proto());
+        assert!(!RequestProtocol::Unknown.is_proto());
+    }
+
+    #[test]
+    fn test_is_streaming() {
+        assert!(!RequestProtocol::ConnectUnaryJson.is_streaming());
+        assert!(!RequestProtocol::ConnectUnaryProto.is_streaming());
+        assert!(RequestProtocol::ConnectStreamJson.is_streaming());
+        assert!(RequestProtocol::ConnectStreamProto.is_streaming());
+        assert!(!RequestProtocol::Unknown.is_streaming());
+    }
+
+    #[test]
+    fn test_is_unary() {
+        assert!(RequestProtocol::ConnectUnaryJson.is_unary());
+        assert!(RequestProtocol::ConnectUnaryProto.is_unary());
+        assert!(!RequestProtocol::ConnectStreamJson.is_unary());
+        assert!(!RequestProtocol::ConnectStreamProto.is_unary());
+        assert!(!RequestProtocol::Unknown.is_unary());
+    }
+
+    #[test]
+    fn test_is_valid() {
+        assert!(RequestProtocol::ConnectUnaryJson.is_valid());
+        assert!(RequestProtocol::ConnectUnaryProto.is_valid());
+        assert!(RequestProtocol::ConnectStreamJson.is_valid());
+        assert!(RequestProtocol::ConnectStreamProto.is_valid());
+        assert!(!RequestProtocol::Unknown.is_valid());
     }
 }

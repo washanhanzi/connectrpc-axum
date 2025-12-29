@@ -3,9 +3,12 @@
 //! The [`ConnectLayer`] middleware detects the protocol variant from incoming requests
 //! and stores it in request extensions so that response encoding can match the request format.
 
+mod content_type;
 mod protocol;
 mod protocol_version;
 mod timeout;
+
+pub(crate) use content_type::{validate_streaming_content_type, validate_unary_content_type};
 
 use crate::context::MessageLimits;
 use crate::error::{Code, ConnectError};
@@ -157,15 +160,25 @@ where
         let protocol = protocol::detect_protocol(&req);
         req.extensions_mut().insert(protocol);
 
-        // Validate protocol version for POST requests
+        // Validate for POST requests:
+        // - Content-Type is a known Connect protocol type
+        // - Protocol version header (if configured)
         // GET requests use ?connect=v1 query param, validated in request.rs
-        if *req.method() == Method::POST
-            && let Some(err) =
+        if *req.method() == Method::POST {
+            // Validate known content-type
+            if let Some(err) = content_type::validate_content_type(protocol) {
+                let response = err.into_response_with_protocol(protocol);
+                return Box::pin(async move { Ok(response) });
+            }
+
+            // Validate protocol version header
+            if let Some(err) =
                 protocol_version::validate_protocol_version(&req, self.require_protocol_header)
-        {
-            // Return error response immediately without calling inner service
-            let response = err.into_response_with_protocol(protocol);
-            return Box::pin(async move { Ok(response) });
+            {
+                // Return error response immediately without calling inner service
+                let response = err.into_response_with_protocol(protocol);
+                return Box::pin(async move { Ok(response) });
+            }
         }
 
         // Store message limits in extensions for request extractors
