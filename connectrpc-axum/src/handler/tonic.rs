@@ -204,7 +204,7 @@ macro_rules! impl_handler_for_tonic_compatible_wrapper {
                     let ctx = req
                         .extensions()
                         .get::<Context>()
-                        .copied()
+                        .cloned()
                         .unwrap_or_default();
 
                     // Extract the ConnectRequest (body only)
@@ -250,7 +250,7 @@ macro_rules! impl_handler_for_tonic_compatible_wrapper {
                     let ctx = req
                         .extensions()
                         .get::<Context>()
-                        .copied()
+                        .cloned()
                         .unwrap_or_default();
 
                     // Clone state for the extractor and extract body directly
@@ -322,7 +322,7 @@ where
             let ctx = req
                 .extensions()
                 .get::<Context>()
-                .copied()
+                .cloned()
                 .unwrap_or_default();
 
             // Extract the ConnectRequest (body only)
@@ -368,7 +368,7 @@ where
             let ctx = req
                 .extensions()
                 .get::<Context>()
-                .copied()
+                .cloned()
                 .unwrap_or_default();
 
             // Clone state for the extractor and extract body directly

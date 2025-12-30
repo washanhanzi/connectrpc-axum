@@ -72,6 +72,56 @@ impl ConnectError {
         }
     }
 
+    /// Create an invalid argument error.
+    pub fn new_invalid_argument<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::InvalidArgument, message)
+    }
+
+    /// Create a not found error.
+    pub fn new_not_found<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::NotFound, message)
+    }
+
+    /// Create a permission denied error.
+    pub fn new_permission_denied<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::PermissionDenied, message)
+    }
+
+    /// Create an unauthenticated error.
+    pub fn new_unauthenticated<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::Unauthenticated, message)
+    }
+
+    /// Create an internal error.
+    pub fn new_internal<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::Internal, message)
+    }
+
+    /// Create an unavailable error.
+    pub fn new_unavailable<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::Unavailable, message)
+    }
+
+    /// Create an already exists error.
+    pub fn new_already_exists<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::AlreadyExists, message)
+    }
+
+    /// Create a resource exhausted error.
+    pub fn new_resource_exhausted<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::ResourceExhausted, message)
+    }
+
+    /// Create a failed precondition error.
+    pub fn new_failed_precondition<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::FailedPrecondition, message)
+    }
+
+    /// Create an aborted error.
+    pub fn new_aborted<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::Aborted, message)
+    }
+
     /// Get the error code.
     pub fn code(&self) -> Code {
         self.code
@@ -220,7 +270,10 @@ impl ConnectError {
     }
 
     /// Create a streaming error response with the specified content-type.
-    fn into_streaming_error_response_with_content_type(self, content_type: &'static str) -> Response {
+    fn into_streaming_error_response_with_content_type(
+        self,
+        content_type: &'static str,
+    ) -> Response {
         // Build the EndStream JSON payload: { "error": { "code": "...", "message": "..." } }
         let error_body = ErrorResponseBody {
             code: self.code,
@@ -249,10 +302,7 @@ impl ConnectError {
         // Build the response with HTTP 200 and streaming content-type
         let mut response = Response::builder()
             .status(StatusCode::OK)
-            .header(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static(content_type),
-            )
+            .header(header::CONTENT_TYPE, HeaderValue::from_static(content_type))
             .body(Body::from(frame))
             .unwrap_or_else(|_| internal_error_streaming_response(content_type));
 
@@ -448,7 +498,8 @@ pub(crate) fn internal_error_response(content_type: &'static str) -> Response {
 /// for an EndStream frame (flags=0x02) containing an internal error.
 pub(crate) fn internal_error_end_stream_frame() -> Vec<u8> {
     // Hardcoded EndStream JSON payload that cannot fail
-    const ERROR_PAYLOAD: &[u8] = br#"{"error":{"code":"internal","message":"Internal serialization error"}}"#;
+    const ERROR_PAYLOAD: &[u8] =
+        br#"{"error":{"code":"internal","message":"Internal serialization error"}}"#;
 
     let mut frame = Vec::with_capacity(5 + ERROR_PAYLOAD.len());
     frame.push(0b0000_0010); // EndStream flag

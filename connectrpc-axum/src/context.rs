@@ -52,7 +52,7 @@ pub use timeout::{
 ///
 /// Created by ConnectLayer, stored in request extensions.
 /// Used by pipelines to process messages.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct Context {
     /// Protocol variant (unary/streaming, json/proto)
     pub protocol: RequestProtocol,
@@ -62,6 +62,8 @@ pub struct Context {
     pub timeout: Option<Duration>,
     /// Message size limits
     pub limits: MessageLimits,
+    /// Whether protocol version header is required
+    pub require_protocol_header: bool,
 }
 
 /// Compression context for a single request.
@@ -107,7 +109,7 @@ impl Context {
                 Ok(c) => {
                     CompressionContext::new(c.request, c.response, config.compression.min_bytes)
                 }
-                Err(err) => return Err(ContextError::from(err).with_protocol(protocol)),
+                Err(err) => return Err(ContextError::new(protocol, err)),
             }
         } else {
             CompressionContext::default()
@@ -122,6 +124,7 @@ impl Context {
             compression,
             timeout,
             limits: config.limits,
+            require_protocol_header: config.require_protocol_header,
         })
     }
 
@@ -131,8 +134,8 @@ impl Context {
     /// - Content-Type maps to a known protocol variant
     /// - Connect-Protocol-Version header is present (if required by config)
     ///
-    /// Returns `Ok(())` if valid, or `Err(ContextError)` if validation fails.
-    pub fn validate<B>(&self, req: &Request<B>, config: &ServerConfig) -> Result<(), ContextError> {
+    /// Returns `Ok(())` if valid, or `Err(ResponseError)` if validation fails.
+    pub fn validate<B>(&self, req: &Request<B>) -> Result<(), ContextError> {
         // Only validate POST requests
         if *req.method() != Method::POST {
             return Ok(());
@@ -140,12 +143,12 @@ impl Context {
 
         // Check content-type is known
         if let Some(err) = validate_content_type(self.protocol) {
-            return Err(ContextError::from(err).with_protocol(self.protocol));
+            return Err(ContextError::new(self.protocol, err));
         }
 
         // Check protocol version header
-        if let Some(err) = validate_protocol_version(req, config.require_protocol_header) {
-            return Err(ContextError::from(err).with_protocol(self.protocol));
+        if let Some(err) = validate_protocol_version(req, self.require_protocol_header) {
+            return Err(ContextError::new(self.protocol, err));
         }
 
         Ok(())

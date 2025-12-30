@@ -170,12 +170,16 @@ where
         };
 
         // 2. Validate protocol requirements
-        if let Err(err) = request_ctx.validate(&req, &self.config) {
+        if let Err(err) = request_ctx.validate(&req) {
             let response = err.into_response();
             return Box::pin(async move { Ok(response) });
         }
 
-        // 3. Store context in request extensions
+        // 3. Extract values needed for async block before moving context
+        let timeout = request_ctx.timeout;
+        let protocol = request_ctx.protocol;
+
+        // 4. Store context in request extensions
         req.extensions_mut().insert(request_ctx);
 
         // Clone inner service for the async block
@@ -185,7 +189,7 @@ where
 
         Box::pin(async move {
             // Apply timeout if configured
-            match request_ctx.timeout {
+            match timeout {
                 Some(duration) => {
                     match tokio::time::timeout(duration, inner.oneshot(req)).await {
                         Ok(result) => result,
@@ -195,7 +199,7 @@ where
                                 Code::DeadlineExceeded,
                                 "request timeout exceeded",
                             );
-                            Ok(err.into_response_with_protocol(request_ctx.protocol))
+                            Ok(err.into_response_with_protocol(protocol))
                         }
                     }
                 }

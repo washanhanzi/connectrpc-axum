@@ -7,14 +7,14 @@
 //! All configuration is read from Context in request extensions.
 
 use crate::context::{
-    compress, decompress, error::ContextError, CompressionEncoding, Context, RequestProtocol,
+    CompressionEncoding, Context, RequestProtocol, compress, decompress, error::ContextError,
 };
 use crate::error::{Code, ConnectError};
 use axum::body::Body;
-use axum::http::{header, Request, Response, StatusCode};
+use axum::http::{Request, Response, StatusCode, header};
 use bytes::Bytes;
 use prost::Message;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
 // ============================================================================
 // RequestPipeline
@@ -34,21 +34,22 @@ impl RequestPipeline {
         T: Message + DeserializeOwned + Default,
     {
         // 1. Get context from extensions (injected by layer)
-        let ctx = req
-            .extensions()
-            .get::<Context>()
-            .copied()
-            .ok_or_else(|| ContextError::internal("missing request context"))?;
+        let ctx = req.extensions().get::<Context>().cloned().ok_or_else(|| {
+            ContextError::internal(RequestProtocol::Unknown, "missing request context")
+        })?;
 
         // 2. Read body bytes with size limit
         let max_size = ctx.limits.max_message_size().unwrap_or(usize::MAX);
         let body = axum::body::to_bytes(req.into_body(), max_size)
             .await
             .map_err(|e| {
-                ContextError::connect(ConnectError::new(
-                    Code::ResourceExhausted,
-                    format!("failed to read request body: {e}"),
-                ))
+                ContextError::new(
+                    ctx.protocol,
+                    ConnectError::new(
+                        Code::ResourceExhausted,
+                        format!("failed to read request body: {e}"),
+                    ),
+                )
             })?;
 
         // 3. Decode using the body
@@ -64,10 +65,13 @@ impl RequestPipeline {
         let body = if ctx.compression.request_encoding != CompressionEncoding::Identity {
             let decompressed =
                 decompress(&body, ctx.compression.request_encoding).map_err(|e| {
-                    ContextError::connect(ConnectError::new(
-                        Code::InvalidArgument,
-                        format!("decompression failed: {e}"),
-                    ))
+                    ContextError::new(
+                        ctx.protocol,
+                        ConnectError::new(
+                            Code::InvalidArgument,
+                            format!("decompression failed: {e}"),
+                        ),
+                    )
                 })?;
             Bytes::from(decompressed)
         } else {
@@ -76,7 +80,10 @@ impl RequestPipeline {
 
         // 2. Check decompressed size
         ctx.limits.check_size(body.len()).map_err(|msg| {
-            ContextError::connect(ConnectError::new(Code::ResourceExhausted, msg))
+            ContextError::new(
+                ctx.protocol,
+                ConnectError::new(Code::ResourceExhausted, msg),
+            )
         })?;
 
         // 3. Decode based on protocol
@@ -101,10 +108,9 @@ impl ResponsePipeline {
     where
         T: Message + Serialize,
     {
-        let ctx = req
-            .extensions()
-            .get::<Context>()
-            .ok_or_else(|| ContextError::internal("missing request context"))?;
+        let ctx = req.extensions().get::<Context>().ok_or_else(|| {
+            ContextError::internal(RequestProtocol::Unknown, "missing request context")
+        })?;
 
         Self::encode_with_context(ctx, message)
     }
@@ -122,15 +128,16 @@ impl ResponsePipeline {
 
         // 2. Compress if beneficial
         let compression = &ctx.compression;
-        let (body, content_encoding) =
-            if compression.response_encoding != CompressionEncoding::Identity
-                && body.len() >= compression.min_compress_bytes
-            {
-                let compressed = compress(&body, compression.response_encoding)?;
-                (compressed, Some(compression.response_encoding.as_str()))
-            } else {
-                (body, None)
-            };
+        let (body, content_encoding) = if compression.response_encoding
+            != CompressionEncoding::Identity
+            && body.len() >= compression.min_compress_bytes
+        {
+            let compressed = compress(&body, compression.response_encoding)
+                .map_err(|e| ContextError::internal(ctx.protocol, e.to_string()))?;
+            (compressed, Some(compression.response_encoding.as_str()))
+        } else {
+            (body, None)
+        };
 
         // 3. Build HTTP response
         let mut builder = Response::builder()
@@ -143,7 +150,7 @@ impl ResponsePipeline {
 
         builder
             .body(Body::from(body))
-            .map_err(|e| ContextError::internal(e.to_string()))
+            .map_err(|e| ContextError::internal(ctx.protocol, e.to_string()))
     }
 }
 
@@ -158,17 +165,23 @@ where
 {
     if protocol.is_proto() {
         T::decode(body).map_err(|e| {
-            ContextError::connect(ConnectError::new(
-                Code::InvalidArgument,
-                format!("failed to decode protobuf message: {e}"),
-            ))
+            ContextError::new(
+                protocol,
+                ConnectError::new(
+                    Code::InvalidArgument,
+                    format!("failed to decode protobuf message: {e}"),
+                ),
+            )
         })
     } else {
         serde_json::from_slice(body).map_err(|e| {
-            ContextError::connect(ConnectError::new(
-                Code::InvalidArgument,
-                format!("failed to decode JSON message: {e}"),
-            ))
+            ContextError::new(
+                protocol,
+                ConnectError::new(
+                    Code::InvalidArgument,
+                    format!("failed to decode JSON message: {e}"),
+                ),
+            )
         })
     }
 }
@@ -181,6 +194,6 @@ where
     if protocol.is_proto() {
         Ok(message.encode_to_vec())
     } else {
-        serde_json::to_vec(message).map_err(|e| ContextError::internal(e.to_string()))
+        serde_json::to_vec(message).map_err(|e| ContextError::internal(protocol, e.to_string()))
     }
 }

@@ -92,7 +92,7 @@ where
             let ctx = req
                 .extensions()
                 .get::<Context>()
-                .copied()
+                .cloned()
                 .unwrap_or_default();
 
             // Validate: unary handlers only accept unary content-types
@@ -149,7 +149,7 @@ macro_rules! impl_handler_for_connect_handler_wrapper {
                     let ctx = req
                         .extensions()
                         .get::<Context>()
-                        .copied()
+                        .cloned()
                         .unwrap_or_default();
 
                     // Validate: unary handlers only accept unary content-types
@@ -237,7 +237,7 @@ where
             let ctx = req
                 .extensions()
                 .get::<Context>()
-                .copied()
+                .cloned()
                 .unwrap_or_default();
 
             // Validate: streaming handlers only accept streaming content-types
@@ -298,7 +298,7 @@ macro_rules! impl_handler_for_connect_stream_handler_wrapper {
                     let ctx = req
                         .extensions()
                         .get::<Context>()
-                        .copied()
+                        .cloned()
                         .unwrap_or_default();
 
                     // Validate: streaming handlers only accept streaming content-types
@@ -390,7 +390,7 @@ where
             let ctx = req
                 .extensions()
                 .get::<Context>()
-                .copied()
+                .cloned()
                 .unwrap_or_default();
 
             // Validate: streaming handlers only accept streaming content-types
@@ -466,7 +466,7 @@ where
             let ctx = req
                 .extensions()
                 .get::<Context>()
-                .copied()
+                .cloned()
                 .unwrap_or_default();
 
             // Validate: streaming handlers only accept streaming content-types

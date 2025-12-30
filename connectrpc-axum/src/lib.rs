@@ -15,7 +15,7 @@ pub use crate::tonic::{ContentTypeSwitch, TonicCompatible};
 pub use context::{
     compress, compute_effective_timeout, decompress, detect_protocol, negotiate_response_encoding,
     parse_timeout, Compression, CompressionConfig, CompressionContext, CompressionEncoding,
-    ConnectTimeout, ContextError, Context, MessageLimits, RequestProtocol, ServerConfig,
+    ConnectTimeout, Context, MessageLimits, RequestProtocol, ContextError, ServerConfig,
     CONNECT_TIMEOUT_MS_HEADER, DEFAULT_MAX_MESSAGE_SIZE,
 };
 // Re-export from pipeline module
@@ -47,8 +47,8 @@ pub mod prelude {
     pub use crate::context::{
         compress, compute_effective_timeout, decompress, detect_protocol,
         negotiate_response_encoding, parse_timeout, Compression, CompressionConfig,
-        CompressionContext, CompressionEncoding, ConnectTimeout, ContextError, Context,
-        MessageLimits, RequestProtocol, ServerConfig, CONNECT_TIMEOUT_MS_HEADER,
+        CompressionContext, CompressionEncoding, ConnectTimeout, Context,
+        MessageLimits, RequestProtocol, ContextError, ServerConfig, CONNECT_TIMEOUT_MS_HEADER,
         DEFAULT_MAX_MESSAGE_SIZE,
     };
     pub use crate::pipeline::{RequestPipeline, ResponsePipeline};

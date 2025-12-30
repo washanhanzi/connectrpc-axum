@@ -49,7 +49,7 @@ where
     let ctx = req
         .extensions()
         .get::<Context>()
-        .copied()
+        .cloned()
         .ok_or_else(|| ConnectError::new(Code::Internal, "missing pipeline context"))?;
 
     // For unary requests without envelope, use the pipeline directly
@@ -226,7 +226,7 @@ where
         let ctx = req
             .extensions()
             .get::<Context>()
-            .copied()
+            .cloned()
             .ok_or_else(|| ConnectError::new(Code::Internal, "missing pipeline context"))?;
 
         let use_proto = ctx.protocol.is_proto();
