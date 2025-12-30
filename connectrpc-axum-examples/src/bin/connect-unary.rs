@@ -29,11 +29,6 @@ async fn main() -> anyhow::Result<()> {
         .say_hello(say_hello)
         .build_connect();
 
-    // MakeServiceBuilder applies ConnectLayer for protocol detection
-    // let app = connectrpc_axum::MakeServiceBuilder::new()
-    //     .add_router(router)
-    //     .build();
-
     let addr: SocketAddr = "0.0.0.0:3000".parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
 

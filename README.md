@@ -170,12 +170,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .say_hello(say_hello)
         .say_hello_stream(say_hello_stream)
         .with_state(AppState::default())
-        .build();
-
-    // Use MakeServiceBuilder to apply ConnectLayer and configure options
-    let app = connectrpc_axum::MakeServiceBuilder::new()
-        .add_router(hello_router)
-        .build();
+        .build_connect();
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     axum::serve(listener, app).await?;
@@ -221,22 +216,19 @@ async fn say_hello(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Build both Connect router and Tonic service
-    let (router, svc) = helloworldservice::HelloWorldServiceTonicCompatibleBuilder::new()
-        .say_hello(say_hello)
-        .with_state(AppState::default())
-        .build();
+    // Build both Connect router and gRPC server from same handlers
+    let (connect_router, grpc_server) =
+        helloworldservice::HelloWorldServiceTonicCompatibleBuilder::new()
+            .say_hello(say_hello)
+            .with_state(AppState::default())
+            .build();
 
-    // Create gRPC server
-    let grpc = hello_world_service_server::HelloWorldServiceServer::new(svc);
-
-    // Use MakeServiceBuilder to apply ConnectLayer and combine with gRPC
-    // Routes by Content-Type:
+    // Combine into a single service that routes by Content-Type:
     // - application/grpc* -> Tonic gRPC server
     // - Otherwise -> Axum routes (Connect protocol)
     let dispatch = connectrpc_axum::MakeServiceBuilder::new()
-        .add_router(router)
-        .add_grpc_service(grpc)
+        .add_router(connect_router)
+        .add_grpc_service(grpc_server)
         .build();
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
