@@ -4,16 +4,42 @@ use axum::{
     response::{IntoResponse, Response},
     routing::MethodRouter,
 };
-use std::{future::Future, pin::Pin};
+use std::{any::Any, future::Future, pin::Pin};
 
 use crate::{
-    context::{validate_streaming_content_type, validate_unary_content_type, Context},
+    context::{
+        Context, RequestProtocol, validate_streaming_content_type, validate_unary_content_type,
+    },
     error::ConnectError,
     message::{ConnectRequest, ConnectResponse, ConnectStreamingRequest, StreamBody},
 };
 use futures::Stream;
 use prost::Message;
 use serde::de::DeserializeOwned;
+
+/// Handle extractor rejections with protocol-aware encoding.
+///
+/// If the rejection is a `ConnectError`, it's encoded using the protocol from the request.
+/// Otherwise, a warning is printed (in debug builds) and an internal error is returned
+/// with proper Connect protocol encoding.
+fn handle_extractor_rejection<R>(rejection: R, protocol: RequestProtocol) -> Response
+where
+    R: IntoResponse + Any,
+{
+    // Box the rejection to use Any trait for type checking
+    let rejection_any: Box<dyn Any> = Box::new(rejection);
+
+    match rejection_any.downcast::<ConnectError>() {
+        Ok(connect_err) => connect_err.into_response_with_protocol(protocol),
+        Err(_) => {
+            tracing::warn!(
+                "Extractor rejection is not ConnectError, converting to internal error. \
+                 Consider using an extractor that returns ConnectError for proper error handling."
+            );
+            ConnectError::new_internal("extractor rejection").into_response_with_protocol(protocol)
+        }
+    }
+}
 
 #[cfg(feature = "tonic")]
 mod tonic;
@@ -25,7 +51,8 @@ pub use tonic::*;
 /// Unary handlers only accept unary content-types (`application/json`, `application/proto`).
 /// Streaming content-types are rejected with `Code::Unknown`.
 fn validate_unary_protocol(ctx: &Context) -> Option<Response> {
-    validate_unary_content_type(ctx.protocol).map(|err| err.into_response_with_protocol(ctx.protocol))
+    validate_unary_content_type(ctx.protocol)
+        .map(|err| err.into_response_with_protocol(ctx.protocol))
 }
 
 /// Validate protocol for streaming handlers. Returns error response if invalid.
@@ -131,8 +158,9 @@ macro_rules! impl_handler_for_connect_handler_wrapper {
             Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
             S:Clone+Send+Sync+'static,
 
-            // Constraints on extractors
-            $( $A: FromRequestParts<S> + Send + Sync + 'static, )*
+            // Constraints on extractors (rejection must be 'static for Any)
+            $( $A: FromRequestParts<S> + Send + Sync + 'static,
+               <$A as FromRequestParts<S>>::Rejection: 'static, )*
             ConnectRequest<Req>: FromRequest<S>,
             Req: Send + Sync + 'static,
             S: Send + Sync + 'static,
@@ -164,7 +192,7 @@ macro_rules! impl_handler_for_connect_handler_wrapper {
                     $(
                         let $A = match $A::from_request_parts(&mut parts, &state).await {
                             Ok(value) => value,
-                            Err(rejection) => return rejection.into_response(),
+                            Err(rejection) => return handle_extractor_rejection(rejection, ctx.protocol),
                         };
                     )*
 
@@ -280,8 +308,9 @@ macro_rules! impl_handler_for_connect_stream_handler_wrapper {
             St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
             S: Clone + Send + Sync + 'static,
 
-            // Constraints on extractors
-            $( $A: FromRequestParts<S> + Send + Sync + 'static, )*
+            // Constraints on extractors (rejection must be 'static for Any)
+            $( $A: FromRequestParts<S> + Send + Sync + 'static,
+               <$A as FromRequestParts<S>>::Rejection: 'static, )*
             ConnectRequest<Req>: FromRequest<S>,
             Req: Send + Sync + 'static,
             S: Send + Sync + 'static,
@@ -313,7 +342,7 @@ macro_rules! impl_handler_for_connect_stream_handler_wrapper {
                     $(
                         let $A = match $A::from_request_parts(&mut parts, &state).await {
                             Ok(value) => value,
-                            Err(rejection) => return rejection.into_response(),
+                            Err(rejection) => return handle_extractor_rejection(rejection, ctx.protocol),
                         };
                     )*
 
