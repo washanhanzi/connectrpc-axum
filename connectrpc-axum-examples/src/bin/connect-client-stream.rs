@@ -53,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
     let router = axum::Router::new()
         .route(
             "/echo.EchoService/EchoClientStream",
-            post_connect_client_stream(echo_client_stream),
+            post_client_stream(echo_client_stream),
         )
         .layer(ConnectLayer::new());
 

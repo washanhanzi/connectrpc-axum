@@ -75,7 +75,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                             F: Clone + Send + Sync + 'static,
                             T: 'static,
                         {
-                            let method_router = connectrpc_axum::handler::post_connect_stream(handler);
+                            let method_router = connectrpc_axum::handler::post_server_stream(handler);
                             #service_builder_name {
                                 router: self.router.route(#path, method_router),
                             }
@@ -91,7 +91,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                             F: Clone + Send + Sync + 'static,
                             T: 'static,
                         {
-                            let method_router = connectrpc_axum::handler::post_connect(handler);
+                            let method_router = connectrpc_axum::handler::post_unary(handler);
                             #service_builder_name {
                                 router: self.router.route(#path, method_router),
                             }
@@ -151,7 +151,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                                         T: 'static,
                                     {
                                         // Add route to router progressively
-                                        let method_router = connectrpc_axum::handler::post_connect_tonic_stream(handler.clone());
+                                        let method_router = connectrpc_axum::handler::post_tonic_stream(handler.clone());
 
                                         // Store factory (needs &S later to materialize the boxed stream call)
                                         let wrapper = connectrpc_axum::handler::TonicCompatibleStreamHandlerWrapper(handler);
@@ -181,7 +181,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                                         T: 'static,
                                     {
                                         // Add route to router progressively
-                                        let method_router = connectrpc_axum::handler::post_connect_tonic(handler.clone());
+                                        let method_router = connectrpc_axum::handler::post_tonic_unary(handler.clone());
 
                                         // Store factory (needs &S later to materialize the boxed call)
                                         let wrapper = connectrpc_axum::handler::TonicCompatibleHandlerWrapper(handler);

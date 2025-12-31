@@ -33,7 +33,7 @@ pub use limit::{MessageLimits, DEFAULT_MAX_MESSAGE_SIZE};
 
 // Re-export protocol types and functions
 pub use protocol::{
-    detect_protocol, validate_content_type, validate_protocol_version,
+    detect_protocol, validate_content_type, validate_get_query_params, validate_protocol_version,
     validate_streaming_content_type, validate_unary_content_type, RequestProtocol,
     CONNECT_PROTOCOL_VERSION, CONNECT_PROTOCOL_VERSION_HEADER,
 };
@@ -130,13 +130,27 @@ impl Context {
 
     /// Validate protocol requirements for the request.
     ///
-    /// Checks:
+    /// Checks for POST requests:
     /// - Content-Type maps to a known protocol variant
     /// - Connect-Protocol-Version header is present (if required by config)
     ///
+    /// Checks for GET requests:
+    /// - `encoding` parameter is present and valid (json or proto)
+    /// - `message` parameter is present
+    /// - `connect` parameter is "v1" if present, or required when config requires it
+    /// - `compression` parameter if present, is a supported algorithm
+    ///
     /// Returns `Ok(())` if valid, or `Err(ResponseError)` if validation fails.
     pub fn validate<B>(&self, req: &Request<B>) -> Result<(), ContextError> {
-        // Only validate POST requests
+        // GET request validation
+        if *req.method() == Method::GET {
+            if let Some(err) = validate_get_query_params(req, self.require_protocol_header) {
+                return Err(ContextError::new(self.protocol, err));
+            }
+            return Ok(());
+        }
+
+        // POST request validation
         if *req.method() != Method::POST {
             return Ok(());
         }

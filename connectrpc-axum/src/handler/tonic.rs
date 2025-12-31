@@ -281,8 +281,8 @@ macro_rules! impl_handler_for_tonic_compatible_wrapper {
 impl_handler_for_tonic_compatible_wrapper!();
 impl_handler_for_tonic_compatible_wrapper!([State]);
 
-/// Creates a POST method router from a TonicCompatible handler function (strict mode)
-pub fn post_connect_tonic<F, T, S>(f: F) -> MethodRouter<S>
+/// Creates a POST method router for tonic-compatible unary RPC handlers.
+pub fn post_tonic_unary<F, T, S>(f: F) -> MethodRouter<S>
 where
     S: Clone + Send + Sync + 'static,
     TonicCompatibleHandlerWrapper<F>: Handler<T, S>,
@@ -291,8 +291,8 @@ where
     axum::routing::post(TonicCompatibleHandlerWrapper(f))
 }
 
-/// Creates a POST method router from a TonicCompatible streaming handler function (strict mode)
-pub fn post_connect_tonic_stream<F, T, S>(f: F) -> MethodRouter<S>
+/// Creates a POST method router for tonic-compatible streaming RPC handlers.
+pub fn post_tonic_stream<F, T, S>(f: F) -> MethodRouter<S>
 where
     S: Clone + Send + Sync + 'static,
     TonicCompatibleStreamHandlerWrapper<F>: Handler<T, S>,

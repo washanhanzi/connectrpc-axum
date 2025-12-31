@@ -9,7 +9,7 @@
 //! Test with Go client: go test -v -run TestClientStreamingCompression
 
 use connectrpc_axum::CompressionConfig;
-use connectrpc_axum::handler::post_connect_client_stream;
+use connectrpc_axum::handler::post_client_stream;
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{EchoRequest, EchoResponse};
 use futures::StreamExt;
@@ -47,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
     // Build manual route for client streaming
     let router = axum::Router::new().route(
         "/echo.EchoService/EchoClientStream",
-        post_connect_client_stream(echo_client_stream),
+        post_client_stream(echo_client_stream),
     );
 
     // Enable compression

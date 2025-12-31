@@ -283,6 +283,103 @@ pub fn validate_streaming_content_type(protocol: RequestProtocol) -> Option<Conn
 }
 
 // ============================================================================
+// GET query parameter validation
+// ============================================================================
+
+/// Validate query parameters for GET unary requests.
+///
+/// Checks (matching connect-go behavior):
+/// - `encoding` parameter is present and is "json" or "proto"
+/// - `message` parameter is present
+/// - `connect` parameter is "v1" if present, or required when `require_connect` is true
+/// - `compression` parameter if present, is a supported algorithm ("gzip" or "identity")
+///
+/// Returns `Some(ConnectError)` if validation fails, `None` if valid.
+pub fn validate_get_query_params<B>(req: &Request<B>, require_connect: bool) -> Option<ConnectError> {
+    let query = req.uri().query().unwrap_or("");
+
+    // Parse query parameters manually for efficiency
+    let mut encoding: Option<&str> = None;
+    let mut message_present = false;
+    let mut connect: Option<&str> = None;
+    let mut compression: Option<&str> = None;
+
+    for pair in query.split('&') {
+        if let Some((key, value)) = pair.split_once('=') {
+            match key {
+                "encoding" => encoding = Some(value),
+                "message" => message_present = true,
+                "connect" => connect = Some(value),
+                "compression" => compression = Some(value),
+                _ => {}
+            }
+        } else if pair == "message" {
+            // Handle "message" without a value (empty message)
+            message_present = true;
+        }
+    }
+
+    // Validate connect=v1 parameter (matching connect-go: connectCheckProtocolVersion)
+    match connect {
+        None if require_connect => {
+            return Some(ConnectError::new(
+                Code::InvalidArgument,
+                "missing required query parameter: set connect to \"v1\"",
+            ));
+        }
+        Some(v) if !v.is_empty() && v != "v1" => {
+            return Some(ConnectError::new(
+                Code::InvalidArgument,
+                format!("connect must be \"v1\": got \"{}\"", v),
+            ));
+        }
+        _ => {}
+    }
+
+    // Validate encoding parameter is present
+    let encoding = match encoding {
+        None => {
+            return Some(ConnectError::new(
+                Code::InvalidArgument,
+                "missing encoding parameter",
+            ));
+        }
+        Some(v) => v,
+    };
+
+    // Validate encoding is a supported codec
+    if encoding != "json" && encoding != "proto" {
+        return Some(ConnectError::new(
+            Code::InvalidArgument,
+            format!("invalid message encoding: \"{}\"", encoding),
+        ));
+    }
+
+    // Validate message parameter is present
+    if !message_present {
+        return Some(ConnectError::new(
+            Code::InvalidArgument,
+            "missing message parameter",
+        ));
+    }
+
+    // Validate compression if present (matching connect-go: negotiateCompression)
+    if let Some(comp) = compression {
+        if !comp.is_empty() && comp != "identity" && comp != "gzip" {
+            return Some(ConnectError::new(
+                Code::Unimplemented,
+                format!(
+                    "unknown compression \"{}\": supported encodings are gzip, identity",
+                    comp
+                ),
+            ));
+        }
+    }
+
+    None
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -611,5 +708,157 @@ mod tests {
         let err = validate_streaming_content_type(RequestProtocol::Unknown);
         assert!(err.is_some());
         assert!(matches!(err.unwrap().code(), Code::Unknown));
+    }
+
+    // --- validate_get_query_params tests ---
+
+    #[test]
+    fn test_get_valid_request() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?connect=v1&encoding=json&message=%7B%7D")
+            .body(())
+            .unwrap();
+        assert!(validate_get_query_params(&req, false).is_none());
+        assert!(validate_get_query_params(&req, true).is_none());
+    }
+
+    #[test]
+    fn test_get_valid_request_proto() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?connect=v1&encoding=proto&message=abc&base64=1")
+            .body(())
+            .unwrap();
+        assert!(validate_get_query_params(&req, false).is_none());
+    }
+
+    #[test]
+    fn test_get_missing_encoding() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?connect=v1&message=%7B%7D")
+            .body(())
+            .unwrap();
+        let err = validate_get_query_params(&req, false);
+        assert!(err.is_some());
+        let err = err.unwrap();
+        assert!(matches!(err.code(), Code::InvalidArgument));
+        assert!(err.message().unwrap().contains("missing encoding parameter"));
+    }
+
+    #[test]
+    fn test_get_invalid_encoding() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?connect=v1&encoding=xml&message=%7B%7D")
+            .body(())
+            .unwrap();
+        let err = validate_get_query_params(&req, false);
+        assert!(err.is_some());
+        let err = err.unwrap();
+        assert!(matches!(err.code(), Code::InvalidArgument));
+        assert!(err.message().unwrap().contains("invalid message encoding"));
+    }
+
+    #[test]
+    fn test_get_missing_message() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?connect=v1&encoding=json")
+            .body(())
+            .unwrap();
+        let err = validate_get_query_params(&req, false);
+        assert!(err.is_some());
+        let err = err.unwrap();
+        assert!(matches!(err.code(), Code::InvalidArgument));
+        assert!(err.message().unwrap().contains("missing message parameter"));
+    }
+
+    #[test]
+    fn test_get_missing_connect_not_required() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?encoding=json&message=%7B%7D")
+            .body(())
+            .unwrap();
+        // When not required, missing connect is OK
+        assert!(validate_get_query_params(&req, false).is_none());
+    }
+
+    #[test]
+    fn test_get_missing_connect_required() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?encoding=json&message=%7B%7D")
+            .body(())
+            .unwrap();
+        let err = validate_get_query_params(&req, true);
+        assert!(err.is_some());
+        let err = err.unwrap();
+        assert!(matches!(err.code(), Code::InvalidArgument));
+        assert!(err
+            .message()
+            .unwrap()
+            .contains("missing required query parameter"));
+    }
+
+    #[test]
+    fn test_get_invalid_connect_version() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?connect=v2&encoding=json&message=%7B%7D")
+            .body(())
+            .unwrap();
+        let err = validate_get_query_params(&req, false);
+        assert!(err.is_some());
+        let err = err.unwrap();
+        assert!(matches!(err.code(), Code::InvalidArgument));
+        assert!(err.message().unwrap().contains("connect must be \"v1\""));
+    }
+
+    #[test]
+    fn test_get_valid_compression_gzip() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?connect=v1&encoding=json&message=abc&compression=gzip")
+            .body(())
+            .unwrap();
+        assert!(validate_get_query_params(&req, false).is_none());
+    }
+
+    #[test]
+    fn test_get_valid_compression_identity() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?connect=v1&encoding=json&message=abc&compression=identity")
+            .body(())
+            .unwrap();
+        assert!(validate_get_query_params(&req, false).is_none());
+    }
+
+    #[test]
+    fn test_get_unsupported_compression() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?connect=v1&encoding=json&message=abc&compression=br")
+            .body(())
+            .unwrap();
+        let err = validate_get_query_params(&req, false);
+        assert!(err.is_some());
+        let err = err.unwrap();
+        assert!(matches!(err.code(), Code::Unimplemented));
+        assert!(err.message().unwrap().contains("unknown compression"));
+    }
+
+    #[test]
+    fn test_get_empty_message_is_valid() {
+        // Empty message value is valid (message= with no value)
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?connect=v1&encoding=json&message=")
+            .body(())
+            .unwrap();
+        assert!(validate_get_query_params(&req, false).is_none());
     }
 }

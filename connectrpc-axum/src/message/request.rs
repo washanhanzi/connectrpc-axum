@@ -102,14 +102,30 @@ where
     }
 }
 
-#[derive(Deserialize)]
+/// Query parameters for GET unary requests.
+///
+/// Note: Validation of required parameters (encoding, message) and their values
+/// is done in the layer via `validate_get_query_params()`. This struct uses
+/// Option for all fields to handle parse errors gracefully.
+#[derive(Deserialize, Default)]
 struct GetRequestQuery {
-    connect: String,
-    #[allow(dead_code)] // Protocol detection uses Context from layer, not this field
-    encoding: String,
-    message: String,
+    /// Connect protocol version (should be "v1" when present).
+    /// Validation done in layer; kept here for secondary validation.
+    #[serde(default)]
+    connect: Option<String>,
+    /// Message encoding - not used here since protocol is from Context.
+    /// Protocol detection uses Context set by layer, not this field.
+    #[serde(default)]
+    #[allow(dead_code)]
+    encoding: Option<String>,
+    /// The message payload (required, but validated in layer).
+    #[serde(default)]
+    message: Option<String>,
+    /// Whether the message is base64-encoded ("1" if true).
+    #[serde(default)]
     base64: Option<String>,
-    #[allow(dead_code)] // Not used yet, but part of the spec
+    /// Compression algorithm used on the message (e.g., "gzip").
+    #[serde(default)]
     compression: Option<String>,
 }
 
@@ -129,23 +145,54 @@ where
     let params: GetRequestQuery = serde_qs::from_str(query)
         .map_err(|err| ConnectError::new(Code::InvalidArgument, err.to_string()))?;
 
-    if params.connect != "v1" {
-        return Err(ConnectError::new(
-            Code::InvalidArgument,
-            "unsupported connect version",
-        ));
+    // Secondary connect version check (primary validation in layer)
+    // This handles edge cases like connect being empty vs missing
+    if let Some(ref connect) = params.connect {
+        if !connect.is_empty() && connect != "v1" {
+            return Err(ConnectError::new(
+                Code::InvalidArgument,
+                format!("connect must be \"v1\": got \"{}\"", connect),
+            ));
+        }
     }
 
+    // Get message content (layer validation ensures this is present)
+    let message_str = params.message.unwrap_or_default();
+
+    // 1. Decode base64 if specified
     let bytes = if params.base64.as_deref() == Some("1") {
         use base64::{engine::general_purpose, Engine as _};
         general_purpose::URL_SAFE
-            .decode(&params.message)
+            .decode(&message_str)
             .map_err(|err| ConnectError::new(Code::InvalidArgument, err.to_string()))?
     } else {
-        params.message.into_bytes()
+        message_str.into_bytes()
     };
 
-    // Use protocol from Context instead of parsing encoding from query params
+    // 2. Decompress if compression is specified
+    let bytes = match params.compression.as_deref() {
+        Some("gzip") => {
+            decompress_bytes(bytes.into(), CompressionEncoding::Gzip)?
+        }
+        Some("identity") | Some("") | None => bytes.into(),
+        Some(other) => {
+            // This should be caught by layer validation, but handle as fallback
+            return Err(ConnectError::new(
+                Code::Unimplemented,
+                format!(
+                    "unknown compression \"{}\": supported encodings are gzip, identity",
+                    other
+                ),
+            ));
+        }
+    };
+
+    // 3. Check size after decompression
+    ctx.limits
+        .check_size(bytes.len())
+        .map_err(|e| ConnectError::new(Code::ResourceExhausted, e))?;
+
+    // 4. Decode based on protocol encoding
     let message = if ctx.protocol.is_proto() {
         decode_proto(&bytes)?
     } else {

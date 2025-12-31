@@ -76,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
     let router = axum::Router::new()
         .route(
             "/echo.EchoService/EchoBidiStream",
-            post_connect_bidi_stream(echo_bidi_stream),
+            post_bidi_stream(echo_bidi_stream),
         )
         .layer(ConnectLayer::new());
 

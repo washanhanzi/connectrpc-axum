@@ -235,14 +235,39 @@ mod generated_handler_impls {
     all_tuples_nonempty!(impl_handler_for_connect_handler_wrapper);
 }
 
-/// Creates a POST method router from a ConnectHandler function (flexible mode)
-pub fn post_connect<F, T, S>(f: F) -> MethodRouter<S>
+/// Creates a POST method router for unary RPC handlers.
+pub fn post_unary<F, T, S>(f: F) -> MethodRouter<S>
 where
     S: Clone + Send + Sync + 'static,
     ConnectHandlerWrapper<F>: Handler<T, S>,
     T: 'static,
 {
     axum::routing::post(ConnectHandlerWrapper(f))
+}
+
+/// Creates a GET method router for unary RPC handlers.
+///
+/// This enables idempotent unary RPCs to be accessed via GET requests,
+/// which allows caching and is useful for browser use cases.
+///
+/// GET requests encode the message in query parameters:
+/// - `connect=v1` (required when protocol header enforcement is enabled)
+/// - `encoding=json|proto` (required)
+/// - `message=<payload>` (required, URL-encoded)
+/// - `base64=1` (optional, for binary payloads)
+/// - `compression=gzip|identity` (optional)
+///
+/// To support both GET and POST, combine with `post_unary`:
+/// ```ignore
+/// .route("/path", get_unary(handler).merge(post_unary(handler)))
+/// ```
+pub fn get_unary<F, T, S>(f: F) -> MethodRouter<S>
+where
+    S: Clone + Send + Sync + 'static,
+    ConnectHandlerWrapper<F>: Handler<T, S>,
+    T: 'static,
+{
+    axum::routing::get(ConnectHandlerWrapper(f))
 }
 
 // =============== Streaming Handler Support ===============
@@ -388,8 +413,8 @@ mod generated_stream_handler_impls {
     all_tuples_nonempty!(impl_handler_for_connect_stream_handler_wrapper);
 }
 
-/// Creates a POST method router from a streaming ConnectHandler function
-pub fn post_connect_stream<F, T, S>(f: F) -> MethodRouter<S>
+/// Creates a POST method router for server streaming RPC handlers.
+pub fn post_server_stream<F, T, S>(f: F) -> MethodRouter<S>
 where
     S: Clone + Send + Sync + 'static,
     ConnectStreamHandlerWrapper<F>: Handler<T, S>,
@@ -458,10 +483,10 @@ where
     }
 }
 
-/// Creates a POST method router from a client streaming handler function.
+/// Creates a POST method router for client streaming RPC handlers.
 ///
 /// Client streaming: client sends a stream of messages, server responds with one message.
-pub fn post_connect_client_stream<F, Req, Resp, Fut>(f: F) -> MethodRouter<()>
+pub fn post_client_stream<F, Req, Resp, Fut>(f: F) -> MethodRouter<()>
 where
     F: Fn(ConnectStreamingRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
@@ -533,11 +558,11 @@ where
     }
 }
 
-/// Creates a POST method router from a bidirectional streaming handler function.
+/// Creates a POST method router for bidirectional streaming RPC handlers.
 ///
 /// Bidi streaming: both client and server send streams of messages.
 /// Requires HTTP/2 for full-duplex communication.
-pub fn post_connect_bidi_stream<F, Req, Resp, St, Fut>(f: F) -> MethodRouter<()>
+pub fn post_bidi_stream<F, Req, Resp, St, Fut>(f: F) -> MethodRouter<()>
 where
     F: Fn(ConnectStreamingRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,

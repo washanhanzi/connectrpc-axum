@@ -22,13 +22,13 @@ pub use context::{
 pub use pipeline::{RequestPipeline, ResponsePipeline};
 #[cfg(feature = "tonic")]
 pub use handler::{
-    post_connect_tonic, unimplemented_boxed_call, BoxedCall, IntoFactory,
+    post_tonic_unary, post_tonic_stream, unimplemented_boxed_call, BoxedCall, IntoFactory,
     TonicCompatibleHandlerWrapper,
 };
 pub use handler::{
-    post_connect, post_connect_bidi_stream, post_connect_client_stream, ConnectBidiStreamHandler,
-    ConnectBidiStreamHandlerWrapper, ConnectClientStreamHandler, ConnectClientStreamHandlerWrapper,
-    ConnectHandler, ConnectHandlerWrapper,
+    get_unary, post_bidi_stream, post_client_stream, post_server_stream, post_unary,
+    ConnectBidiStreamHandler, ConnectBidiStreamHandlerWrapper, ConnectClientStreamHandler,
+    ConnectClientStreamHandlerWrapper, ConnectHandler, ConnectHandlerWrapper,
 };
 pub use layer::{ConnectLayer, ConnectService};
 pub use service_builder::MakeServiceBuilder;
@@ -55,14 +55,14 @@ pub mod prelude {
     pub use crate::error::{Code, ConnectError};
     #[cfg(feature = "tonic")]
     pub use crate::handler::{
-        post_connect_tonic, unimplemented_boxed_call, BoxedCall, IntoFactory,
+        post_tonic_unary, post_tonic_stream, unimplemented_boxed_call, BoxedCall, IntoFactory,
         TonicCompatibleHandlerWrapper,
     };
     pub use crate::handler::{
-        post_connect, post_connect_bidi_stream, post_connect_client_stream,
-        post_connect_stream, ConnectBidiStreamHandler, ConnectBidiStreamHandlerWrapper,
-        ConnectClientStreamHandler, ConnectClientStreamHandlerWrapper, ConnectHandler,
-        ConnectHandlerWrapper, ConnectStreamHandlerWrapper,
+        get_unary, post_bidi_stream, post_client_stream, post_server_stream, post_unary,
+        ConnectBidiStreamHandler, ConnectBidiStreamHandlerWrapper, ConnectClientStreamHandler,
+        ConnectClientStreamHandlerWrapper, ConnectHandler, ConnectHandlerWrapper,
+        ConnectStreamHandlerWrapper,
     };
     pub use crate::layer::{ConnectLayer, ConnectService};
     pub use crate::message::{
