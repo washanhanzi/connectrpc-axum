@@ -20,23 +20,30 @@ use serde::de::DeserializeOwned;
 /// Handle extractor rejections with protocol-aware encoding.
 ///
 /// If the rejection is a `ConnectError`, it's encoded using the protocol from the request.
-/// Otherwise, a warning is printed (in debug builds) and an internal error is returned
-/// with proper Connect protocol encoding.
+/// Otherwise, the rejection is returned as-is via `IntoResponse`. This allows extractors
+/// to return non-Connect responses like HTTP redirects for authentication flows.
 fn handle_extractor_rejection<R>(rejection: R, protocol: RequestProtocol) -> Response
 where
     R: IntoResponse + Any,
 {
-    // Box the rejection to use Any trait for type checking
     let rejection_any: Box<dyn Any> = Box::new(rejection);
 
     match rejection_any.downcast::<ConnectError>() {
         Ok(connect_err) => connect_err.into_response_with_protocol(protocol),
-        Err(_) => {
+        Err(any_box) => {
             tracing::warn!(
-                "Extractor rejection is not ConnectError, converting to internal error. \
-                 Consider using an extractor that returns ConnectError for proper error handling."
+                "Extractor rejection is not ConnectError, returning as-is. \
+                 If this is unintentional, consider using an extractor that returns ConnectError."
             );
-            ConnectError::new_internal("extractor rejection").into_response_with_protocol(protocol)
+            // Downcast back to original type to call into_response
+            any_box
+                .downcast::<R>()
+                .map(|r| r.into_response())
+                .unwrap_or_else(|_| {
+                    // Shouldn't happen, but fallback to internal error
+                    ConnectError::new_internal("extractor rejection")
+                        .into_response_with_protocol(protocol)
+                })
         }
     }
 }
@@ -283,10 +290,10 @@ where
             // Note: Timeout is enforced by ConnectLayer, not here
             let result = (self.0)(connect_req).await;
 
-            // Convert result to response with protocol
+            // Convert result to response with context (enables per-message compression)
             // For streaming handlers, errors must use streaming framing (EndStream frame)
             match result {
-                Ok(response) => response.into_response_with_protocol(ctx.protocol),
+                Ok(response) => response.into_response_with_context(&ctx),
                 Err(err) => {
                     let use_proto = ctx.protocol.is_proto();
                     err.into_streaming_response(use_proto)
@@ -359,10 +366,10 @@ macro_rules! impl_handler_for_connect_stream_handler_wrapper {
                     // Note: Timeout is enforced by ConnectLayer, not here
                     let result = (self.0)($($A,)* connect_req).await;
 
-                    // Convert result to response with protocol
+                    // Convert result to response with context (enables per-message compression)
                     // For streaming handlers, errors must use streaming framing (EndStream frame)
                     match result {
-                        Ok(response) => response.into_response_with_protocol(ctx.protocol),
+                        Ok(response) => response.into_response_with_context(&ctx),
                         Err(err) => {
                             let use_proto = ctx.protocol.is_proto();
                             err.into_streaming_response(use_proto)
@@ -437,11 +444,11 @@ where
             // Note: Timeout is enforced by ConnectLayer, not here
             let result = (self.0)(streaming_req).await;
 
-            // Convert result to streaming response format
+            // Convert result to streaming response format with context
             // Client streaming uses streaming framing for the response
             // (single message frame + EndStreamResponse)
             match result {
-                Ok(response) => response.into_streaming_response_with_protocol(ctx.protocol),
+                Ok(response) => response.into_streaming_response_with_context(&ctx),
                 Err(err) => {
                     let use_proto = ctx.protocol.is_proto();
                     err.into_streaming_response(use_proto)
@@ -513,10 +520,10 @@ where
             // Note: Timeout is enforced by ConnectLayer, not here
             let result = (self.0)(streaming_req).await;
 
-            // Convert result to response with protocol
+            // Convert result to response with context (enables per-message compression)
             // For streaming responses, errors must use streaming framing (EndStream frame)
             match result {
-                Ok(response) => response.into_response_with_protocol(ctx.protocol),
+                Ok(response) => response.into_response_with_context(&ctx),
                 Err(err) => {
                     let use_proto = ctx.protocol.is_proto();
                     err.into_streaming_response(use_proto)

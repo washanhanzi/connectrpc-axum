@@ -42,7 +42,7 @@
 
 use axum::Router;
 
-use crate::context::MessageLimits;
+use crate::context::{CompressionConfig, MessageLimits};
 use crate::layer::ConnectLayer;
 
 #[cfg(feature = "tonic")]
@@ -93,6 +93,8 @@ pub struct MakeServiceBuilder<S = ()> {
     limits: MessageLimits,
     /// Whether to require the Connect-Protocol-Version header
     require_protocol_header: bool,
+    /// Compression configuration
+    compression: CompressionConfig,
 }
 
 impl<S> Default for MakeServiceBuilder<S>
@@ -124,6 +126,7 @@ where
             grpc_routes: tonic::service::Routes::default(),
             limits: MessageLimits::default(),
             require_protocol_header: false,
+            compression: CompressionConfig::default(),
         }
     }
 
@@ -143,6 +146,27 @@ where
     /// Disabled by default to allow easy ad-hoc requests (e.g., with cURL).
     pub fn require_protocol_header(mut self, require: bool) -> Self {
         self.require_protocol_header = require;
+        self
+    }
+
+    /// Set compression configuration.
+    ///
+    /// Controls response compression behavior:
+    /// - `min_bytes`: Minimum response size before compression is applied (default: 1024)
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use connectrpc_axum::{MakeServiceBuilder, CompressionConfig};
+    ///
+    /// // Compress responses >= 512 bytes
+    /// let app = MakeServiceBuilder::new()
+    ///     .compression(CompressionConfig::new(512))
+    ///     .add_router(router)
+    ///     .build();
+    /// ```
+    pub fn compression(mut self, config: CompressionConfig) -> Self {
+        self.compression = config;
         self
     }
 
@@ -259,7 +283,8 @@ where
         let grpc_service = self.grpc_routes.prepare();
         let layer = ConnectLayer::new()
             .limits(self.limits)
-            .require_protocol_header(self.require_protocol_header);
+            .require_protocol_header(self.require_protocol_header)
+            .compression(self.compression);
         let connect_router = self.connect_router.layer(layer);
         ContentTypeSwitch::new(grpc_service, connect_router)
     }
@@ -296,7 +321,8 @@ where
     pub fn build(self) -> Router<S> {
         let layer = ConnectLayer::new()
             .limits(self.limits)
-            .require_protocol_header(self.require_protocol_header);
+            .require_protocol_header(self.require_protocol_header)
+            .compression(self.compression);
         self.connect_router.layer(layer)
     }
 }

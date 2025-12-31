@@ -1,13 +1,16 @@
 //! Extractor for Connect requests.
-use crate::context::{decompress, CompressionEncoding, Context, MessageLimits};
-use crate::pipeline::RequestPipeline;
+use crate::context::{CompressionEncoding, Context, MessageLimits};
 use crate::error::{Code, ConnectError};
+use crate::pipeline::{
+    decode_json, decode_proto, decompress_bytes, envelope_flags, read_body, unwrap_envelope,
+    RequestPipeline,
+};
 use axum::{
     body::Body,
     extract::{FromRequest, Request},
     http::Method,
 };
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 use futures::Stream;
 use http_body_util::BodyExt;
 use prost::Message;
@@ -27,7 +30,21 @@ where
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
         match *req.method() {
-            Method::POST => from_post_request(req, state).await,
+            Method::POST => {
+                // Get context to determine protocol type
+                let ctx = req
+                    .extensions()
+                    .get::<Context>()
+                    .cloned()
+                    .ok_or_else(|| ConnectError::new(Code::Internal, "missing pipeline context"))?;
+
+                // Dispatch based on protocol - no envelope for unary, envelope for streaming
+                if ctx.protocol.needs_envelope() {
+                    from_streaming_post_request(req, ctx).await
+                } else {
+                    from_unary_post_request(req).await
+                }
+            }
             Method::GET => from_get_request(req, state).await,
             _ => Err(ConnectError::new(
                 Code::Unimplemented,
@@ -37,115 +54,58 @@ where
     }
 }
 
-async fn from_post_request<S, T>(
-    req: Request,
-    _state: &S,
-) -> Result<ConnectRequest<T>, ConnectError>
+/// Handle unary POST requests (application/json, application/proto).
+///
+/// Flow: read_body → decompress → check_size → decode
+/// No envelope handling.
+async fn from_unary_post_request<T>(req: Request) -> Result<ConnectRequest<T>, ConnectError>
 where
-    S: Send + Sync,
     T: Message + DeserializeOwned + Default,
 {
-    // Get pipeline context from extensions (injected by ConnectLayer)
-    let ctx = req
-        .extensions()
-        .get::<Context>()
-        .cloned()
-        .ok_or_else(|| ConnectError::new(Code::Internal, "missing pipeline context"))?;
-
-    // For unary requests without envelope, use the pipeline directly
-    if !ctx.protocol.needs_envelope() {
-        return RequestPipeline::decode::<T>(req)
-            .await
-            .map(ConnectRequest)
-            .map_err(|e| e.into_connect_error());
-    }
-
-    // For streaming-style unary (with envelope), handle manually
-    // Read body with size limit
-    let max_size = ctx.limits.max_message_size().unwrap_or(usize::MAX);
-    let mut bytes = axum::body::to_bytes(req.into_body(), max_size)
+    RequestPipeline::decode::<T>(req)
         .await
-        .map_err(|e| {
-            ConnectError::new(
-                Code::ResourceExhausted,
-                format!("failed to read request body: {e}"),
-            )
-        })?;
+        .map(ConnectRequest)
+        .map_err(|e| e.into_connect_error())
+}
 
-    // Decompress if needed
-    if ctx.compression.request_encoding != CompressionEncoding::Identity {
-        let decompressed = decompress(&bytes, ctx.compression.request_encoding)
-            .map_err(|e| ConnectError::new(Code::InvalidArgument, format!("decompression failed: {e}")))?;
-        bytes = Bytes::from(decompressed);
-    }
+/// Handle streaming-style POST requests used for unary (application/connect+json, application/connect+proto).
+///
+/// Flow: read_body → decompress → check_size → unwrap_envelope → decode
+/// Has envelope handling.
+async fn from_streaming_post_request<T>(
+    req: Request,
+    ctx: Context,
+) -> Result<ConnectRequest<T>, ConnectError>
+where
+    T: Message + DeserializeOwned + Default,
+{
+    // 1. Read body with size limit
+    let max_size = ctx.limits.max_message_size().unwrap_or(usize::MAX);
+    let bytes = read_body(req.into_body(), max_size).await?;
 
-    // Check size after decompression
+    // 2. Decompress if needed
+    let bytes = decompress_bytes(bytes, ctx.compression.request_encoding)?;
+
+    // 3. Check size after decompression
     ctx.limits
         .check_size(bytes.len())
         .map_err(|e| ConnectError::new(Code::ResourceExhausted, e))?;
 
-    // Unwrap the 5-byte frame envelope
-    // Frame format: [flags:1][length:4][payload:length]
-    if bytes.len() >= 5 {
-        let flags = bytes[0];
-        let length = u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]) as usize;
+    // 4. Unwrap envelope and decode
+    let payload = unwrap_envelope(&bytes)?;
 
-        // Connect streaming: flag 0x00 = message, 0x02 = end-stream
-        if flags == 0x02 {
-            return Err(ConnectError::new(
-                Code::InvalidArgument,
-                "unexpected EndStreamResponse in request",
-            ));
-        } else if flags != 0x00 {
-            return Err(ConnectError::new(
-                Code::InvalidArgument,
-                format!("invalid Connect frame flags: 0x{:02x}", flags),
-            ));
-        }
-
-        // Extract the actual payload (unary request must have exactly one frame)
-        if bytes.len() > 5 + length {
-            return Err(ConnectError::new(
-                Code::InvalidArgument,
-                format!(
-                    "frame has {} unexpected trailing bytes",
-                    bytes.len() - 5 - length
-                ),
-            ));
-        } else if bytes.len() < 5 + length {
-            return Err(ConnectError::new(
-                Code::InvalidArgument,
-                format!(
-                    "incomplete frame: expected {} bytes, got {}",
-                    5 + length,
-                    bytes.len()
-                ),
-            ));
-        }
-        bytes = bytes.slice(5..5 + length);
-    } else {
-        // Frame expected but body is too short
-        return Err(ConnectError::new(
-            Code::InvalidArgument,
-            "protocol error: incomplete envelope",
-        ));
-    }
-
-    // Decode based on protocol encoding
+    // 5. Decode based on protocol encoding
     if ctx.protocol.is_proto() {
-        let message = T::decode(bytes)
-            .map_err(|e| ConnectError::new(Code::InvalidArgument, e.to_string()))?;
-        Ok(ConnectRequest(message))
+        decode_proto(&payload).map(ConnectRequest)
     } else {
-        let message: T = serde_json::from_slice(&bytes)
-            .map_err(|e| ConnectError::new(Code::InvalidArgument, e.to_string()))?;
-        Ok(ConnectRequest(message))
+        decode_json(&payload).map(ConnectRequest)
     }
 }
 
 #[derive(Deserialize)]
 struct GetRequestQuery {
     connect: String,
+    #[allow(dead_code)] // Protocol detection uses Context from layer, not this field
     encoding: String,
     message: String,
     base64: Option<String>,
@@ -158,6 +118,13 @@ where
     S: Send + Sync,
     T: Message + DeserializeOwned + Default,
 {
+    // Get protocol from Context (set by ConnectLayer via detect_protocol)
+    let ctx = req
+        .extensions()
+        .get::<Context>()
+        .cloned()
+        .ok_or_else(|| ConnectError::new(Code::Internal, "missing pipeline context"))?;
+
     let query = req.uri().query().unwrap_or("");
     let params: GetRequestQuery = serde_qs::from_str(query)
         .map_err(|err| ConnectError::new(Code::InvalidArgument, err.to_string()))?;
@@ -170,7 +137,7 @@ where
     }
 
     let bytes = if params.base64.as_deref() == Some("1") {
-        use base64::{Engine as _, engine::general_purpose};
+        use base64::{engine::general_purpose, Engine as _};
         general_purpose::URL_SAFE
             .decode(&params.message)
             .map_err(|err| ConnectError::new(Code::InvalidArgument, err.to_string()))?
@@ -178,17 +145,11 @@ where
         params.message.into_bytes()
     };
 
-    let message = if params.encoding == "proto" {
-        T::decode(bytes.as_slice())
-            .map_err(|err| ConnectError::new(Code::InvalidArgument, err.to_string()))?
-    } else if params.encoding == "json" {
-        serde_json::from_slice(&bytes)
-            .map_err(|err| ConnectError::new(Code::InvalidArgument, err.to_string()))?
+    // Use protocol from Context instead of parsing encoding from query params
+    let message = if ctx.protocol.is_proto() {
+        decode_proto(&bytes)?
     } else {
-        return Err(ConnectError::new(
-            Code::InvalidArgument,
-            "unsupported encoding",
-        ));
+        decode_json(&bytes)?
     };
 
     Ok(ConnectRequest(message))
@@ -230,9 +191,10 @@ where
             .ok_or_else(|| ConnectError::new(Code::Internal, "missing pipeline context"))?;
 
         let use_proto = ctx.protocol.is_proto();
+        let request_encoding = ctx.compression.request_encoding;
         let body = req.into_body();
 
-        let stream = create_frame_stream::<T>(body, use_proto, ctx.limits);
+        let stream = create_frame_stream::<T>(body, use_proto, ctx.limits, request_encoding);
         Ok(ConnectStreamingRequest {
             stream: Box::pin(stream),
         })
@@ -240,10 +202,14 @@ where
 }
 
 /// Creates a stream that parses Connect frames from the request body.
+///
+/// Handles per-message compression: frames with flag 0x01 are decompressed
+/// using the encoding from the `Connect-Content-Encoding` header.
 fn create_frame_stream<T>(
     body: Body,
     use_proto: bool,
     limits: MessageLimits,
+    request_encoding: CompressionEncoding,
 ) -> impl Stream<Item = Result<T, ConnectError>> + Send
 where
     T: Message + DeserializeOwned + Default + Send + 'static,
@@ -270,13 +236,14 @@ where
                 }
 
                 // EndStream frame (flags = 0x02) signals end of client stream
-                if flags == 0x02 {
+                if flags == envelope_flags::END_STREAM {
                     // Client sent EndStream, we're done
                     return;
                 }
 
-                // Regular message frame must have flags = 0x00
-                if flags != 0x00 {
+                // Check for valid message flags (0x00 = uncompressed, 0x01 = compressed)
+                let is_compressed = flags == envelope_flags::COMPRESSED;
+                if flags != envelope_flags::MESSAGE && !is_compressed {
                     yield Err(ConnectError::new(
                         Code::InvalidArgument,
                         format!("invalid Connect frame flags: 0x{:02x}", flags),
@@ -287,13 +254,31 @@ where
                 // Extract payload
                 let payload = buffer.split_to(5 + length).split_off(5);
 
-                // Decode the message
-                let message = if use_proto {
-                    T::decode(payload.freeze())
-                        .map_err(|err| ConnectError::new(Code::InvalidArgument, err.to_string()))
+                // Decompress if needed
+                let payload = if is_compressed {
+                    match decompress_bytes(payload.freeze(), request_encoding) {
+                        Ok(decompressed) => {
+                            // Check size after decompression
+                            if let Err(err) = limits.check_size(decompressed.len()) {
+                                yield Err(ConnectError::new(Code::ResourceExhausted, err));
+                                return;
+                            }
+                            decompressed.into()
+                        }
+                        Err(err) => {
+                            yield Err(err);
+                            return;
+                        }
+                    }
                 } else {
-                    serde_json::from_slice(&payload)
-                        .map_err(|err| ConnectError::new(Code::InvalidArgument, err.to_string()))
+                    payload
+                };
+
+                // Decode the message using pipeline primitives
+                let message = if use_proto {
+                    decode_proto(&payload)
+                } else {
+                    decode_json(&payload)
                 };
 
                 yield message;

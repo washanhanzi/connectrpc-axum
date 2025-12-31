@@ -103,9 +103,9 @@ impl Context {
         // Detect protocol from Content-Type or query params
         let protocol = detect_protocol(req);
 
-        // Parse compression for unary POST requests
-        let compression = if protocol.is_unary() && *req.method() == Method::POST {
-            match parse_compression(req) {
+        // Parse compression for all POST requests (unary and streaming)
+        let compression = if *req.method() == Method::POST {
+            match parse_compression(req, protocol.is_streaming()) {
                 Ok(c) => {
                     CompressionContext::new(c.request, c.response, config.compression.min_bytes)
                 }

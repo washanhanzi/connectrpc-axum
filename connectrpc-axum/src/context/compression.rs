@@ -84,17 +84,37 @@ pub fn negotiate_response_encoding(accept: Option<&str>) -> CompressionEncoding 
     }
 }
 
+/// Header name for Connect streaming request compression.
+const CONNECT_CONTENT_ENCODING: &str = "connect-content-encoding";
+
+/// Header name for Connect streaming response compression negotiation.
+const CONNECT_ACCEPT_ENCODING: &str = "connect-accept-encoding";
+
 /// Parse compression settings from request headers.
 ///
-/// Extracts `Content-Encoding` and `Accept-Encoding` headers to determine
-/// request decompression and response compression encodings.
+/// For Connect streaming protocol:
+/// - Uses `Connect-Content-Encoding` for request body compression
+/// - Uses `Connect-Accept-Encoding` for response compression negotiation
+///
+/// For unary protocol:
+/// - Uses standard `Content-Encoding` for request body compression
+/// - Uses standard `Accept-Encoding` for response compression negotiation
 ///
 /// Returns `Err(ConnectError)` if the Content-Encoding is unsupported.
-pub fn parse_compression<B>(req: &Request<B>) -> Result<Compression, ConnectError> {
-    let content_encoding = req
-        .headers()
-        .get(CONTENT_ENCODING)
-        .and_then(|v| v.to_str().ok());
+pub fn parse_compression<B>(
+    req: &Request<B>,
+    is_streaming: bool,
+) -> Result<Compression, ConnectError> {
+    // Connect streaming uses Connect-Content-Encoding, unary uses Content-Encoding
+    let content_encoding = if is_streaming {
+        req.headers()
+            .get(CONNECT_CONTENT_ENCODING)
+            .and_then(|v| v.to_str().ok())
+    } else {
+        req.headers()
+            .get(CONTENT_ENCODING)
+            .and_then(|v| v.to_str().ok())
+    };
 
     let request_encoding = match CompressionEncoding::from_header(content_encoding) {
         Some(enc) => enc,
@@ -109,10 +129,16 @@ pub fn parse_compression<B>(req: &Request<B>) -> Result<Compression, ConnectErro
         }
     };
 
-    let accept_encoding = req
-        .headers()
-        .get(ACCEPT_ENCODING)
-        .and_then(|v| v.to_str().ok());
+    // Connect streaming uses Connect-Accept-Encoding, unary uses Accept-Encoding
+    let accept_encoding = if is_streaming {
+        req.headers()
+            .get(CONNECT_ACCEPT_ENCODING)
+            .and_then(|v| v.to_str().ok())
+    } else {
+        req.headers()
+            .get(ACCEPT_ENCODING)
+            .and_then(|v| v.to_str().ok())
+    };
     let response_encoding = negotiate_response_encoding(accept_encoding);
 
     Ok(Compression {

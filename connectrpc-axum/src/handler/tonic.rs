@@ -217,9 +217,9 @@ macro_rules! impl_handler_for_tonic_compatible_wrapper {
                     // Note: Timeout is enforced by ConnectLayer, not here
                     let result = (self.0)(connect_req).await;
 
-                    // Convert result to response with protocol
+                    // Convert result to response with context
                     match result {
-                        Ok(response) => response.into_response_with_protocol(ctx.protocol),
+                        Ok(response) => response.into_response_with_context(&ctx),
                         Err(err) => err.into_response_with_protocol(ctx.protocol),
                     }
                 })
@@ -266,9 +266,9 @@ macro_rules! impl_handler_for_tonic_compatible_wrapper {
                     // Note: Timeout is enforced by ConnectLayer, not here
                     let result = (self.0)(state_extractor, connect_req).await;
 
-                    // Convert result to response with protocol
+                    // Convert result to response with context
                     match result {
-                        Ok(response) => response.into_response_with_protocol(ctx.protocol),
+                        Ok(response) => response.into_response_with_context(&ctx),
                         Err(err) => err.into_response_with_protocol(ctx.protocol),
                     }
                 })
@@ -335,10 +335,10 @@ where
             // Note: Timeout is enforced by ConnectLayer, not here
             let result = (self.0)(connect_req).await;
 
-            // Convert result to response with protocol
+            // Convert result to response with context (enables per-message compression)
             // For streaming handlers, errors must use streaming framing (EndStream frame)
             match result {
-                Ok(response) => response.into_response_with_protocol(ctx.protocol),
+                Ok(response) => response.into_response_with_context(&ctx),
                 Err(err) => {
                     let use_proto = ctx.protocol.is_proto();
                     err.into_streaming_response(use_proto)
@@ -384,10 +384,10 @@ where
             // Note: Timeout is enforced by ConnectLayer, not here
             let result = (self.0)(state_extractor, connect_req).await;
 
-            // Convert result to response with protocol
+            // Convert result to response with context (enables per-message compression)
             // For streaming handlers, errors must use streaming framing (EndStream frame)
             match result {
-                Ok(response) => response.into_response_with_protocol(ctx.protocol),
+                Ok(response) => response.into_response_with_context(&ctx),
                 Err(err) => {
                     let use_proto = ctx.protocol.is_proto();
                     err.into_streaming_response(use_proto)
