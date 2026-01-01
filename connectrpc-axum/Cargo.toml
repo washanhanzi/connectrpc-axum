@@ -31,7 +31,6 @@ tokio-stream = { workspace = true, optional = true }
 tokio-util = { workspace = true, features = ["io"] }
 tonic = { workspace = true, optional = true }
 tonic-prost = { workspace = true, optional = true }
-tonic-web = { workspace = true, optional = true }
 tower = { workspace = true, features = ["full"] }
 tower-http = { workspace = true, features = ["cors"] }
 tracing = { workspace = true }
@@ -39,4 +38,3 @@ flate2 = { workspace = true }
 
 [features]
 tonic = ["dep:tokio-stream", "dep:tonic", "dep:tonic-prost"]
-tonic-web = ["tonic", "dep:tonic-web"]

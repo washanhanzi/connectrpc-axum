@@ -17,7 +17,7 @@ import (
 // - Request/Response: [flags:1][length:4][protobuf message]
 // - Content-Type: application/grpc-web+proto
 func TestGRPCWeb(t *testing.T) {
-	s := startServer(t, "grpc-web", "tonic-web")
+	s := startServer(t, "grpc-web", "tonic")
 	defer s.stop()
 
 	url := serverURL + "/hello.HelloWorldService/SayHello"

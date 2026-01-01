@@ -54,8 +54,8 @@ func TestMain(m *testing.M) {
 func buildServers(t *testing.T) {
 	buildOnce.Do(func() {
 		t.Log("Building all example servers...")
-		// Build with both tonic and tonic-web features to cover all examples
-		cmd := exec.Command("cargo", "build", "-p", "connectrpc-axum-examples", "--features", "tonic,tonic-web")
+		// Build with tonic feature to cover all examples
+		cmd := exec.Command("cargo", "build", "-p", "connectrpc-axum-examples", "--features", "tonic")
 		cmd.Dir = rootDir
 
 		var stderr bytes.Buffer

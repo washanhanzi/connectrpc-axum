@@ -12,11 +12,6 @@ tonic = [
   "dep:tonic",
   "dep:tonic-prost",
 ]
-tonic-web = [
-  "tonic",
-  "connectrpc-axum/tonic-web",
-  "dep:tonic-web",
-]
 
 # Example 1: Pure ConnectRPC unary
 [[bin]]
@@ -50,7 +45,7 @@ required-features = ["tonic"]
 [[bin]]
 name = "grpc-web"
 path = "src/bin/grpc-web.rs"
-required-features = ["tonic-web"]
+required-features = ["tonic"]
 
 # Bug Reproduction: Streaming error handling bypass
 [[bin]]
@@ -116,8 +111,8 @@ tokio-stream = "0.1"
 tonic = { version = "0.14", optional = true }
 # Required when using tonic feature: Used by generated Tonic code
 tonic-prost = { workspace = true, optional = true }
-# Required when using tonic-web feature: gRPC-Web support
-tonic-web = { version = "0.14", optional = true }
+# Required for grpc-web example: gRPC-Web support
+tonic-web = { version = "0.14" }
 # Required: Used by generated service code
 tower = { workspace = true }
 # Application dependency for logging (used in extractor examples)
