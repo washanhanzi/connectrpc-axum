@@ -3,6 +3,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: "connectrpc-axum",
   description: "ConnectRPC protocol implementation for Axum",
+  base: '/connectrpc-axum/',
 
   markdown: {
     theme: {
