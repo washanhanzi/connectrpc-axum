@@ -52,6 +52,8 @@ The Go tests:
 | TestStreamingErrorHandling | streaming-error-repro | Connect | Stream error handling |
 | TestProtocolVersion | protocol-version | Connect | Protocol header validation |
 | TestTimeout | timeout | Connect | Connect-Timeout-Ms enforcement |
+| TestExtractorConnectError | extractor-connect-error | Connect | Extractor rejection with ConnectError |
+| TestExtractorHTTPResponse | extractor-http-response | Connect | Extractor rejection with plain HTTP |
 
 ## Failure Handling
 
