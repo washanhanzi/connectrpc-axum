@@ -48,6 +48,13 @@ use crate::layer::ConnectLayer;
 #[cfg(feature = "tonic")]
 use crate::tonic::ContentTypeSwitch;
 
+/// Marker type indicating no gRPC services have been added.
+pub struct NoGrpc;
+
+/// Marker type indicating gRPC services have been added.
+#[cfg(feature = "tonic")]
+pub struct HasGrpc(tonic::service::Routes);
+
 /// Builder for combining multiple Connect routers and gRPC services.
 ///
 /// This builder allows you to:
@@ -58,6 +65,13 @@ use crate::tonic::ContentTypeSwitch;
 /// # Type Parameters
 ///
 /// - `S`: The state type for the routers (default: `()`)
+/// - `G`: The gRPC state marker (default: `NoGrpc`)
+///
+/// # Return Types
+///
+/// The `build()` method returns different types based on whether gRPC services were added:
+/// - Without gRPC services: Returns `Router<S>`
+/// - With gRPC services: Returns `ContentTypeSwitch<tonic::service::Routes, Router<S>>`
 ///
 /// # Examples
 ///
@@ -67,7 +81,7 @@ use crate::tonic::ContentTypeSwitch;
 /// # let router1: Router<()> = Router::new();
 /// # let router2: Router<()> = Router::new();
 ///
-/// // Connect-only
+/// // Connect-only - returns Router<S>
 /// let app = MakeServiceBuilder::new()
 ///     .add_router(router1)
 ///     .add_router(router2)
@@ -78,17 +92,16 @@ use crate::tonic::ContentTypeSwitch;
 /// use connectrpc_axum::MakeServiceBuilder;
 /// use axum::Router;
 ///
-/// // Connect + multiple gRPC services
+/// // Connect + gRPC - returns ContentTypeSwitch
 /// let app = MakeServiceBuilder::new()
 ///     .add_router(router1)
 ///     .add_grpc_service(grpc1)
 ///     .add_grpc_service(grpc2)
 ///     .build();
 /// ```
-pub struct MakeServiceBuilder<S = ()> {
+pub struct MakeServiceBuilder<S = (), G = NoGrpc> {
     connect_router: Router<S>,
-    #[cfg(feature = "tonic")]
-    grpc_routes: tonic::service::Routes,
+    grpc_state: G,
     /// Message size limits for requests
     limits: MessageLimits,
     /// Whether to require the Connect-Protocol-Version header
@@ -97,7 +110,7 @@ pub struct MakeServiceBuilder<S = ()> {
     compression: CompressionConfig,
 }
 
-impl<S> Default for MakeServiceBuilder<S>
+impl<S> Default for MakeServiceBuilder<S, NoGrpc>
 where
     S: Clone + Send + Sync + 'static,
 {
@@ -106,7 +119,7 @@ where
     }
 }
 
-impl<S> MakeServiceBuilder<S>
+impl<S> MakeServiceBuilder<S, NoGrpc>
 where
     S: Clone + Send + Sync + 'static,
 {
@@ -122,14 +135,18 @@ where
     pub fn new() -> Self {
         Self {
             connect_router: Router::new(),
-            #[cfg(feature = "tonic")]
-            grpc_routes: tonic::service::Routes::default(),
+            grpc_state: NoGrpc,
             limits: MessageLimits::default(),
             require_protocol_header: false,
             compression: CompressionConfig::default(),
         }
     }
+}
 
+impl<S, G> MakeServiceBuilder<S, G>
+where
+    S: Clone + Send + Sync + 'static,
+{
     /// Set custom message size limits.
     ///
     /// Default is 4 MB.
@@ -212,15 +229,97 @@ where
         }
         self
     }
+
+    fn build_connect_layer(&self) -> ConnectLayer {
+        ConnectLayer::new()
+            .limits(self.limits.clone())
+            .require_protocol_header(self.require_protocol_header)
+            .compression(self.compression.clone())
+    }
+}
+
+// Connect-only build method (no gRPC services added)
+impl<S> MakeServiceBuilder<S, NoGrpc>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    /// Builds a Connect-only router.
+    ///
+    /// This returns the combined Connect RPC router containing all the routers
+    /// that were added via [`add_router`](Self::add_router) or
+    /// [`add_routers`](Self::add_routers).
+    ///
+    /// The router will have [`ConnectLayer`] applied with the configured
+    /// message limits and protocol header requirements.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use connectrpc_axum::MakeServiceBuilder;
+    /// # use axum::Router;
+    /// # let router1: Router<()> = Router::new();
+    /// # let router2: Router<()> = Router::new();
+    ///
+    /// let app = MakeServiceBuilder::new()
+    ///     .add_router(router1)
+    ///     .add_router(router2)
+    ///     .build();
+    /// ```
+    pub fn build(self) -> Router<S> {
+        let layer = self.build_connect_layer();
+        self.connect_router.layer(layer)
+    }
 }
 
 // Tonic-specific methods (only available when tonic feature is enabled)
 #[cfg(feature = "tonic")]
-impl<S> MakeServiceBuilder<S>
+impl<S> MakeServiceBuilder<S, NoGrpc>
 where
     S: Clone + Send + Sync + 'static,
 {
-    /// Adds a gRPC service to the builder.
+    /// Adds the first gRPC service to the builder.
+    ///
+    /// This transitions the builder to a state where `build()` will return
+    /// a `ContentTypeSwitch` that dispatches between gRPC and Connect protocols.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use connectrpc_axum::MakeServiceBuilder;
+    /// use axum::Router;
+    ///
+    /// let builder = MakeServiceBuilder::new()
+    ///     .add_router(hello_router)
+    ///     .add_grpc_service(hello_grpc_svc);
+    /// ```
+    pub fn add_grpc_service<G>(self, svc: G) -> MakeServiceBuilder<S, HasGrpc>
+    where
+        G: tower::Service<http::Request<tonic::body::Body>, Error = std::convert::Infallible>
+            + tonic::server::NamedService
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+        G::Response: axum::response::IntoResponse,
+        G::Future: Send + 'static,
+    {
+        let routes = tonic::service::Routes::default().add_service(svc);
+        MakeServiceBuilder {
+            connect_router: self.connect_router,
+            grpc_state: HasGrpc(routes),
+            limits: self.limits,
+            require_protocol_header: self.require_protocol_header,
+            compression: self.compression,
+        }
+    }
+}
+
+#[cfg(feature = "tonic")]
+impl<S> MakeServiceBuilder<S, HasGrpc>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    /// Adds additional gRPC services to the builder.
     ///
     /// This method can be called multiple times to add multiple gRPC services.
     /// Each service will be routed based on its service name from `NamedService::NAME`.
@@ -247,7 +346,7 @@ where
         G::Response: axum::response::IntoResponse,
         G::Future: Send + 'static,
     {
-        self.grpc_routes = self.grpc_routes.add_service(svc);
+        self.grpc_state.0 = self.grpc_state.0.add_service(svc);
         self
     }
 
@@ -280,50 +379,13 @@ where
     /// axum::serve(listener, tower::make::Shared::new(dispatch)).await?;
     /// ```
     pub fn build(self) -> ContentTypeSwitch<tonic::service::Routes, Router<S>> {
-        let grpc_service = self.grpc_routes.prepare();
         let layer = ConnectLayer::new()
             .limits(self.limits)
             .require_protocol_header(self.require_protocol_header)
             .compression(self.compression);
+        let grpc_service = self.grpc_state.0.prepare();
         let connect_router = self.connect_router.layer(layer);
         ContentTypeSwitch::new(grpc_service, connect_router)
-    }
-}
-
-// Connect-only build method (when tonic feature is NOT enabled)
-#[cfg(not(feature = "tonic"))]
-impl<S> MakeServiceBuilder<S>
-where
-    S: Clone + Send + Sync + 'static,
-{
-    /// Builds a Connect-only router (no gRPC support).
-    ///
-    /// This returns the combined Connect RPC router containing all the routers
-    /// that were added via [`add_router`](Self::add_router) or
-    /// [`add_routers`](Self::add_routers).
-    ///
-    /// The router will have [`ConnectLayer`] applied with the configured
-    /// message limits and protocol header requirements.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use connectrpc_axum::MakeServiceBuilder;
-    /// # use axum::Router;
-    /// # let router1: Router<()> = Router::new();
-    /// # let router2: Router<()> = Router::new();
-    ///
-    /// let app = MakeServiceBuilder::new()
-    ///     .add_router(router1)
-    ///     .add_router(router2)
-    ///     .build();
-    /// ```
-    pub fn build(self) -> Router<S> {
-        let layer = ConnectLayer::new()
-            .limits(self.limits)
-            .require_protocol_header(self.require_protocol_header)
-            .compression(self.compression);
-        self.connect_router.layer(layer)
     }
 }
 
