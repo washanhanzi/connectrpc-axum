@@ -4,3 +4,10 @@ target/
 .DS_Store
 
 connect-go
+
+# VitePress
+docs/.vitepress/cache
+docs/.vitepress/dist
+node_modules
+
+.playwright-mcp
