@@ -22,65 +22,15 @@ A Rust library that brings [ConnectRPC](https://connectrpc.com/) protocol suppor
 - Automatic content negotiation (JSON/binary protobuf)
 - All protocols served on the same port
 
-## Quick Start
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-connectrpc-axum = "*"
-axum = "0.8"
-prost = "0.14"
-pbjson = "0.8"
-tokio = { version = "1", features = ["full"] }
-
-[build-dependencies]
-connectrpc-axum-build = "*"
-```
-
-Create `build.rs`:
-
-```rust
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    connectrpc_axum_build::compile_dir("proto").compile()?;
-    Ok(())
-}
-```
-
-Define handlers:
-
-```rust
-use connectrpc_axum::prelude::*;
-
-async fn say_hello(
-    ConnectRequest(req): ConnectRequest<HelloRequest>,
-) -> Result<ConnectResponse<HelloResponse>, ConnectError> {
-    Ok(ConnectResponse(HelloResponse {
-        message: format!("Hello, {}!", req.name.unwrap_or_default()),
-    }))
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let app = helloworldservice::HelloWorldServiceBuilder::new()
-        .say_hello(say_hello)
-        .build_connect();
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-    axum::serve(listener, app).await?;
-    Ok(())
-}
-```
-
 ## Documentation
 
-See the [full documentation](https://phlx-io.github.io/connectrpc-axum/) for:
+📖 **[Full Documentation](https://washanhanzi.github.io/connectrpc-axum/)**
 
-- [Getting Started](https://phlx-io.github.io/connectrpc-axum/guide/)
-- [MakeServiceBuilder](https://phlx-io.github.io/connectrpc-axum/guide/configuration)
-- [HTTP Endpoints](https://phlx-io.github.io/connectrpc-axum/guide/http-endpoints)
-- [Tonic gRPC Integration](https://phlx-io.github.io/connectrpc-axum/guide/tonic)
-- [build.rs Configuration](https://phlx-io.github.io/connectrpc-axum/guide/build)
+- [Getting Started](https://washanhanzi.github.io/connectrpc-axum/guide/)
+- [MakeServiceBuilder](https://washanhanzi.github.io/connectrpc-axum/guide/configuration)
+- [HTTP Endpoints](https://washanhanzi.github.io/connectrpc-axum/guide/http-endpoints)
+- [Tonic gRPC Integration](https://washanhanzi.github.io/connectrpc-axum/guide/tonic)
+- [build.rs Configuration](https://washanhanzi.github.io/connectrpc-axum/guide/build)
 
 ## Development
 

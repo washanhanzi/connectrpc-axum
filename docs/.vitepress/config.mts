@@ -52,7 +52,7 @@ export default defineConfig({
     },
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/phlx-io/connectrpc-axum' }
+      { icon: 'github', link: 'https://github.com/washanhanzi/connectrpc-axum' }
     ],
 
     footer: {
@@ -65,7 +65,7 @@ export default defineConfig({
     },
 
     editLink: {
-      pattern: 'https://github.com/phlx-io/connectrpc-axum/edit/main/docs/:path',
+      pattern: 'https://github.com/washanhanzi/connectrpc-axum/edit/main/docs/:path',
       text: 'Edit this page on GitHub'
     }
   }

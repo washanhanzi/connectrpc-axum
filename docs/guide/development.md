@@ -16,8 +16,8 @@ claude /connectrpc-axum:submit-issue "Description of your issue or feature reque
 claude /connectrpc-axum:test
 ```
 
-If not using Claude Code, see the corresponding skill files in [`.claude/skills/`](https://github.com/phlx-io/connectrpc-axum/tree/main/.claude/skills/) for instructions.
+If not using Claude Code, see the corresponding skill files in [`.claude/skills/`](https://github.com/washanhanzi/connectrpc-axum/tree/main/.claude/skills/) for instructions.
 
 ## Architecture
 
-See [`.claude/architecture.md`](https://github.com/phlx-io/connectrpc-axum/blob/main/.claude/architecture.md) for detailed documentation on the project structure, core modules, and design decisions.
+See [`.claude/architecture.md`](https://github.com/washanhanzi/connectrpc-axum/blob/main/.claude/architecture.md) for detailed documentation on the project structure, core modules, and design decisions.

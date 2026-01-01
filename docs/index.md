@@ -11,7 +11,7 @@ hero:
       link: /guide/
     - theme: alt
       text: GitHub
-      link: https://github.com/phlx-io/connectrpc-axum
+      link: https://github.com/washanhanzi/connectrpc-axum
 
 features:
   - icon: 🔌

@@ -1,6 +1,6 @@
 # Examples
 
-See the [connectrpc-axum-examples](https://github.com/phlx-io/connectrpc-axum/tree/main/connectrpc-axum-examples) directory for complete working examples.
+See the [connectrpc-axum-examples](https://github.com/washanhanzi/connectrpc-axum/tree/main/connectrpc-axum-examples) directory for complete working examples.
 
 | Example | Description |
 |---------|-------------|
