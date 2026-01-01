@@ -1,6 +1,6 @@
 [package]
 name = "connectrpc-axum-build"
-version = "0.0.12"
+version = "0.0.13"
 edition = "2024"
 description = "Code generation for connectrpc-axum"
 readme = "../README.md"
