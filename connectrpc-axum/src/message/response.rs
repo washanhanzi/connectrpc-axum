@@ -108,7 +108,7 @@ where
         let message_frame = wrap_envelope(&data, compressed);
 
         // 4. Build EndStream frame
-        let end_stream_frame = build_end_stream_frame(None);
+        let end_stream_frame = build_end_stream_frame(None, None);
 
         // 5. Combine frames
         let mut body = message_frame;
@@ -213,8 +213,8 @@ where
                     (Bytes::from(frame), false)
                 }
                 Err(err) => {
-                    // Send Error EndStreamResponse
-                    let frame = build_end_stream_frame(Some(&err));
+                    // Send Error EndStreamResponse (includes error metadata in the frame)
+                    let frame = build_end_stream_frame(Some(&err), None);
                     (Bytes::from(frame), true)
                 }
             })
@@ -236,7 +236,7 @@ where
                     if error_sent_clone.load(Ordering::SeqCst) {
                         None
                     } else {
-                        Some(Bytes::from(build_end_stream_frame(None)))
+                        Some(Bytes::from(build_end_stream_frame(None, None)))
                     }
                 })
                 .filter_map(|x| async { x }),

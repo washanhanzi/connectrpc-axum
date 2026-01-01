@@ -11,6 +11,7 @@
 use axum::extract::State;
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{helloworldservice, HelloRequest, HelloResponse};
+use futures::Stream;
 use std::net::SocketAddr;
 use std::sync::{atomic::AtomicUsize, Arc};
 
@@ -39,7 +40,10 @@ async fn say_hello(
 async fn say_hello_stream(
     State(state): State<AppState>,
     ConnectRequest(req): ConnectRequest<HelloRequest>,
-) -> Result<StreamBody<HelloResponse>, ConnectError> {
+) -> Result<
+    ConnectResponse<StreamBody<impl Stream<Item = Result<HelloResponse, ConnectError>>>>,
+    ConnectError,
+> {
     let name = req.name.unwrap_or_else(|| "World".to_string());
     let hobbies = req.hobbies;
     let counter = state.counter.clone();
@@ -76,7 +80,7 @@ async fn say_hello_stream(
         });
     };
 
-    Ok(StreamBody::new(stream))
+    Ok(ConnectResponse(StreamBody::new(stream)))
 }
 
 #[tokio::main]
@@ -92,7 +96,9 @@ async fn main() -> anyhow::Result<()> {
             .build();
 
     // Wrap gRPC server with gRPC-Web layer
-    let grpc_web_server = tonic_web::enable(grpc_server);
+    let grpc_web_server = tower::ServiceBuilder::new()
+        .layer(tonic_web::GrpcWebLayer::new())
+        .service(grpc_server);
 
     // Combine with MakeServiceBuilder
     let service = connectrpc_axum::MakeServiceBuilder::new()

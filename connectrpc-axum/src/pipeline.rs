@@ -29,10 +29,11 @@ use crate::context::{
 };
 use crate::error::{Code, ConnectError};
 use axum::body::Body;
-use axum::http::{Request, Response, StatusCode, header};
+use axum::http::{HeaderMap, Request, Response, StatusCode, header};
 use bytes::Bytes;
 use prost::Message;
 use serde::{Serialize, de::DeserializeOwned};
+use std::collections::HashMap;
 
 // ============================================================================
 // Primitive Functions
@@ -232,21 +233,146 @@ pub fn wrap_envelope(payload: &[u8], compressed: bool) -> Vec<u8> {
     frame
 }
 
+// ============================================================================
+// EndStream Metadata Support
+// ============================================================================
+
+/// Check if a header key is a protocol header that should be filtered from metadata.
+///
+/// Protocol headers are internal to HTTP/Connect/gRPC and should not be included
+/// in the metadata field of EndStream messages.
+///
+/// Based on connect-go's `protocolHeaders` map in `header.go`.
+fn is_protocol_header(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    matches!(
+        k.as_str(),
+        "content-type"
+            | "content-length"
+            | "content-encoding"
+            | "host"
+            | "user-agent"
+            | "trailer"
+            | "date"
+    ) || k.starts_with("connect-")
+        || k.starts_with("grpc-")
+        || k.starts_with("trailer-")
+}
+
+/// Metadata wrapper for EndStream messages.
+///
+/// Serializes HTTP headers to Connect protocol metadata format:
+/// - Keys map to arrays of string values
+/// - Binary headers (keys ending in `-bin`) have base64-encoded values
+/// - Protocol headers are filtered out
+#[derive(Debug, Default)]
+pub struct Metadata(HashMap<String, Vec<String>>);
+
+impl Metadata {
+    /// Create Metadata from a HeaderMap, filtering protocol headers
+    /// and encoding binary values.
+    pub fn from_headers(headers: &HeaderMap) -> Self {
+        let mut map: HashMap<String, Vec<String>> = HashMap::new();
+
+        for (key, value) in headers.iter() {
+            let key_str = key.as_str();
+
+            // Skip protocol headers
+            if is_protocol_header(key_str) {
+                continue;
+            }
+
+            let values = map.entry(key_str.to_string()).or_default();
+
+            // For -bin headers, values are already base64-encoded per Connect/gRPC convention.
+            // Just convert to string (no re-encoding needed).
+            // For regular headers, convert to UTF-8 string.
+            if let Ok(v) = value.to_str() {
+                values.push(v.to_string());
+            }
+            // Skip non-UTF8 values (shouldn't happen with valid HTTP headers)
+        }
+
+        Metadata(map)
+    }
+
+    /// Merge headers from another HeaderMap into this metadata.
+    ///
+    /// Used to merge error metadata into response trailers, following
+    /// connect-go's `mergeNonProtocolHeaders` behavior.
+    pub fn merge_headers(&mut self, headers: &HeaderMap) {
+        for (key, value) in headers.iter() {
+            let key_str = key.as_str();
+
+            if is_protocol_header(key_str) {
+                continue;
+            }
+
+            let values = self.0.entry(key_str.to_string()).or_default();
+
+            // For -bin headers, values are already base64-encoded per Connect/gRPC convention.
+            if let Ok(v) = value.to_str() {
+                values.push(v.to_string());
+            }
+        }
+    }
+
+    /// Check if metadata is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl Serialize for Metadata {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
 /// Build an EndStream frame for streaming responses.
 ///
 /// Frame format: `[flags=0x02][length:4][json_payload]`
 ///
+/// The JSON payload follows the Connect protocol specification:
+/// ```json
+/// {
+///   "error": { "code": "...", "message": "...", "details": [...] },
+///   "metadata": { "key": ["value1", "value2"] }
+/// }
+/// ```
+/// Both fields are optional and omitted when empty/None.
+///
 /// # Arguments
 /// - `error`: Optional error to include in the EndStream message
-pub fn build_end_stream_frame(error: Option<&ConnectError>) -> Vec<u8> {
-    let json_payload = if let Some(err) = error {
-        serde_json::json!({ "error": err })
-    } else {
-        serde_json::json!({})
-    };
+/// - `trailers`: Optional response trailers to include as metadata
+///
+/// # Metadata Handling
+/// - Protocol headers (Content-Type, Connect-*, gRPC-*, etc.) are filtered
+/// - Binary headers (keys ending in `-bin`) have values base64-encoded (unpadded)
+/// - Error metadata is merged into trailers (following connect-go behavior)
+pub fn build_end_stream_frame(error: Option<&ConnectError>, trailers: Option<&HeaderMap>) -> Vec<u8> {
+    // Helper struct for JSON serialization
+    #[derive(Serialize)]
+    struct EndStreamMessage<'a> {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<&'a ConnectError>,
+        #[serde(skip_serializing_if = "Metadata::is_empty")]
+        metadata: Metadata,
+    }
 
-    // Serializing {} or {"error": ...} cannot fail in serde_json
-    let payload = serde_json::to_vec(&json_payload).unwrap_or_else(|_| b"{}".to_vec());
+    // Start with trailers if provided
+    let mut metadata = trailers.map(Metadata::from_headers).unwrap_or_default();
+
+    // Merge error metadata into trailers (like connect-go does)
+    if let Some(err) = error {
+        metadata.merge_headers(err.meta());
+    }
+
+    let msg = EndStreamMessage { error, metadata };
+    let payload = serde_json::to_vec(&msg).unwrap_or_else(|_| b"{}".to_vec());
 
     let mut frame = Vec::with_capacity(5 + payload.len());
     frame.push(envelope_flags::END_STREAM);
@@ -393,5 +519,204 @@ impl ResponsePipeline {
         builder
             .body(Body::from(body))
             .map_err(|e| ContextError::internal(ctx.protocol, e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    #[test]
+    fn test_is_protocol_header_filters_http_headers() {
+        assert!(is_protocol_header("Content-Type"));
+        assert!(is_protocol_header("content-type"));
+        assert!(is_protocol_header("Content-Length"));
+        assert!(is_protocol_header("Content-Encoding"));
+        assert!(is_protocol_header("Host"));
+        assert!(is_protocol_header("User-Agent"));
+        assert!(is_protocol_header("Trailer"));
+        assert!(is_protocol_header("Date"));
+    }
+
+    #[test]
+    fn test_is_protocol_header_filters_connect_headers() {
+        assert!(is_protocol_header("Connect-Timeout-Ms"));
+        assert!(is_protocol_header("connect-timeout-ms"));
+        assert!(is_protocol_header("Connect-Accept-Encoding"));
+        assert!(is_protocol_header("Connect-Content-Encoding"));
+        assert!(is_protocol_header("Connect-Protocol-Version"));
+    }
+
+    #[test]
+    fn test_is_protocol_header_filters_grpc_headers() {
+        assert!(is_protocol_header("Grpc-Status"));
+        assert!(is_protocol_header("grpc-status"));
+        assert!(is_protocol_header("Grpc-Message"));
+        assert!(is_protocol_header("Grpc-Status-Details-Bin"));
+    }
+
+    #[test]
+    fn test_is_protocol_header_filters_trailer_prefix() {
+        assert!(is_protocol_header("Trailer-Custom"));
+        assert!(is_protocol_header("trailer-custom"));
+    }
+
+    #[test]
+    fn test_is_protocol_header_allows_custom_headers() {
+        assert!(!is_protocol_header("X-Custom-Header"));
+        assert!(!is_protocol_header("x-request-id"));
+        assert!(!is_protocol_header("Authorization"));
+        assert!(!is_protocol_header("x-custom-bin"));
+    }
+
+    #[test]
+    fn test_metadata_from_headers_filters_protocol_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", HeaderValue::from_static("application/json"));
+        headers.insert("x-custom", HeaderValue::from_static("value"));
+        headers.insert("connect-timeout-ms", HeaderValue::from_static("5000"));
+        headers.insert("grpc-status", HeaderValue::from_static("0"));
+
+        let metadata = Metadata::from_headers(&headers);
+
+        assert!(!metadata.0.contains_key("content-type"));
+        assert!(!metadata.0.contains_key("connect-timeout-ms"));
+        assert!(!metadata.0.contains_key("grpc-status"));
+        assert!(metadata.0.contains_key("x-custom"));
+        assert_eq!(metadata.0.get("x-custom"), Some(&vec!["value".to_string()]));
+    }
+
+    #[test]
+    fn test_metadata_preserves_binary_header_values() {
+        let mut headers = HeaderMap::new();
+        // Binary headers are already base64-encoded per Connect/gRPC convention
+        // base64 of [0x00, 0x01, 0x02] without padding is "AAEC"
+        headers.insert("x-binary-bin", HeaderValue::from_static("AAEC"));
+
+        let metadata = Metadata::from_headers(&headers);
+
+        // Value should be passed through as-is (no re-encoding)
+        assert_eq!(
+            metadata.0.get("x-binary-bin"),
+            Some(&vec!["AAEC".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_metadata_handles_multi_value_headers() {
+        let mut headers = HeaderMap::new();
+        headers.append("x-multi", HeaderValue::from_static("value1"));
+        headers.append("x-multi", HeaderValue::from_static("value2"));
+
+        let metadata = Metadata::from_headers(&headers);
+
+        let values = metadata.0.get("x-multi").unwrap();
+        assert_eq!(values.len(), 2);
+        assert!(values.contains(&"value1".to_string()));
+        assert!(values.contains(&"value2".to_string()));
+    }
+
+    #[test]
+    fn test_metadata_is_empty() {
+        let empty = Metadata::default();
+        assert!(empty.is_empty());
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-custom", HeaderValue::from_static("value"));
+        let non_empty = Metadata::from_headers(&headers);
+        assert!(!non_empty.is_empty());
+    }
+
+    #[test]
+    fn test_build_end_stream_frame_success_no_trailers() {
+        let frame = build_end_stream_frame(None, None);
+
+        // Check frame structure
+        assert_eq!(frame[0], 0x02); // EndStream flag
+
+        // Parse JSON payload
+        let payload = &frame[5..];
+        let msg: serde_json::Value = serde_json::from_slice(payload).unwrap();
+
+        // Should be empty object when no error and no metadata
+        assert_eq!(msg, serde_json::json!({}));
+    }
+
+    #[test]
+    fn test_build_end_stream_frame_with_trailers() {
+        let mut trailers = HeaderMap::new();
+        trailers.insert("x-request-id", HeaderValue::from_static("123"));
+
+        let frame = build_end_stream_frame(None, Some(&trailers));
+
+        // Check frame structure
+        assert_eq!(frame[0], 0x02); // EndStream flag
+
+        // Parse JSON payload
+        let payload = &frame[5..];
+        let msg: serde_json::Value = serde_json::from_slice(payload).unwrap();
+
+        // Should have metadata field
+        assert!(msg.get("error").is_none());
+        assert!(msg.get("metadata").is_some());
+        assert_eq!(msg["metadata"]["x-request-id"], serde_json::json!(["123"]));
+    }
+
+    #[test]
+    fn test_build_end_stream_frame_with_error() {
+        let error = ConnectError::new(Code::Internal, "test error");
+
+        let frame = build_end_stream_frame(Some(&error), None);
+
+        // Check frame structure
+        assert_eq!(frame[0], 0x02); // EndStream flag
+
+        // Parse JSON payload
+        let payload = &frame[5..];
+        let msg: serde_json::Value = serde_json::from_slice(payload).unwrap();
+
+        // Should have error field
+        assert!(msg.get("error").is_some());
+        assert_eq!(msg["error"]["code"], "internal");
+        assert_eq!(msg["error"]["message"], "test error");
+    }
+
+    #[test]
+    fn test_build_end_stream_frame_error_metadata_merged() {
+        let mut error = ConnectError::new(Code::Internal, "test error");
+        error = error.with_meta("x-error-meta", "error-value");
+
+        let frame = build_end_stream_frame(Some(&error), None);
+
+        // Parse JSON payload
+        let payload = &frame[5..];
+        let msg: serde_json::Value = serde_json::from_slice(payload).unwrap();
+
+        // Error metadata should be in metadata field
+        assert!(msg.get("metadata").is_some());
+        assert_eq!(
+            msg["metadata"]["x-error-meta"],
+            serde_json::json!(["error-value"])
+        );
+    }
+
+    #[test]
+    fn test_build_end_stream_frame_filters_protocol_headers_from_trailers() {
+        let mut trailers = HeaderMap::new();
+        trailers.insert("content-type", HeaderValue::from_static("application/json"));
+        trailers.insert("x-custom", HeaderValue::from_static("value"));
+        trailers.insert("connect-timeout-ms", HeaderValue::from_static("5000"));
+
+        let frame = build_end_stream_frame(None, Some(&trailers));
+
+        let payload = &frame[5..];
+        let msg: serde_json::Value = serde_json::from_slice(payload).unwrap();
+
+        // Protocol headers should be filtered
+        let metadata = msg.get("metadata").unwrap();
+        assert!(metadata.get("content-type").is_none());
+        assert!(metadata.get("connect-timeout-ms").is_none());
+        assert_eq!(metadata["x-custom"], serde_json::json!(["value"]));
     }
 }

@@ -7,6 +7,7 @@
 
 use crate::error::{ConnectError, internal_error_end_stream_frame, internal_error_streaming_response};
 use crate::context::RequestProtocol;
+use crate::pipeline::build_end_stream_frame;
 use axum::{
     body::{Body, Bytes},
     http::{HeaderValue, header},
@@ -97,19 +98,8 @@ where
                 }
                 Err(err) => {
                     // Error EndStreamResponse with flags=0x02 (EndStream)
-                    let mut buf = vec![0b0000_0010u8, 0, 0, 0, 0];
-                    let json = serde_json::json!({ "error": err });
-                    match serde_json::to_writer(&mut buf, &json) {
-                        Ok(()) => {
-                            let len = (buf.len() - 5) as u32;
-                            buf[1..5].copy_from_slice(&len.to_be_bytes());
-                            (Bytes::from(buf), true)
-                        }
-                        Err(_) => {
-                            // Error serialization failed - use fallback internal error frame
-                            (Bytes::from(internal_error_end_stream_frame()), true)
-                        }
-                    }
+                    // Uses build_end_stream_frame which includes error metadata in the frame
+                    (Bytes::from(build_end_stream_frame(Some(&err), None)), true)
                 }
             })
             // Take all messages, stop after error
@@ -131,12 +121,7 @@ where
                     None
                 } else {
                     // Connect streaming: append success EndStreamResponse
-                    // Note: Serializing {} cannot fail in serde_json
-                    let mut buf = vec![0b0000_0010u8, 0, 0, 0, 0];
-                    let _ = serde_json::to_writer(&mut buf, &serde_json::json!({}));
-                    let len = (buf.len() - 5) as u32;
-                    buf[1..5].copy_from_slice(&len.to_be_bytes());
-                    Some(Bytes::from(buf))
+                    Some(Bytes::from(build_end_stream_frame(None, None)))
                 }
             }).filter_map(|x| async { x }))
             // Wrap in Result for Body::from_stream

@@ -274,45 +274,16 @@ impl ConnectError {
         self,
         content_type: &'static str,
     ) -> Response {
-        // Build the EndStream JSON payload: { "error": { "code": "...", "message": "..." } }
-        let error_body = ErrorResponseBody {
-            code: self.code,
-            message: self.message.clone(),
-            details: self.details.clone(),
-        };
-        let end_stream_payload = serde_json::json!({ "error": error_body });
-
-        // Serialize the error payload, falling back to a minimal internal error frame on failure
-        let frame = match serde_json::to_vec(&end_stream_payload) {
-            Ok(payload_bytes) => {
-                // Build the EndStream frame: [flags:1][length:4][payload]
-                // flags = 0x02 indicates EndStream
-                let mut frame = Vec::with_capacity(5 + payload_bytes.len());
-                frame.push(0b0000_0010); // EndStream flag
-                frame.extend_from_slice(&(payload_bytes.len() as u32).to_be_bytes());
-                frame.extend_from_slice(&payload_bytes);
-                frame
-            }
-            Err(_) => {
-                // Serialization failed - use fallback internal error frame
-                internal_error_end_stream_frame()
-            }
-        };
+        // Use build_end_stream_frame which properly includes error metadata in the
+        // EndStream JSON payload's "metadata" field (per Connect protocol spec)
+        let frame = crate::pipeline::build_end_stream_frame(Some(&self), None);
 
         // Build the response with HTTP 200 and streaming content-type
-        let mut response = Response::builder()
+        Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, HeaderValue::from_static(content_type))
             .body(Body::from(frame))
-            .unwrap_or_else(|_| internal_error_streaming_response(content_type));
-
-        // Add metadata as headers
-        let headers = response.headers_mut();
-        for (key, value) in self.meta.iter() {
-            headers.append(key.clone(), value.clone());
-        }
-
-        response
+            .unwrap_or_else(|_| internal_error_streaming_response(content_type))
     }
 }
 

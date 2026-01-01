@@ -72,6 +72,11 @@ path = "src/bin/extractor-connect-error.rs"
 name = "extractor-http-response"
 path = "src/bin/extractor-http-response.rs"
 
+# EndStream metadata test (verifies metadata in EndStream frames)
+[[bin]]
+name = "endstream-metadata"
+path = "src/bin/endstream-metadata.rs"
+
 [dependencies]
 # Application dependency for error handling
 anyhow = "1"
