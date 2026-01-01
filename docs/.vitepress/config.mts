@@ -43,6 +43,7 @@ export default defineConfig({
             { text: 'MakeServiceBuilder', link: '/guide/configuration' },
             { text: 'HTTP Endpoints', link: '/guide/http-endpoints' },
             { text: 'Tonic gRPC', link: '/guide/tonic' },
+            { text: 'gRPC-Web', link: '/guide/grpc-web' },
             { text: 'build.rs', link: '/guide/build' },
             { text: 'Examples', link: '/guide/examples' },
             { text: 'Development', link: '/guide/development' }

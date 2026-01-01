@@ -1,36 +1,24 @@
-# Tonic gRPC Integration
+# gRPC-Web Support
 
-Serve both Connect and gRPC clients on the same port using Tonic integration.
+Enable browser-based clients to call gRPC services using gRPC-Web protocol with `tonic-web`.
 
 ## Installation
 
-Add the `tonic` feature to your dependencies:
+Add the `tonic` feature and `tonic-web` dependency:
 
 ```toml
 [dependencies]
 connectrpc-axum = { version = "*", features = ["tonic"] }
 tonic = "0.14"
+tonic-web = "0.14"
 
 [build-dependencies]
 connectrpc-axum-build = { version = "*", features = ["tonic"] }
 ```
 
-## Update build.rs
+## Usage
 
-Enable Tonic code generation:
-
-```rust
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    connectrpc_axum_build::compile_dir("proto")
-        .with_tonic()  // Enable Tonic gRPC code generation
-        .compile()?;
-    Ok(())
-}
-```
-
-## Use TonicCompatibleBuilder
-
-The `TonicCompatibleBuilder` generates both Connect router and gRPC service from the same handlers:
+Wrap the gRPC server with `tonic-web` layer:
 
 ```rust
 use axum::extract::State;
@@ -39,9 +27,6 @@ use connectrpc_axum::prelude::*;
 #[derive(Clone, Default)]
 struct AppState;
 
-// Tonic-compatible handlers only allow:
-// - (ConnectRequest<Req>)
-// - (State<S>, ConnectRequest<Req>)
 async fn say_hello(
     State(_s): State<AppState>,
     ConnectRequest(req): ConnectRequest<HelloRequest>,
@@ -60,12 +45,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_state(AppState::default())
             .build();
 
-    // Combine into a single service that routes by Content-Type:
-    // - application/grpc* -> Tonic gRPC server
-    // - Otherwise -> Axum routes (Connect protocol)
+    // Wrap gRPC server with gRPC-Web layer
+    let grpc_web_server = tower::ServiceBuilder::new()
+        .layer(tonic_web::GrpcWebLayer::new())
+        .service(grpc_server);
+
+    // Combine with MakeServiceBuilder
     let service = connectrpc_axum::MakeServiceBuilder::new()
         .add_router(connect_router)
-        .add_grpc_service(grpc_server)
+        .add_grpc_service(grpc_web_server)
         .build();
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
@@ -73,19 +61,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
-
-## Handler Restrictions
-
-Tonic-compatible handlers have restricted signatures to ensure compatibility with both protocols:
-
-| Signature | State Type |
-|-----------|------------|
-| `(ConnectRequest<Req>)` | `()` |
-| `(State<S>, ConnectRequest<Req>)` | Generic `S` |
-
-::: warning
-Other Axum extractors (like `Query`, `Path`, etc.) are not supported in Tonic-compatible handlers since gRPC doesn't have equivalent concepts.
-:::
 
 ## Request Routing
 
