@@ -31,9 +31,55 @@ connectrpc-axum-examples/ # Examples and test clients
 | `stream_response.rs` | Server streaming response handling |
 | `tonic.rs` | Optional gRPC/Tonic interop, `ContentTypeSwitch` |
 
+## Layered Architecture
+
+The library separates concerns into distinct layers:
+
+### Context Model (`Context`)
+
+Contains core logic for request handling. Extracted by the layer and consumed by handlers.
+
+- **Protocol**: `RequestProtocol` enum
+- **Compression**: `CompressionContext` for encoding/decoding
+- **Timeout**: Optional request timeout
+- **Message limits**: Max message size for decode operations
+- **require_protocol_header**: Whether to enforce Connect-Protocol-Version header
+
+### ConnectLayer (Middleware)
+
+Responsible for header parsing and validation. Runs before handlers.
+
+- Parses `Content-Type` header to determine encoding (JSON/Protobuf)
+- Parses `?encoding=` query param for GET requests
+- Validates `Connect-Protocol-Version` header when required
+- Stores `ConnectContext` in request extensions for downstream use
+
+### Request/Response Pipeline
+
+Handlers compose decode/encode functions in a pipeline:
+
+```
+Request Flow:
+  HTTP Request → ConnectLayer (parse headers, build context)
+               → ConnectRequest<T> extractor (decode body using context)
+               → Handler function
+
+Response Flow:
+  Handler Result → ConnectResponse<T> (encode using protocol from context)
+                 → HTTP Response
+```
+
+**Pipeline composition in extractors/responses:**
+- `ConnectRequest<T>`: Reads `ConnectContext` from extensions, decodes body (JSON or Protobuf)
+- `ConnectResponse<T>`: Reads protocol from extensions, encodes response accordingly
+- Streaming variants follow same pattern with frame envelope handling
+
 ## Key Types
 
 ```rust
+// Context (set by layer, used by handlers)
+Context                    // Protocol, compression, timeout, limits - stored in request extensions
+
 // Request/Response
 ConnectRequest<T>          // Axum extractor - deserializes protobuf/JSON
 ConnectStreamingRequest<T> // Client streaming request extractor
@@ -45,7 +91,7 @@ StreamBody<S>              // Marks streaming responses
 ConnectError               // Error with code, message, details
 
 // Protocol detection (gRPC handled separately by ContentTypeSwitch)
-RequestProtocol            // Enum: ConnectUnary{Json,Proto}, ConnectStream{Json,Proto}
+RequestProtocol            // Enum: ConnectUnary{Json,Proto}, ConnectStream{Json,Proto}, Unknown
 
 // Message limits
 MessageLimits              // Max message size config (default 4MB)
@@ -144,6 +190,9 @@ Route paths: `/<package>.<Service>/<Method>`
 
 The library uses two levels of builders with clear separation of concerns:
 
+1. **Generated Builders** → Build routes (handler registration, per-service routing)
+2. **MakeServiceBuilder** → Apply ConnectLayer to routes (cross-cutting infrastructure)
+
 ### Generated Builders (per-service)
 
 Generated at build time for each proto service. Responsible for registering handlers.
@@ -161,10 +210,15 @@ impl HelloWorldServiceBuilder<S> {
     pub fn build(self) -> axum::Router<()> {
         self.router  // Returns bare router, no layer applied
     }
+    pub fn build_connect(self) -> axum::Router<()> {
+        self.router.layer(ConnectLayer::new())  // Convenience: applies ConnectLayer
+    }
 }
 ```
 
-**Output:** Bare `axum::Router` with routes for that service.
+**Output:**
+- `build()`: Bare `axum::Router` (for use with `MakeServiceBuilder`)
+- `build_connect()`: Router with `ConnectLayer` applied (standalone convenience)
 
 ### MakeServiceBuilder (library-level)
 
