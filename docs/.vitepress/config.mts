@@ -46,7 +46,8 @@ export default defineConfig({
             { text: 'gRPC-Web', link: '/guide/grpc-web' },
             { text: 'build.rs', link: '/guide/build' },
             { text: 'Examples', link: '/guide/examples' },
-            { text: 'Development', link: '/guide/development' }
+            { text: 'Development', link: '/guide/development' },
+            { text: 'Architecture', link: '/guide/architecture' }
           ]
         }
       ]
