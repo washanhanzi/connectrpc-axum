@@ -204,11 +204,64 @@ connectrpc-axum-examples/ # Examples and test clients
 
 ## Code Generation
 
-**Base generation:**
-1. `prost_build::Config` generates protobuf types + service builders
-2. `pbjson-build` generates serde implementations
+The build crate uses a multi-pass approach to generate all necessary code.
 
-**With Tonic feature:**
-1. Additional pass generates tonic server stubs
-2. Uses `extern_path` to reference existing prost types
+### Pass 1: Prost + Connect (always)
+
+```
+prost_build::Config
+    ↓
+├── Message/Enum types (Rust structs)
+├── Connect service builders ({Service}ServiceBuilder)
+└── File descriptor set (for Pass 1.5)
+```
+
+- User configuration via `with_prost_config()` is applied here
+- All type customization (attributes, extern paths) must be done in this pass
+
+### Pass 1.5: Serde Implementations (always)
+
+```
+pbjson-build
+    ↓
+└── Serde Serialize/Deserialize impls for all messages
+```
+
+- Uses the file descriptor set from Pass 1
+- Handles `oneof` fields correctly with proper JSON representation
+
+### Pass 2: Tonic Server Stubs (with `tonic` feature)
+
+```
+tonic_prost_build::Builder
+    ↓
+└── Service traits ({Service} trait + {Service}Server)
+```
+
+- **Types are NOT regenerated** - uses `extern_path` to reference Pass 1 types
+- User configuration via `with_tonic_prost_config()` only affects service generation
+- Internal overrides (cannot be changed by user):
+  - `build_client(false)` - no client code
+  - `build_server(true)` - generate server traits
+  - `compile_well_known_types(false)` - use extern paths
+
+### Configuration Separation
+
+| Method | Pass | Affects |
+|--------|------|---------|
+| `with_prost_config()` | 1 | Message types, enum types, extern paths |
+| `with_tonic_prost_config()` | 2 | Service trait generation only |
+
+**Example:**
+
+```rust
+connectrpc_axum_build::compile_dir("proto")
+    .with_prost_config(|config| {
+        // Configure types here (Pass 1)
+        config.type_attribute("MyMessage", "#[derive(Hash)]");
+        config.extern_path(".google.protobuf", "::pbjson_types");
+    })
+    .with_tonic()
+    .compile()?;
+```
 

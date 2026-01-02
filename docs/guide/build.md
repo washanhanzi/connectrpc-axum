@@ -60,21 +60,19 @@ prost-types = "0.14"  # For binary-only well-known types
 
 ## Tonic Configuration
 
-When using the `tonic` feature, use `.with_tonic_prost_config()` to customize tonic's code generation:
+Enable gRPC support with `.with_tonic()`:
 
 ```rust
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     connectrpc_axum_build::compile_dir("proto")
         .with_tonic()
-        .with_tonic_prost_config(|builder| {
-            builder
-                .type_attribute("MyMessage", "#[derive(Hash)]")
-                .field_attribute("MyMessage.my_field", "#[serde(skip)]")
-        })
         .compile()?;
     Ok(())
 }
 ```
+
+**Note:** Use `with_prost_config()` for all type customization (attributes, extern paths). The `with_tonic_prost_config()` method only affects service trait generation, not message types. See [Architecture - Code Generation](/guide/architecture#code-generation) for details.
+
 ## Generated Code
 
 The compiler generates:

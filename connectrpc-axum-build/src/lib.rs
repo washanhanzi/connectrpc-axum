@@ -64,21 +64,28 @@ impl CompileBuilder {
     /// Customize the tonic prost builder with a configuration closure.
     ///
     /// The closure is applied before the required internal configuration. Internal settings
-    /// (like `build_client(false)`, `build_server(true)`, `out_dir`, and `extern_path` mappings)
-    /// will be applied after and take precedence.
+    /// (like `build_client(false)`, `build_server(true)`, `compile_well_known_types(false)`,
+    /// `out_dir`, and `extern_path` mappings) will be applied after and take precedence.
     ///
-    /// Use this to add attributes or other tonic configuration.
+    /// **Important:** This only affects service trait generation, not message types.
+    /// Message types are generated in Pass 1 and reused via `extern_path` in Pass 2.
+    /// To customize message types, use [`with_prost_config`](Self::with_prost_config) instead.
     ///
     /// # Example
     ///
     /// ```rust,ignore
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     connectrpc_axum_build::compile_dir("proto")
+    ///         .with_prost_config(|config| {
+    ///             // Configure message types here (Pass 1)
+    ///             config.type_attribute("MyMessage", "#[derive(Hash)]");
+    ///             config.extern_path(".google.protobuf", "::pbjson_types");
+    ///         })
     ///         .with_tonic()
     ///         .with_tonic_prost_config(|builder| {
+    ///             // Configure service generation here (Pass 2)
+    ///             // Note: type_attribute for messages won't work here
     ///             builder
-    ///                 .type_attribute("MyMessage", "#[derive(Hash)]")
-    ///                 .field_attribute("MyMessage.my_field", "#[serde(skip)]")
     ///         })
     ///         .compile()?;
     ///     Ok(())
@@ -193,6 +200,7 @@ impl CompileBuilder {
             builder = builder
                 .build_client(false)
                 .build_server(true)
+                .compile_well_known_types(false)
                 .out_dir(&temp_out_dir);
 
             // Add extern_path mappings for generated types
