@@ -21,15 +21,36 @@ connectrpc-axum-examples/ # Examples and test clients
 | Module | Purpose |
 |--------|---------|
 | `handler.rs` | `ConnectHandlerWrapper<F>` implements `axum::handler::Handler` |
-| `request.rs` | `ConnectRequest<T>` extractor - body parsing |
-| `response.rs` | `ConnectResponse<T>` encoding per protocol |
-| `protocol.rs` | Protocol detection from request headers/query |
 | `layer.rs` | `ConnectLayer` middleware |
 | `error.rs` | `ConnectError` and `Code` types |
-| `limits.rs` | `MessageLimits` for max message size configuration |
+| `pipeline.rs` | Request/response pipeline primitives (decode, encode, compress) |
 | `service_builder.rs` | Multi-service router composition |
-| `stream_response.rs` | Server streaming response handling |
 | `tonic.rs` | Optional gRPC/Tonic interop, `ContentTypeSwitch` |
+
+### context/ module
+
+| Module | Purpose |
+|--------|---------|
+| `context.rs` | `Context` struct - protocol, compression, timeout, limits |
+| `context/protocol.rs` | `RequestProtocol` enum and detection logic |
+| `context/compression.rs` | `CompressionEncoding` and compress/decompress functions |
+| `context/limit.rs` | `MessageLimits` for max message size configuration |
+| `context/timeout.rs` | Request timeout handling |
+| `context/config.rs` | Configuration types |
+
+### message/ module
+
+| Module | Purpose |
+|--------|---------|
+| `message/request.rs` | `ConnectRequest<T>` extractor - body parsing |
+| `message/response.rs` | `ConnectResponse<T>` encoding per protocol |
+| `message/stream.rs` | Streaming request/response types and frame handling |
+
+### handler/ module
+
+| Module | Purpose |
+|--------|---------|
+| `handler/tonic.rs` | Tonic-compatible handler wrappers |
 
 ## Layered Architecture
 
@@ -56,7 +77,19 @@ Responsible for header parsing and validation. Runs before handlers.
 
 ### Request/Response Pipeline
 
-Handlers compose decode/encode functions in a pipeline:
+The `pipeline.rs` module provides primitive functions for request/response processing. Handlers compose these functions:
+
+**Request primitives:**
+- `read_body`: Read HTTP body with size limit
+- `decompress_bytes`: Decompress based on encoding
+- `decode_proto` / `decode_json`: Decode message from bytes
+- `unwrap_envelope`: Unwrap Connect streaming frame
+
+**Response primitives:**
+- `encode_proto` / `encode_json`: Encode message to bytes
+- `compress_bytes`: Compress if beneficial
+- `wrap_envelope`: Wrap in Connect streaming frame
+- `build_end_stream_frame`: Build EndStream frame for streaming
 
 ```
 Request Flow:
@@ -70,7 +103,7 @@ Response Flow:
 ```
 
 **Pipeline composition in extractors/responses:**
-- `ConnectRequest<T>`: Reads `ConnectContext` from extensions, decodes body (JSON or Protobuf)
+- `ConnectRequest<T>`: Reads `Context` from extensions, decodes body (JSON or Protobuf)
 - `ConnectResponse<T>`: Reads protocol from extensions, encodes response accordingly
 - Streaming variants follow same pattern with frame envelope handling
 
