@@ -18,6 +18,23 @@ claude /connectrpc-axum:test
 
 If not using Claude Code, see the corresponding skill files in [`.claude/skills/`](https://github.com/washanhanzi/connectrpc-axum/tree/main/.claude/skills/) for instructions.
 
-## Architecture
+## Project Skills
 
-See [`.claude/architecture.md`](https://github.com/washanhanzi/connectrpc-axum/blob/main/.claude/architecture.md) for detailed documentation on the project structure, core modules, and design decisions.
+This project includes several [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills) to assist with development:
+
+### User-Invocable Skills
+
+| Skill | Description |
+|-------|-------------|
+| `submit-issue` | Handle questions, feature requests, and bug reports. Attempts to answer from documentation first, verifies bugs with tests, then submits GitHub issues when needed. |
+| `test` | Run the complete test suite including unit tests, doc tests, and Go client integration tests. |
+
+### Reference Skills
+
+These skills are used automatically by Claude when relevant:
+
+| Skill | Description |
+|-------|-------------|
+| `connect-go-reference` | Reference the local `connect-go/` directory for ConnectRPC protocol details. Always uses local files instead of fetching from GitHub. |
+| `architecture` | Quick reference to project architecture at `docs/guide/architecture.md`. Use when understanding codebase structure, module organization, or key types. |
+| `sync-arch-doc` | Sync architecture documentation with main branch changes. Tracks the `docs/arch` branch against `origin/main` and updates architecture docs accordingly. |
