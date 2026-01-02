@@ -71,66 +71,144 @@ Explore the cloned repository to understand:
 - Example completeness
 - Code organization
 
-### Step 5: Write Comparison Document
+### Step 5: Get Repository Commit Hash
+
+Get the current commit hash of the cloned repository for the front matter:
+
+```bash
+git -C compare/<repo-name> rev-parse HEAD
+```
+
+### Step 6: Write Comparison Document
 
 Create output at `docs/guide/compare/<repo-name>.md` with the following structure:
 
 ```markdown
+---
+title: Comparison with <repo-name>
+repo: <github-url>
+commit: <commit-hash>
+date: <YYYY-MM-DD>
+author: Claude Opus 4.5
+---
+
 # Comparison: connectrpc-axum vs <repo-name>
+
+<ComparisonMeta />
 
 ## Overview
 
-Brief description of what <repo-name> is and its primary purpose.
+Brief description of what <repo-name> is, its primary purpose, and how it relates to connectrpc-axum (2-3 paragraphs max).
 
 ## Feature Comparison
 
-### Supported Protocols
-[Narrative comparing protocol support]
+For each feature category, use bullet points showing what each framework provides, followed by a short paragraph describing significant differences.
 
-### API Design
-[Narrative comparing how users define services/handlers]
+### Protocols & Encodings
 
-### Streaming Support
-[Narrative comparing streaming capabilities]
+**connectrpc-axum:**
+- [Feature 1]
+- [Feature 2]
+
+**<repo-name>:**
+- [Feature 1]
+- [Feature 2]
+
+[1-2 sentences on key differences]
+
+### Streaming
+
+**connectrpc-axum:**
+- [Streaming capabilities]
+
+**<repo-name>:**
+- [Streaming capabilities]
+
+[1-2 sentences on key differences]
+
+### Compression & Performance
+
+**connectrpc-axum:**
+- [Compression/performance features]
+
+**<repo-name>:**
+- [Compression/performance features]
+
+[1-2 sentences on key differences]
 
 ### Error Handling
-[Narrative comparing error handling approaches]
 
-## Technical Implementation
+**connectrpc-axum:**
+- [Error handling approach]
 
-### Architecture Patterns
-[Narrative comparing architectural approaches]
+**<repo-name>:**
+- [Error handling approach]
 
-### Core Abstractions
-[Narrative comparing key types and abstractions]
+[1-2 sentences on key differences]
 
-### Middleware/Layer Design
-[Narrative comparing extensibility patterns]
+## API Design
 
-### Code Generation
-[Narrative comparing code generation approaches, if applicable]
+Compare handler signatures and how users define services. Include code examples from both libraries showing equivalent functionality.
 
-## Quality & Developer Experience
+**connectrpc-axum:**
+```rust
+// Example handler signature
+```
 
-### Documentation
-[Narrative comparing documentation quality and completeness]
+**<repo-name>:**
+```rust
+// Example handler signature
+```
 
-### Examples
-[Narrative comparing example coverage]
+[Brief explanation of the design philosophy differences]
 
-### Testing
-[Narrative comparing test organization and coverage]
+## Implementation Details
+
+Keep this section concise - only the key architectural points.
+
+| Aspect | connectrpc-axum | <repo-name> |
+|--------|-----------------|-------------|
+| Architecture | [1-2 words] | [1-2 words] |
+| Request handling | [1-2 words] | [1-2 words] |
+| Middleware | [1-2 words] | [1-2 words] |
+| Code generation | [1-2 words] | [1-2 words] |
+
+[Optional: 1-2 sentences on significant architectural differences worth noting]
 
 ## Summary
 
-### Where connectrpc-axum Excels
-[Key strengths of our library]
+**connectrpc-axum strengths:** [bullet list, 3-5 items]
 
-### Where <repo-name> Excels
-[Key strengths of the compared library]
+**<repo-name> strengths:** [bullet list, 3-5 items]
 
-### Key Takeaways
-[Important learnings and potential improvements]
+**Key takeaways:** [2-3 bullet points on learnings or potential improvements]
+```
+
+### Step 7: Update VitePress Navigation
+
+Add the new comparison page to the VitePress sidebar in `docs/.vitepress/config.mts`.
+
+Find the `Comparisons` section in the sidebar configuration and add a new entry:
+
+```typescript
+{
+  text: 'Comparisons',
+  items: [
+    // ... existing items
+    { text: 'vs <repo-name>', link: '/guide/compare/<repo-name>' }
+  ]
+}
+```
+
+If the `Comparisons` section doesn't exist, create it after the Guide section:
+
+```typescript
+{
+  text: 'Comparisons',
+  items: [
+    { text: 'vs <repo-name>', link: '/guide/compare/<repo-name>' }
+  ]
+}
 ```
 
 ## Output
@@ -138,6 +216,11 @@ Brief description of what <repo-name> is and its primary purpose.
 The comparison document is created at:
 ```
 docs/guide/compare/<repo-name>.md
+```
+
+The VitePress navigation is updated at:
+```
+docs/.vitepress/config.mts
 ```
 
 Ensure the `docs/guide/compare/` directory exists before writing.

@@ -54,6 +54,13 @@ export default defineConfig({
             { text: 'Development', link: '/guide/development' },
             { text: 'Architecture', link: '/guide/architecture' }
           ]
+        },
+        {
+          text: 'Comparisons',
+          items: [
+            { text: 'axum-connect', link: '/guide/compare/axum-connect' },
+            { text: 'connectrpc', link: '/guide/compare/connectrpc' }
+          ]
         }
       ]
     },
