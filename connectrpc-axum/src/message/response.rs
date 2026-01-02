@@ -54,11 +54,14 @@ where
         };
 
         // 2. Compress if beneficial
-        let (body, was_compressed) = compress_bytes(
+        let (body, was_compressed) = match compress_bytes(
             body,
             ctx.compression.response_encoding,
             ctx.compression.min_compress_bytes,
-        );
+        ) {
+            Ok(result) => result,
+            Err(_) => return internal_error_response(ctx.protocol.error_content_type()),
+        };
 
         // 3. Build HTTP response
         let mut builder = Response::builder()
@@ -98,11 +101,14 @@ where
         };
 
         // 2. Compress if beneficial
-        let (data, compressed) = compress_bytes(
+        let (data, compressed) = match compress_bytes(
             payload,
             ctx.compression.response_encoding,
             ctx.compression.min_compress_bytes,
-        );
+        ) {
+            Ok(result) => result,
+            Err(_) => return internal_error_streaming_response(content_type),
+        };
 
         // 3. Build message frame
         let message_frame = wrap_envelope(&data, compressed);
@@ -205,8 +211,16 @@ where
                     };
 
                     // 2. Compress if beneficial (per-message compression)
-                    let (data, compressed) =
-                        compress_bytes(payload, response_encoding, min_compress_bytes);
+                    let (data, compressed) = match compress_bytes(
+                        payload,
+                        response_encoding,
+                        min_compress_bytes,
+                    ) {
+                        Ok(result) => result,
+                        Err(_) => {
+                            return (Bytes::from(internal_error_end_stream_frame()), true)
+                        }
+                    };
 
                     // 3. Wrap in envelope with correct flags
                     let frame = wrap_envelope(&data, compressed);

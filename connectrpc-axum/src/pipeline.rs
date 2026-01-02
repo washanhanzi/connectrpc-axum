@@ -186,19 +186,19 @@ where
 /// - encoding is not Identity
 /// - data length >= min_bytes threshold
 ///
-/// Falls back to uncompressed data on compression error.
+/// Returns an error if compression fails (matching connect-go behavior).
 pub fn compress_bytes(
     data: Vec<u8>,
     encoding: CompressionEncoding,
     min_bytes: usize,
-) -> (Vec<u8>, bool) {
+) -> Result<(Vec<u8>, bool), ConnectError> {
     if encoding == CompressionEncoding::Identity || data.len() < min_bytes {
-        return (data, false);
+        return Ok((data, false));
     }
 
     match compress(&data, encoding) {
-        Ok(compressed) => (compressed, true),
-        Err(_) => (data, false), // Fall back to uncompressed on error
+        Ok(compressed) => Ok((compressed, true)),
+        Err(e) => Err(ConnectError::new(Code::Internal, format!("compress: {e}"))),
     }
 }
 
@@ -502,7 +502,8 @@ impl ResponsePipeline {
             body,
             compression.response_encoding,
             compression.min_compress_bytes,
-        );
+        )
+        .map_err(|e| ContextError::new(ctx.protocol, e))?;
 
         // 3. Build HTTP response
         let mut builder = Response::builder()

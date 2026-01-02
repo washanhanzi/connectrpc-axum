@@ -159,9 +159,29 @@ impl ConnectError {
         K: AsRef<str>,
         V: AsRef<str>,
     {
-        if let Ok(name) = HeaderName::from_bytes(key.as_ref().as_bytes()) {
-            if let Ok(val) = HeaderValue::from_str(value.as_ref()) {
-                self.meta.append(name, val);
+        let key_str = key.as_ref();
+        let val_str = value.as_ref();
+
+        match HeaderName::from_bytes(key_str.as_bytes()) {
+            Ok(name) => match HeaderValue::from_str(val_str) {
+                Ok(val) => {
+                    self.meta.append(name, val);
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        key = key_str,
+                        value = val_str,
+                        error = %e,
+                        "invalid header value, metadata dropped"
+                    );
+                }
+            },
+            Err(e) => {
+                tracing::debug!(
+                    key = key_str,
+                    error = %e,
+                    "invalid header name, metadata dropped"
+                );
             }
         }
         self

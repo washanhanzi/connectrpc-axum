@@ -2,8 +2,8 @@
 use crate::context::{CompressionEncoding, Context, MessageLimits};
 use crate::error::{Code, ConnectError};
 use crate::pipeline::{
-    decode_json, decode_proto, decompress_bytes, envelope_flags, read_body, unwrap_envelope,
-    RequestPipeline,
+    RequestPipeline, decode_json, decode_proto, decompress_bytes, envelope_flags, read_body,
+    unwrap_envelope,
 };
 use axum::{
     body::Body,
@@ -14,8 +14,8 @@ use bytes::BytesMut;
 use futures::Stream;
 use http_body_util::BodyExt;
 use prost::Message;
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use std::pin::Pin;
 
 #[derive(Debug, Clone)]
@@ -32,11 +32,10 @@ where
         match *req.method() {
             Method::POST => {
                 // Get context to determine protocol type
-                let ctx = req
-                    .extensions()
-                    .get::<Context>()
-                    .cloned()
-                    .ok_or_else(|| ConnectError::new(Code::Internal, "missing pipeline context"))?;
+                let ctx =
+                    req.extensions().get::<Context>().cloned().ok_or_else(|| {
+                        ConnectError::new(Code::Internal, "missing pipeline context")
+                    })?;
 
                 // Dispatch based on protocol - no envelope for unary, envelope for streaming
                 if ctx.protocol.needs_envelope() {
@@ -147,13 +146,14 @@ where
 
     // Secondary connect version check (primary validation in layer)
     // This handles edge cases like connect being empty vs missing
-    if let Some(ref connect) = params.connect {
-        if !connect.is_empty() && connect != "v1" {
-            return Err(ConnectError::new(
-                Code::InvalidArgument,
-                format!("connect must be \"v1\": got \"{}\"", connect),
-            ));
-        }
+    if let Some(ref connect) = params.connect
+        && !connect.is_empty()
+        && connect != "v1"
+    {
+        return Err(ConnectError::new(
+            Code::InvalidArgument,
+            format!("connect must be \"v1\": got \"{}\"", connect),
+        ));
     }
 
     // Get message content (layer validation ensures this is present)
@@ -161,7 +161,7 @@ where
 
     // 1. Decode base64 if specified
     let bytes = if params.base64.as_deref() == Some("1") {
-        use base64::{engine::general_purpose, Engine as _};
+        use base64::{Engine as _, engine::general_purpose};
         general_purpose::URL_SAFE
             .decode(&message_str)
             .map_err(|err| ConnectError::new(Code::InvalidArgument, err.to_string()))?
@@ -171,9 +171,7 @@ where
 
     // 2. Decompress if compression is specified
     let bytes = match params.compression.as_deref() {
-        Some("gzip") => {
-            decompress_bytes(bytes.into(), CompressionEncoding::Gzip)?
-        }
+        Some("gzip") => decompress_bytes(bytes.into(), CompressionEncoding::Gzip)?,
         Some("identity") | Some("") | None => bytes.into(),
         Some(other) => {
             // This should be caught by layer validation, but handle as fallback
@@ -339,7 +337,10 @@ where
                     }
                 }
                 Some(Err(err)) => {
-                    yield Err(ConnectError::new(Code::Internal, err.to_string()));
+                    yield Err(ConnectError::new(
+                        Code::Unknown,
+                        format!("read enveloped message: {err}"),
+                    ));
                     return;
                 }
                 None => {
@@ -347,7 +348,7 @@ where
                     if !buffer.is_empty() {
                         yield Err(ConnectError::new(
                             Code::InvalidArgument,
-                            format!("incomplete frame: {} trailing bytes", buffer.len()),
+                            format!("protocol error: incomplete envelope: {} trailing bytes", buffer.len()),
                         ));
                     }
                     return;
