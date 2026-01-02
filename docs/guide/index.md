@@ -20,7 +20,10 @@ connectrpc-axum = "*"
 axum = "0.8"
 prost = "0.14"
 pbjson = "0.8"
+serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
+# If you need stream support
+async-stream = "0.3"
 
 [build-dependencies]
 connectrpc-axum-build = "*"
@@ -89,8 +92,10 @@ pub use pb::*;
 Use the generated service builder with any Axum extractors:
 
 ```rust
-use axum::{extract::State, Router};
+use axum::extract::State;
 use connectrpc_axum::prelude::*;
+// Import generated types from your crate
+use your_crate::{HelloRequest, HelloResponse, helloworldservice};
 
 #[derive(Clone, Default)]
 struct AppState;
@@ -129,7 +134,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_connect();
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, hello_router).await?;
     Ok(())
 }
 ```

@@ -10,6 +10,8 @@ Add the `tonic` feature to your dependencies:
 [dependencies]
 connectrpc-axum = { version = "*", features = ["tonic"] }
 tonic = "0.14"
+futures = "0.3"
+tower = "0.5"
 
 [build-dependencies]
 connectrpc-axum-build = { version = "*", features = ["tonic"] }
