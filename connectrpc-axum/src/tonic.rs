@@ -1,4 +1,20 @@
-//! Content-type switch utilities: dispatcher for serving Tonic gRPC and Connect (Axum) on one port.
+//! Tonic gRPC compatibility layer.
+//!
+//! This module provides utilities for serving both tonic gRPC and Connect protocol
+//! on the same port, along with handler wrappers that support full extractor support.
+//!
+//! # Overview
+//!
+//! - [`ContentTypeSwitch`] - Routes requests to gRPC or Connect based on content-type
+//! - [`TonicCompatibleHandlerWrapper`] - Handler wrapper with full extractor support
+//! - [`FromRequestPartsLayer`] - Middleware enabling `FromRequestParts` extractors
+//! - [`RequestContext`] - Full request context for extractor support
+
+mod handler;
+mod parts;
+
+pub use handler::*;
+pub use parts::*;
 
 use std::{
     convert::Infallible,

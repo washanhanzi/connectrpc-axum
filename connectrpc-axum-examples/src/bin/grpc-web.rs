@@ -88,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
     let app_state = AppState::default();
 
     // Build both Connect router and gRPC server from same handlers
-    let (connect_router, grpc_server) =
+    let (connect_router, grpc_service) =
         helloworldservice::HelloWorldServiceTonicCompatibleBuilder::new()
             .say_hello(say_hello)
             .say_hello_stream(say_hello_stream)
@@ -98,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
     // Wrap gRPC server with gRPC-Web layer
     let grpc_web_server = tower::ServiceBuilder::new()
         .layer(tonic_web::GrpcWebLayer::new())
-        .service(grpc_server);
+        .service(grpc_service);
 
     // Combine with MakeServiceBuilder
     let service = connectrpc_axum::MakeServiceBuilder::new()

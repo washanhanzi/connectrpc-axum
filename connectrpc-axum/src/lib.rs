@@ -10,7 +10,15 @@ pub mod tonic;
 
 // Re-export key types at the crate root for convenience
 #[cfg(feature = "tonic")]
-pub use crate::tonic::{ContentTypeSwitch, TonicCompatible};
+pub use crate::tonic::{
+    ContentTypeSwitch, TonicCompatible,
+    // Handler types from tonic module
+    post_tonic_unary, post_tonic_stream, unimplemented_boxed_call, unimplemented_boxed_stream_call,
+    BoxedCall, BoxedStreamCall, BoxedStream, IntoFactory, IntoStreamFactory,
+    TonicCompatibleHandlerWrapper, TonicCompatibleStreamHandlerWrapper,
+    // Parts types
+    RequestContext, CapturedParts, FromRequestPartsLayer,
+};
 // Re-export from context module
 pub use context::{
     compress, compute_effective_timeout, decompress, detect_protocol, negotiate_response_encoding,
@@ -20,11 +28,6 @@ pub use context::{
 };
 // Re-export from pipeline module
 pub use pipeline::{RequestPipeline, ResponsePipeline};
-#[cfg(feature = "tonic")]
-pub use handler::{
-    post_tonic_unary, post_tonic_stream, unimplemented_boxed_call, BoxedCall, IntoFactory,
-    TonicCompatibleHandlerWrapper,
-};
 pub use handler::{
     get_unary, post_bidi_stream, post_client_stream, post_server_stream, post_unary,
     ConnectBidiStreamHandler, ConnectBidiStreamHandlerWrapper, ConnectClientStreamHandler,
@@ -52,11 +55,14 @@ pub mod prelude {
         DEFAULT_MAX_MESSAGE_SIZE,
     };
     pub use crate::pipeline::{RequestPipeline, ResponsePipeline};
-    pub use crate::error::{Code, ConnectError};
+    pub use crate::error::{Code, ConnectError, ErrorDetail};
     #[cfg(feature = "tonic")]
-    pub use crate::handler::{
-        post_tonic_unary, post_tonic_stream, unimplemented_boxed_call, BoxedCall, IntoFactory,
-        TonicCompatibleHandlerWrapper,
+    pub use crate::tonic::{
+        post_tonic_unary, post_tonic_stream, unimplemented_boxed_call, unimplemented_boxed_stream_call,
+        BoxedCall, BoxedStreamCall, BoxedStream, IntoFactory, IntoStreamFactory,
+        TonicCompatibleHandlerWrapper, TonicCompatibleStreamHandlerWrapper,
+        ContentTypeSwitch, TonicCompatible,
+        RequestContext, CapturedParts, FromRequestPartsLayer,
     };
     pub use crate::handler::{
         get_unary, post_bidi_stream, post_client_stream, post_server_stream, post_unary,
@@ -69,6 +75,4 @@ pub mod prelude {
         ConnectRequest, ConnectResponse, ConnectStreamResponse, ConnectStreamingRequest, StreamBody,
     };
     pub use crate::service_builder::MakeServiceBuilder;
-    #[cfg(feature = "tonic")]
-    pub use crate::tonic::{ContentTypeSwitch, TonicCompatible};
 }

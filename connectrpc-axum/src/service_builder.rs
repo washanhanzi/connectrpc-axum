@@ -53,7 +53,12 @@ pub struct NoGrpc;
 
 /// Marker type indicating gRPC services have been added.
 #[cfg(feature = "tonic")]
-pub struct HasGrpc(tonic::service::Routes);
+pub struct HasGrpc {
+    routes: tonic::service::Routes,
+    /// Whether to capture HTTP request parts for `FromRequestParts` extractors.
+    /// Enabled by default.
+    capture_request_parts: bool,
+}
 
 /// Builder for combining multiple Connect routers and gRPC services.
 ///
@@ -288,11 +293,15 @@ where
     /// use connectrpc_axum::MakeServiceBuilder;
     /// use axum::Router;
     ///
+    /// let (hello_router, hello_grpc) = HelloServiceTonicCompatibleBuilder::new()
+    ///     .say_hello(handler)
+    ///     .build();
+    ///
     /// let builder = MakeServiceBuilder::new()
     ///     .add_router(hello_router)
-    ///     .add_grpc_service(hello_grpc_svc);
+    ///     .add_grpc_service(hello_grpc);
     /// ```
-    pub fn add_grpc_service<G>(self, svc: G) -> MakeServiceBuilder<S, HasGrpc>
+    pub fn add_grpc_service<G>(self, service: G) -> MakeServiceBuilder<S, HasGrpc>
     where
         G: tower::Service<http::Request<tonic::body::Body>, Error = std::convert::Infallible>
             + tonic::server::NamedService
@@ -303,10 +312,13 @@ where
         G::Response: axum::response::IntoResponse,
         G::Future: Send + 'static,
     {
-        let routes = tonic::service::Routes::default().add_service(svc);
+        let routes = tonic::service::Routes::default().add_service(service);
         MakeServiceBuilder {
             connect_router: self.connect_router,
-            grpc_state: HasGrpc(routes),
+            grpc_state: HasGrpc {
+                routes,
+                capture_request_parts: true,
+            },
             limits: self.limits,
             require_protocol_header: self.require_protocol_header,
             compression: self.compression,
@@ -332,10 +344,10 @@ where
     ///
     /// let builder = MakeServiceBuilder::new()
     ///     .add_router(hello_router)
-    ///     .add_grpc_service(hello_grpc_svc)
-    ///     .add_grpc_service(user_grpc_svc);
+    ///     .add_grpc_service(hello_grpc)
+    ///     .add_grpc_service(user_grpc);
     /// ```
-    pub fn add_grpc_service<G>(mut self, svc: G) -> Self
+    pub fn add_grpc_service<G>(mut self, service: G) -> Self
     where
         G: tower::Service<http::Request<tonic::body::Body>, Error = std::convert::Infallible>
             + tonic::server::NamedService
@@ -346,7 +358,30 @@ where
         G::Response: axum::response::IntoResponse,
         G::Future: Send + 'static,
     {
-        self.grpc_state.0 = self.grpc_state.0.add_service(svc);
+        self.grpc_state.routes = self.grpc_state.routes.add_service(service);
+        self
+    }
+
+    /// Disable `FromRequestParts` extractor support for gRPC services.
+    ///
+    /// By default, `FromRequestPartsLayer` is applied to capture HTTP request parts
+    /// (method, URI, headers, extensions) for use with `FromRequestParts` extractors
+    /// in handlers. If your handlers don't use any extractors, you can disable this
+    /// to avoid the overhead.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use connectrpc_axum::MakeServiceBuilder;
+    ///
+    /// let dispatch = MakeServiceBuilder::new()
+    ///     .add_router(connect_router)
+    ///     .add_grpc_service(grpc_server)
+    ///     .without_from_request_parts()
+    ///     .build();
+    /// ```
+    pub fn without_from_request_parts(mut self) -> Self {
+        self.grpc_state.capture_request_parts = false;
         self
     }
 
@@ -359,6 +394,10 @@ where
     /// - Requests with `content-type: application/grpc*` → routed to gRPC services
     /// - All other requests → routed to Connect routers
     ///
+    /// By default, `FromRequestPartsLayer` middleware is applied to the gRPC service
+    /// to enable `FromRequestParts` extraction in handlers. Use
+    /// [`without_from_request_parts()`](Self::without_from_request_parts) to disable this.
+    ///
     /// The Connect router will have [`ConnectLayer`] applied with the configured
     /// message limits and protocol header requirements.
     ///
@@ -370,21 +409,47 @@ where
     ///
     /// let dispatch = MakeServiceBuilder::new()
     ///     .add_routers(vec![hello_router, user_router])
-    ///     .add_grpc_service(hello_grpc_svc)
-    ///     .add_grpc_service(user_grpc_svc)
+    ///     .add_grpc_service(hello_bundle)
+    ///     .add_grpc_service(user_bundle)
     ///     .build();
     ///
     /// // Serve with axum
     /// let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     /// axum::serve(listener, tower::make::Shared::new(dispatch)).await?;
     /// ```
-    pub fn build(self) -> ContentTypeSwitch<tonic::service::Routes, Router<S>> {
+    pub fn build(
+        self,
+    ) -> ContentTypeSwitch<
+        impl tower::Service<
+            http::Request<axum::body::Body>,
+            Response = http::Response<tonic::body::Body>,
+            Error = std::convert::Infallible,
+            Future = impl Send,
+        > + Clone,
+        Router<S>,
+    > {
+        use tower::ServiceBuilder;
+        use tower::util::Either;
+
         let layer = ConnectLayer::new()
             .limits(self.limits)
             .require_protocol_header(self.require_protocol_header)
             .compression(self.compression);
-        let grpc_service = self.grpc_state.0.prepare();
+
         let connect_router = self.connect_router.layer(layer);
+
+        let grpc_routes = self.grpc_state.routes.prepare();
+        let grpc_service = if self.grpc_state.capture_request_parts {
+            // Apply FromRequestPartsLayer to enable FromRequestParts extractors in handlers.
+            Either::Left(
+                ServiceBuilder::new()
+                    .layer(crate::tonic::FromRequestPartsLayer::new())
+                    .service(grpc_routes),
+            )
+        } else {
+            // No middleware - handlers without extractors only
+            Either::Right(grpc_routes)
+        };
         ContentTypeSwitch::new(grpc_service, connect_router)
     }
 }

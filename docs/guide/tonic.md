@@ -41,14 +41,14 @@ use connectrpc_axum::prelude::*;
 #[derive(Clone, Default)]
 struct AppState;
 
-// Tonic-compatible handlers only allow:
+// Tonic-compatible handlers accept FromRequestParts extractors:
 // - (ConnectRequest<Req>)
-// - (State<S>, ConnectRequest<Req>)
+// - (Extractor1, ..., ConnectRequest<Req>) - up to 8 extractors
 async fn say_hello(
     State(_s): State<AppState>,
     ConnectRequest(req): ConnectRequest<HelloRequest>,
 ) -> Result<ConnectResponse<HelloResponse>, ConnectError> {
-    Ok(ConnectResponse(HelloResponse {
+    Ok(ConnectResponse::new(HelloResponse {
         message: format!("Hello, {}!", req.name.unwrap_or_default()),
     }))
 }
@@ -76,22 +76,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## Handler Restrictions
+## Server Streaming
 
-Tonic-compatible handlers have restricted signatures to ensure compatibility with both protocols:
+Server streaming handlers work the same way:
 
-| Signature | State Type |
-|-----------|------------|
-| `(ConnectRequest<Req>)` | `()` |
-| `(State<S>, ConnectRequest<Req>)` | Generic `S` |
+```rust
+use futures::Stream;
 
-::: warning
-Other Axum extractors (like `Query`, `Path`, etc.) are not supported in Tonic-compatible handlers since gRPC doesn't have equivalent concepts.
+async fn say_hello_stream(
+    State(state): State<AppState>,
+    ConnectRequest(req): ConnectRequest<HelloRequest>,
+) -> Result<
+    ConnectResponse<StreamBody<impl Stream<Item = Result<HelloResponse, ConnectError>>>>,
+    ConnectError,
+> {
+    let name = req.name.unwrap_or_else(|| "World".to_string());
+
+    let response_stream = async_stream::stream! {
+        yield Ok(HelloResponse {
+            message: format!("Hello, {}!", name),
+        });
+        yield Ok(HelloResponse {
+            message: format!("Goodbye, {}!", name),
+        });
+    };
+
+    Ok(ConnectResponse::new(StreamBody::new(response_stream)))
+}
+```
+
+::: warning Streaming Support
+Client streaming and bidirectional streaming are **not supported** by the Connect protocol.
+Only unary and server streaming methods work with `TonicCompatibleBuilder`.
+:::
+
+## Handler Signatures
+
+Tonic-compatible handlers support `FromRequestParts` extractors:
+
+| Signature | Description |
+|-----------|-------------|
+| `(ConnectRequest<Req>)` | No extractors |
+| `(E1, ConnectRequest<Req>)` | 1 extractor |
+| `(E1, E2, ..., ConnectRequest<Req>)` | Up to 8 extractors |
+
+::: tip
+Any `FromRequestParts` extractor works (State, Extension, headers, etc.).
+Note: extractors like `Query` or `Path` won't receive data from gRPC requests.
 :::
 
 ## Request Routing
 
 Requests are routed by `Content-Type` header:
 
-- `application/grpc*` → Tonic gRPC server
+- `application/grpc*` → Tonic gRPC server (includes gRPC-Web)
 - Otherwise → Axum (Connect protocol)

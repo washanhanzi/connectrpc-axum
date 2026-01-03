@@ -368,7 +368,9 @@ pub fn build_end_stream_frame(error: Option<&ConnectError>, trailers: Option<&He
 
     // Merge error metadata into trailers (like connect-go does)
     if let Some(err) = error {
-        metadata.merge_headers(err.meta());
+        if let Some(meta) = err.meta() {
+            metadata.merge_headers(meta);
+        }
     }
 
     let msg = EndStreamMessage { error, metadata };

@@ -72,6 +72,16 @@ path = "src/bin/extractor-http-response.rs"
 name = "endstream-metadata"
 path = "src/bin/endstream-metadata.rs"
 
+# Unary error metadata test (verifies metadata as HTTP headers in unary errors)
+[[bin]]
+name = "unary-error-metadata"
+path = "src/bin/unary-error-metadata.rs"
+
+# Error details test (verifies error details wire format with google.rpc.RetryInfo)
+[[bin]]
+name = "error-details"
+path = "src/bin/error-details.rs"
+
 [dependencies]
 # Application dependency for error handling
 anyhow = "1"
@@ -99,6 +109,8 @@ pbjson = { workspace = true }
 pbjson-types = { workspace = true }
 # Required: Used by generated code for message types
 prost = { workspace = true }
+# Required: Used for encoding well-known types (Duration, etc.)
+prost-types = { workspace = true }
 # Required: Used by generated code for serialization
 serde = { version = "1.0", features = ["derive"] }
 # Application dependency for JSON handling

@@ -22,7 +22,7 @@ use serde::de::DeserializeOwned;
 /// If the rejection is a `ConnectError`, it's encoded using the protocol from the request.
 /// Otherwise, the rejection is returned as-is via `IntoResponse`. This allows extractors
 /// to return non-Connect responses like HTTP redirects for authentication flows.
-fn handle_extractor_rejection<R>(rejection: R, protocol: RequestProtocol) -> Response
+pub(crate) fn handle_extractor_rejection<R>(rejection: R, protocol: RequestProtocol) -> Response
 where
     R: IntoResponse + Any,
 {
@@ -48,10 +48,7 @@ where
     }
 }
 
-#[cfg(feature = "tonic")]
-mod tonic;
-#[cfg(feature = "tonic")]
-pub use tonic::*;
+// Note: Tonic handler types are now in crate::tonic module
 
 /// Validate protocol for unary handlers. Returns error response if invalid.
 ///
@@ -572,5 +569,3 @@ where
 {
     axum::routing::post(ConnectBidiStreamHandlerWrapper(f))
 }
-
-// =============== TonicCompatibleHandlerWrapper implementations ===============
