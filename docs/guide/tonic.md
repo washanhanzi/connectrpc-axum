@@ -110,21 +110,6 @@ Client streaming and bidirectional streaming are **not supported** by the Connec
 Only unary and server streaming methods work with `TonicCompatibleBuilder`.
 :::
 
-## Handler Signatures
-
-Tonic-compatible handlers support `FromRequestParts` extractors:
-
-| Signature | Description |
-|-----------|-------------|
-| `(ConnectRequest<Req>)` | No extractors |
-| `(E1, ConnectRequest<Req>)` | 1 extractor |
-| `(E1, E2, ..., ConnectRequest<Req>)` | Up to 8 extractors |
-
-::: tip
-Any `FromRequestParts` extractor works (State, Extension, headers, etc.).
-Note: extractors like `Query` or `Path` won't receive data from gRPC requests.
-:::
-
 ## Request Routing
 
 Requests are routed by `Content-Type` header:

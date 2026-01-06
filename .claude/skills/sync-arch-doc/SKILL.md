@@ -1,26 +1,26 @@
 ---
 name: sync-arch-docs
-description: Sync architecture documentation with main branch changes. This skill should be used when the user wants to update docs/guide/architecture.md to reflect changes made on the main branch. It tracks the docs/arch branch against origin/main, analyzes new commits, and updates the architecture document accordingly.
+description: Sync architecture documentation with main branch changes. This skill should be used when the user wants to update docs/guide/architecture.md to reflect changes made on the main branch. It compares origin/docs/arch against local main, analyzes new commits, and updates the architecture document.
 ---
 
 # Sync Architecture Docs
 
 ## Overview
 
-This skill synchronizes architecture documentation by tracking a dedicated `docs/arch` branch against `origin/main`. It identifies new commits, analyzes what changed, determines if the architecture document needs updates, and pushes the updated branch.
+This skill synchronizes architecture documentation by comparing `origin/docs/arch` against local `main`. It identifies new commits, analyzes what changed, and updates the architecture document if needed. No git operations (merge, commit, push) are performed after the update.
 
 ## Workflow
 
 ### Step 1: Fetch and Find Missing Commits
 
-Fetch latest from origin and find commits that exist in `origin/main` but not in the docs branch:
+Fetch latest from origin and find commits that exist in local `main` but not in origin/docs/arch:
 
 ```bash
 git fetch origin
-git log --oneline origin/docs/arch..origin/main
+git log --oneline origin/docs/arch..main
 ```
 
-If no commits are found (docs/arch is up-to-date), report this and exit.
+If no commits are found (origin/docs/arch is up-to-date with local main), report this and exit.
 
 ### Step 2: Analyze Commit Changes
 
@@ -28,10 +28,10 @@ For each commit behind, examine the changes to understand their architectural im
 
 ```bash
 # Get detailed diff for commits
-git log --stat -p origin/docs/arch..origin/main
+git log --stat -p origin/docs/arch..main
 
 # Focus on key files that affect architecture
-git diff origin/docs/arch..origin/main -- src/ Cargo.toml
+git diff origin/docs/arch..main -- src/ Cargo.toml
 ```
 
 Look for changes that affect:
@@ -63,34 +63,9 @@ If updates are needed, edit `docs/guide/architecture.md` to reflect:
 
 Keep the document concise and focused on architectural understanding.
 
-### Step 5: Merge Main into docs/arch
-
-Bring in the latest changes from main:
-
-```bash
-git merge origin/main -m "chore: sync with main"
-```
-
-### Step 6: Commit and Push
-
-If architecture doc was updated:
-
-```bash
-git add docs/guide/architecture.md
-git commit -m "docs: update architecture for recent changes"
-```
-
-Push the updated branch:
-
-```bash
-git push origin docs/arch
-```
-
 ## Checklist
 
-- [ ] Fetch origin and check for commits behind
+- [ ] Fetch origin and check for commits behind (local main vs origin/docs/arch)
 - [ ] Analyze commit changes for architectural impact
 - [ ] Read current architecture document
 - [ ] Update architecture document if needed
-- [ ] Merge main into docs/arch
-- [ ] Push docs/arch to origin

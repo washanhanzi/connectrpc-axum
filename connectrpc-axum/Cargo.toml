@@ -1,6 +1,6 @@
 [package]
 name = "connectrpc-axum"
-version = "0.0.13"
+version = "0.0.14"
 edition = "2024"
 description = "axum style and axum compatible Connect Protocol server"
 readme = "../README.md"

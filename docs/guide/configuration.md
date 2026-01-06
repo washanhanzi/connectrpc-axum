@@ -119,3 +119,15 @@ let service = MakeServiceBuilder::new()
 Requests are routed by `Content-Type`:
 - `application/grpc*` → Tonic gRPC server
 - Otherwise → Axum routes (Connect protocol)
+
+### Disabling FromRequestParts Extraction
+
+By default, `FromRequestPartsLayer` is applied to gRPC services to enable axum's `FromRequestParts` extractors in handlers. If your handlers don't use extractors, disable this to avoid the overhead:
+
+```rust
+let service = MakeServiceBuilder::new()
+    .add_router(connect_router)
+    .add_grpc_service(grpc_service)
+    .without_from_request_parts()  // Disable extractor support
+    .build();
+```

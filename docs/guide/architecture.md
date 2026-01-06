@@ -96,8 +96,11 @@ These are the types you interact with when building services:
 
 | Type | Purpose |
 |------|---------|
-| `ConnectError` | Error with code, message, and optional details |
+| `ConnectError` | Error with code, message, metadata, and optional details |
 | `Code` | Connect/gRPC status codes (OK, InvalidArgument, NotFound, etc.) |
+| `ErrorDetail` | Structured error detail with type URL and protobuf-encoded bytes |
+
+Error details follow the Connect protocol's structured error format, serialized as JSON objects with `type` and `value` fields. The `ErrorDetail` type supports the `google.protobuf.Any` wire format.
 
 ## Handler Wrappers
 
@@ -109,6 +112,8 @@ These implement `axum::handler::Handler` for each RPC pattern:
 | `ConnectStreamHandlerWrapper<F>` | Server streaming |
 | `ConnectClientStreamHandlerWrapper<F>` | Client streaming |
 | `ConnectBidiStreamHandlerWrapper<F>` | Bidirectional streaming |
+| `TonicCompatibleHandlerWrapper<F>` | Tonic-style unary with axum extractors |
+| `TonicCompatibleStreamHandlerWrapper<F>` | Tonic-style streaming with axum extractors |
 
 ## Builder Pattern
 
@@ -152,6 +157,7 @@ MakeServiceBuilder::new()
 | Message limits | | ✓ |
 | Protocol header validation | | ✓ |
 | gRPC service integration | | ✓ |
+| FromRequestParts extraction | | ✓ |
 
 ## Wire Format
 
@@ -180,10 +186,23 @@ connectrpc-axum-examples/ # Examples and test clients
 |--------|---------|
 | `handler.rs` | Handler wrappers implementing `axum::handler::Handler` |
 | `layer.rs` | `ConnectLayer` middleware |
-| `error.rs` | `ConnectError` and `Code` types |
+| `error.rs` | `ConnectError`, `ErrorDetail`, and `Code` types |
 | `pipeline.rs` | Request/response primitives (decode, encode, compress) |
 | `service_builder.rs` | Multi-service router composition |
-| `tonic.rs` | Optional gRPC/Tonic interop |
+| `tonic/` | Optional gRPC/Tonic interop module |
+
+### tonic/ module (with `tonic` feature)
+
+| Module | Purpose |
+|--------|---------|
+| `tonic.rs` | `ContentTypeSwitch` and `TonicCompatible` types  |
+| `tonic/handler.rs` | Tonic-compatible handler wrappers and factory traits |
+| `tonic/parts.rs` | `RequestContext`, `CapturedParts`, and `FromRequestPartsLayer` |
+
+The tonic module provides two key capabilities:
+
+1. **Protocol switching**: `ContentTypeSwitch` routes by Content-Type header between gRPC and Connect
+2. **Extractor support**: `FromRequestPartsLayer` captures HTTP request parts for use with axum's `FromRequestParts` extractors in tonic-style handlers
 
 ### context/ module
 
