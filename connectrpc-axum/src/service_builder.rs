@@ -41,6 +41,7 @@
 //! The builder uses `tonic::service::Routes` internally to handle multiple services.
 
 use axum::Router;
+use std::time::Duration;
 
 use crate::context::{CompressionConfig, MessageLimits};
 use crate::layer::ConnectLayer;
@@ -48,12 +49,12 @@ use crate::layer::ConnectLayer;
 #[cfg(feature = "tonic")]
 use crate::tonic::ContentTypeSwitch;
 
-/// Marker type indicating no gRPC services have been added.
-pub struct NoGrpc;
+/// Marker type indicating Connect-only mode (no gRPC services added).
+pub struct ConnectOnly;
 
-/// Marker type indicating gRPC services have been added.
+/// Marker type indicating Tonic-compatible mode (gRPC services added).
 #[cfg(feature = "tonic")]
-pub struct HasGrpc {
+pub struct WithGrpc {
     routes: tonic::service::Routes,
     /// Whether to capture HTTP request parts for `FromRequestParts` extractors.
     /// Enabled by default.
@@ -70,7 +71,7 @@ pub struct HasGrpc {
 /// # Type Parameters
 ///
 /// - `S`: The state type for the routers (default: `()`)
-/// - `G`: The gRPC state marker (default: `NoGrpc`)
+/// - `G`: The gRPC state marker (default: `ConnectOnly`)
 ///
 /// # Return Types
 ///
@@ -104,7 +105,7 @@ pub struct HasGrpc {
 ///     .add_grpc_service(grpc2)
 ///     .build();
 /// ```
-pub struct MakeServiceBuilder<S = (), G = NoGrpc> {
+pub struct MakeServiceBuilder<S = (), G = ConnectOnly> {
     connect_router: Router<S>,
     grpc_state: G,
     /// Message size limits for requests
@@ -113,9 +114,11 @@ pub struct MakeServiceBuilder<S = (), G = NoGrpc> {
     require_protocol_header: bool,
     /// Compression configuration
     compression: CompressionConfig,
+    /// Server-side timeout
+    timeout: Option<Duration>,
 }
 
-impl<S> Default for MakeServiceBuilder<S, NoGrpc>
+impl<S> Default for MakeServiceBuilder<S, ConnectOnly>
 where
     S: Clone + Send + Sync + 'static,
 {
@@ -124,7 +127,7 @@ where
     }
 }
 
-impl<S> MakeServiceBuilder<S, NoGrpc>
+impl<S> MakeServiceBuilder<S, ConnectOnly>
 where
     S: Clone + Send + Sync + 'static,
 {
@@ -140,10 +143,11 @@ where
     pub fn new() -> Self {
         Self {
             connect_router: Router::new(),
-            grpc_state: NoGrpc,
+            grpc_state: ConnectOnly,
             limits: MessageLimits::default(),
             require_protocol_header: false,
             compression: CompressionConfig::default(),
+            timeout: None,
         }
     }
 }
@@ -192,6 +196,31 @@ where
         self
     }
 
+    /// Set the server-side maximum timeout.
+    ///
+    /// When set, the effective timeout for each request is the minimum of:
+    /// - This server timeout
+    /// - The client's `Connect-Timeout-Ms` header (if present)
+    ///
+    /// This ensures the smaller timeout always wins, matching Connect-Go's behavior.
+    /// On timeout, a Connect `deadline_exceeded` error is returned.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use std::time::Duration;
+    /// use connectrpc_axum::MakeServiceBuilder;
+    ///
+    /// let app = MakeServiceBuilder::new()
+    ///     .timeout(Duration::from_secs(30))
+    ///     .add_router(router)
+    ///     .build();
+    /// ```
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
     /// Adds a single Connect RPC router to the builder.
     ///
     /// The router will be merged with any previously added routers using
@@ -236,15 +265,21 @@ where
     }
 
     fn build_connect_layer(&self) -> ConnectLayer {
-        ConnectLayer::new()
+        let mut layer = ConnectLayer::new()
             .limits(self.limits.clone())
             .require_protocol_header(self.require_protocol_header)
-            .compression(self.compression.clone())
+            .compression(self.compression.clone());
+
+        if let Some(timeout) = self.timeout {
+            layer = layer.timeout(timeout);
+        }
+
+        layer
     }
 }
 
 // Connect-only build method (no gRPC services added)
-impl<S> MakeServiceBuilder<S, NoGrpc>
+impl<S> MakeServiceBuilder<S, ConnectOnly>
 where
     S: Clone + Send + Sync + 'static,
 {
@@ -278,7 +313,7 @@ where
 
 // Tonic-specific methods (only available when tonic feature is enabled)
 #[cfg(feature = "tonic")]
-impl<S> MakeServiceBuilder<S, NoGrpc>
+impl<S> MakeServiceBuilder<S, ConnectOnly>
 where
     S: Clone + Send + Sync + 'static,
 {
@@ -293,7 +328,7 @@ where
     /// use connectrpc_axum::MakeServiceBuilder;
     /// use axum::Router;
     ///
-    /// let (hello_router, hello_grpc) = HelloServiceTonicCompatibleBuilder::new()
+    /// let (hello_router, hello_grpc) = HelloServiceWithGrpcBuilder::new()
     ///     .say_hello(handler)
     ///     .build();
     ///
@@ -301,7 +336,7 @@ where
     ///     .add_router(hello_router)
     ///     .add_grpc_service(hello_grpc);
     /// ```
-    pub fn add_grpc_service<G>(self, service: G) -> MakeServiceBuilder<S, HasGrpc>
+    pub fn add_grpc_service<G>(self, service: G) -> MakeServiceBuilder<S, WithGrpc>
     where
         G: tower::Service<http::Request<tonic::body::Body>, Error = std::convert::Infallible>
             + tonic::server::NamedService
@@ -315,19 +350,20 @@ where
         let routes = tonic::service::Routes::default().add_service(service);
         MakeServiceBuilder {
             connect_router: self.connect_router,
-            grpc_state: HasGrpc {
+            grpc_state: WithGrpc {
                 routes,
                 capture_request_parts: true,
             },
             limits: self.limits,
             require_protocol_header: self.require_protocol_header,
             compression: self.compression,
+            timeout: self.timeout,
         }
     }
 }
 
 #[cfg(feature = "tonic")]
-impl<S> MakeServiceBuilder<S, HasGrpc>
+impl<S> MakeServiceBuilder<S, WithGrpc>
 where
     S: Clone + Send + Sync + 'static,
 {
