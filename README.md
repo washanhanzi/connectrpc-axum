@@ -5,7 +5,7 @@
 [![Documentation](https://docs.rs/connectrpc-axum/badge.svg)](https://docs.rs/connectrpc-axum)
 [![License](https://img.shields.io/crates/l/connectrpc-axum.svg)](LICENSE)
 
-A Rust library that brings [ConnectRPC](https://connectrpc.com/) protocol support to the [Axum](https://github.com/tokio-rs/axum) web framework, with optional [Tonic](https://github.com/hyperium/tonic) integration for serving gRPC on the same port.
+A Rust library that brings [ConnectRPC](https://connectrpc.com/) protocol support to the [Axum](https://github.com/tokio-rs/axum) web framework, with optional [Tonic](https://github.com/hyperium/tonic) integration for serving gRPC or gRPC-Web on the same port.
 
 > **Status**: Under active development. Not recommended for production use yet.
 
@@ -22,15 +22,7 @@ A Rust library that brings [ConnectRPC](https://connectrpc.com/) protocol suppor
 - Automatic content negotiation (JSON/binary protobuf)
 - All protocols served on the same port
 
-## Documentation
-
-📖 **[Full Documentation](https://washanhanzi.github.io/connectrpc-axum/)**
-
-- [Getting Started](https://washanhanzi.github.io/connectrpc-axum/guide/)
-- [MakeServiceBuilder](https://washanhanzi.github.io/connectrpc-axum/guide/configuration)
-- [HTTP Endpoints](https://washanhanzi.github.io/connectrpc-axum/guide/http-endpoints)
-- [Tonic gRPC Integration](https://washanhanzi.github.io/connectrpc-axum/guide/tonic)
-- [build.rs Configuration](https://washanhanzi.github.io/connectrpc-axum/guide/build)
+## 📖 [Documentation](https://washanhanzi.github.io/connectrpc-axum/guide)
 
 ## Development
 
