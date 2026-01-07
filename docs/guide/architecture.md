@@ -87,7 +87,9 @@ These are the types you interact with when building services:
 | Type | Purpose |
 |------|---------|
 | `ConnectRequest<T>` | Axum extractor - deserializes protobuf/JSON from request body |
-| `ConnectStreamingRequest<T>` | Extractor for client streaming requests |
+| `ConnectRequest<Streaming<T>>` | Extractor for client/bidi streaming requests (unified pattern) |
+| `Streaming<T>` | Stream of messages from client (similar to Tonic's `Streaming<T>`) |
+| `ConnectStreamingRequest<T>` | Extractor for client streaming requests (legacy) |
 | `ConnectResponse<T>` | Response wrapper - encodes per detected protocol |
 | `ConnectStreamResponse<S>` | Server streaming response wrapper |
 | `StreamBody<S>` | Marker for streaming response bodies |
@@ -108,12 +110,32 @@ These implement `axum::handler::Handler` for each RPC pattern:
 
 | Wrapper | Use Case |
 |---------|----------|
-| `ConnectHandlerWrapper<F>` | Unary requests |
-| `ConnectStreamHandlerWrapper<F>` | Server streaming |
-| `ConnectClientStreamHandlerWrapper<F>` | Client streaming |
-| `ConnectBidiStreamHandlerWrapper<F>` | Bidirectional streaming |
+| `ConnectHandlerWrapper<F>` | Unified: unary, server/client/bidi streaming (auto-detected) |
+| `ConnectStreamHandlerWrapper<F>` | Server streaming (explicit) |
+| `ConnectClientStreamHandlerWrapper<F>` | Client streaming (explicit) |
+| `ConnectBidiStreamHandlerWrapper<F>` | Bidirectional streaming (explicit) |
 | `TonicCompatibleHandlerWrapper<F>` | Tonic-style unary with axum extractors |
-| `TonicCompatibleStreamHandlerWrapper<F>` | Tonic-style streaming with axum extractors |
+| `TonicCompatibleStreamHandlerWrapper<F>` | Tonic-style server streaming with axum extractors |
+| `TonicCompatibleClientStreamHandlerWrapper<F>` | Tonic-style client streaming with axum extractors |
+| `TonicCompatibleBidiStreamHandlerWrapper<F>` | Tonic-style bidi streaming with axum extractors |
+
+### How Handler Wrappers Work
+
+`ConnectHandlerWrapper<F>` is a newtype that wraps a user function `F`. It has multiple `impl Handler<T, S>` blocks, each with different `where` bounds on `F`:
+
+```rust
+// When F returns ConnectResponse<Resp> (not StreamBody)
+impl<F, ...> Handler<(ConnectRequest<Req>,), ()> for ConnectHandlerWrapper<F>
+where F: Fn(ConnectRequest<Req>) -> Fut,
+      Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>>, ...
+
+// When F returns ConnectResponse<StreamBody<St>>
+impl<F, ...> Handler<(ConnectRequest<Req>, StreamBody<St>), ()> for ConnectHandlerWrapper<F>
+where F: Fn(ConnectRequest<Req>) -> Fut,
+      Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>>, ...
+```
+
+The compiler inspects `F`'s signature (input types + return type) and selects the impl whose `where` bounds match. The `T` parameter in `Handler<T, S>` acts as a discriminator tag - it's not used at runtime, only for impl selection.
 
 ## Builder Pattern
 
@@ -196,13 +218,26 @@ connectrpc-axum-examples/ # Examples and test clients
 | Module | Purpose |
 |--------|---------|
 | `tonic.rs` | `ContentTypeSwitch` and `TonicCompatible` types  |
-| `tonic/handler.rs` | Tonic-compatible handler wrappers and factory traits |
+| `tonic/handler.rs` | Tonic-compatible handler wrappers, factory traits, and boxed call types |
 | `tonic/parts.rs` | `RequestContext`, `CapturedParts`, and `FromRequestPartsLayer` |
 
 The tonic module provides two key capabilities:
 
 1. **Protocol switching**: `ContentTypeSwitch` routes by Content-Type header between gRPC and Connect
 2. **Extractor support**: `FromRequestPartsLayer` captures HTTP request parts for use with axum's `FromRequestParts` extractors in tonic-style handlers
+
+#### Boxed Call Types
+
+The tonic module defines boxed callable types for generated service code:
+
+| Type | Purpose |
+|------|---------|
+| `BoxedCall<Req, Resp>` | Unary RPC callable |
+| `BoxedStreamCall<Req, Resp>` | Server streaming RPC callable |
+| `BoxedClientStreamCall<Req, Resp>` | Client streaming RPC callable |
+| `BoxedBidiStreamCall<Req, Resp>` | Bidirectional streaming RPC callable |
+
+Each has corresponding factory traits (`IntoFactory`, `IntoStreamFactory`, `IntoClientStreamFactory`, `IntoBidiStreamFactory`) for adapting user handlers.
 
 ### context/ module
 
@@ -217,7 +252,7 @@ The tonic module provides two key capabilities:
 
 | Module | Purpose |
 |--------|---------|
-| `request.rs` | `ConnectRequest<T>` extractor |
+| `request.rs` | `ConnectRequest<T>` and `Streaming<T>` extractors |
 | `response.rs` | `ConnectResponse<T>` encoding |
 | `stream.rs` | Streaming types and frame handling |
 
@@ -237,6 +272,7 @@ prost_build::Config
 
 - User configuration via `with_prost_config()` is applied here
 - All type customization (attributes, extern paths) must be done in this pass
+- Generated builders use the unified `post_connect()` function which auto-detects RPC type from handler signature
 
 ### Pass 1.5: Serde Implementations (always)
 
