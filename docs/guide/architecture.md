@@ -81,6 +81,9 @@ These are the types you interact with when building services:
 | `Context` | Protocol, compression, timeout, limits - set by layer, read by handlers |
 | `RequestProtocol` | Enum identifying Connect variant (Unary/Stream × Json/Proto) |
 | `MessageLimits` | Max message size configuration (default 4MB) |
+| `Codec` | Trait for compression/decompression (implement for custom algorithms) |
+| `GzipCodec` | Built-in gzip compression codec |
+| `IdentityCodec` | Built-in no-op codec (zero-copy passthrough) |
 
 ### Request/Response Types
 
@@ -163,6 +166,7 @@ MakeServiceBuilder::new()
     .add_router(user_router)
     .message_limits(MessageLimits::new(16 * 1024 * 1024))
     .require_protocol_header(true)
+    .timeout(Duration::from_secs(30))  // server-side timeout
     .add_grpc_service(grpc_svc)  // optional
     .build()
 ```
@@ -178,6 +182,7 @@ MakeServiceBuilder::new()
 | ConnectLayer application | | ✓ |
 | Message limits | | ✓ |
 | Protocol header validation | | ✓ |
+| Server-side timeout | | ✓ |
 | gRPC service integration | | ✓ |
 | FromRequestParts extraction | | ✓ |
 
@@ -244,9 +249,27 @@ Each has corresponding factory traits (`IntoFactory`, `IntoStreamFactory`, `Into
 | Module | Purpose |
 |--------|---------|
 | `protocol.rs` | `RequestProtocol` enum and detection |
-| `compression.rs` | Compression encoding and functions |
+| `compression.rs` | `Codec` trait, `GzipCodec`, `IdentityCodec`, compression functions |
 | `limit.rs` | Message size limits |
 | `timeout.rs` | Request timeout handling |
+
+#### Compression Architecture
+
+The `compression.rs` module provides a `Codec` trait for compression/decompression:
+
+```rust
+pub trait Codec: Send + Sync + 'static {
+    fn name(&self) -> &'static str;
+    fn compress(&self, data: Bytes) -> io::Result<Bytes>;
+    fn decompress(&self, data: Bytes) -> io::Result<Bytes>;
+}
+```
+
+Built-in implementations:
+- `IdentityCodec`: Zero-copy passthrough (no compression)
+- `GzipCodec`: Gzip compression via flate2
+
+The `default_codec()` function returns the appropriate codec for a `CompressionEncoding`. Custom codecs (zstd, brotli, etc.) can implement the `Codec` trait.
 
 ### message/ module
 
