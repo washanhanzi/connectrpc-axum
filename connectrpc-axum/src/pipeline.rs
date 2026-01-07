@@ -25,7 +25,8 @@
 //! - [`build_end_stream_frame`]: Build an EndStream frame for streaming responses
 
 use crate::context::{
-    CompressionEncoding, Context, RequestProtocol, compress, decompress, error::ContextError,
+    CompressionEncoding, Context, RequestProtocol, compress, decompress, detect_protocol,
+    error::ContextError,
 };
 use crate::error::{Code, ConnectError};
 use axum::body::Body;
@@ -34,6 +35,7 @@ use bytes::Bytes;
 use prost::Message;
 use serde::{Serialize, de::DeserializeOwned};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // ============================================================================
 // Primitive Functions
@@ -399,6 +401,43 @@ pub fn set_connect_content_encoding(
 }
 
 // ============================================================================
+// Context fallback helper
+// ============================================================================
+
+// Flag to ensure we only log the missing layer warning once per process
+static WARNED_MISSING_LAYER: AtomicBool = AtomicBool::new(false);
+
+/// Get context from request extensions, or create a default one if missing.
+///
+/// If the `ConnectLayer` middleware was not applied, this will:
+/// 1. Detect the protocol from request headers (Content-Type or query params)
+/// 2. Create a default context with no compression and default limits
+/// 3. Log a warning (once per process) about the missing layer
+fn get_context_or_default<B>(req: &Request<B>) -> Context {
+    if let Some(ctx) = req.extensions().get::<Context>() {
+        return ctx.clone();
+    }
+
+    // Log warning once per process to avoid log spam
+    if !WARNED_MISSING_LAYER.swap(true, Ordering::Relaxed) {
+        tracing::warn!(
+            target: "connectrpc_axum",
+            "ConnectLayer middleware not found in request extensions. \
+             Using default context with protocol detected from headers. \
+             For production use, add ConnectLayer to your router: \
+             `.layer(ConnectLayer::new())`"
+        );
+    }
+
+    // Create default context by detecting protocol from headers
+    let protocol = detect_protocol(req);
+    Context {
+        protocol,
+        ..Default::default()
+    }
+}
+
+// ============================================================================
 // RequestPipeline
 // ============================================================================
 
@@ -416,10 +455,8 @@ impl RequestPipeline {
     where
         T: Message + DeserializeOwned + Default,
     {
-        // 1. Get context from extensions (injected by layer)
-        let ctx = req.extensions().get::<Context>().cloned().ok_or_else(|| {
-            ContextError::internal(RequestProtocol::Unknown, "missing request context")
-        })?;
+        // Get context (with fallback to default if layer is missing)
+        let ctx = get_context_or_default(&req);
 
         // 2. Read body bytes with size limit
         let max_size = ctx.limits.max_message_size().unwrap_or(usize::MAX);
@@ -476,11 +513,10 @@ impl ResponsePipeline {
     where
         T: Message + Serialize,
     {
-        let ctx = req.extensions().get::<Context>().ok_or_else(|| {
-            ContextError::internal(RequestProtocol::Unknown, "missing request context")
-        })?;
+        // Get context (with fallback to default if layer is missing)
+        let ctx = get_context_or_default(req);
 
-        Self::encode_with_context(ctx, message)
+        Self::encode_with_context(&ctx, message)
     }
 
     /// Encode with explicit context (when request not available).

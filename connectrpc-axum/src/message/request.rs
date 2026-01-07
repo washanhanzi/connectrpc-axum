@@ -1,5 +1,5 @@
 //! Extractor for Connect requests.
-use crate::context::{CompressionEncoding, Context, MessageLimits};
+use crate::context::{CompressionEncoding, Context, MessageLimits, detect_protocol};
 use crate::error::{Code, ConnectError};
 use crate::pipeline::{
     RequestPipeline, decode_json, decode_proto, decompress_bytes, envelope_flags, read_body,
@@ -17,6 +17,42 @@ use prost::Message;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+// Flag to ensure we only log the missing layer warning once per process
+static WARNED_MISSING_LAYER: AtomicBool = AtomicBool::new(false);
+
+/// Get context from request extensions, or create a default one if missing.
+///
+/// If the `ConnectLayer` middleware was not applied, this will:
+/// 1. Detect the protocol from request headers (Content-Type or query params)
+/// 2. Create a default context with no compression and default limits
+/// 3. Log a warning (once per process) about the missing layer
+///
+/// This provides a more user-friendly experience for developers who forget
+/// to add the `ConnectLayer` middleware, while still allowing requests to
+/// be processed with sensible defaults.
+fn get_context_or_default<B>(req: &Request<B>) -> Context {
+    if let Some(ctx) = req.extensions().get::<Context>() {
+        return ctx.clone();
+    }
+
+    // Log warning once per process to avoid log spam
+    if !WARNED_MISSING_LAYER.swap(true, Ordering::Relaxed) {
+        tracing::warn!(
+            target: "connectrpc_axum",
+            "ConnectLayer not found. \
+             Using default context with protocol detected from headers."
+        );
+    }
+
+    // Create default context by detecting protocol from headers
+    let protocol = detect_protocol(req);
+    Context {
+        protocol,
+        ..Default::default()
+    }
+}
 
 /// Connect request wrapper for extracting messages from HTTP requests.
 ///
@@ -58,6 +94,22 @@ impl<T> Streaming<T> {
     pub fn into_stream(self) -> Pin<Box<dyn Stream<Item = Result<T, ConnectError>> + Send>> {
         self.inner
     }
+
+    /// Create a Streaming from a tonic::Streaming.
+    ///
+    /// This is used internally by the TonicCompatibleBuilder to convert
+    /// gRPC streaming requests into Connect streaming requests.
+    #[cfg(feature = "tonic")]
+    pub fn from_tonic(tonic_stream: tonic::Streaming<T>) -> Self
+    where
+        T: Send + 'static,
+    {
+        use futures::StreamExt;
+        let mapped = tonic_stream.map(|result| result.map_err(ConnectError::from));
+        Self {
+            inner: Box::pin(mapped),
+        }
+    }
 }
 
 impl<T> Stream for Streaming<T> {
@@ -81,11 +133,8 @@ where
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
         match *req.method() {
             Method::POST => {
-                // Get context to determine protocol type
-                let ctx =
-                    req.extensions().get::<Context>().cloned().ok_or_else(|| {
-                        ConnectError::new(Code::Internal, "missing pipeline context")
-                    })?;
+                // Get context (with fallback to default if layer is missing)
+                let ctx = get_context_or_default(&req);
 
                 // Dispatch based on protocol - no envelope for unary, envelope for streaming
                 if ctx.protocol.needs_envelope() {
@@ -183,12 +232,8 @@ where
     S: Send + Sync,
     T: Message + DeserializeOwned + Default,
 {
-    // Get protocol from Context (set by ConnectLayer via detect_protocol)
-    let ctx = req
-        .extensions()
-        .get::<Context>()
-        .cloned()
-        .ok_or_else(|| ConnectError::new(Code::Internal, "missing pipeline context"))?;
+    // Get context (with fallback to default if layer is missing)
+    let ctx = get_context_or_default(&req);
 
     let query = req.uri().query().unwrap_or("");
     let params: GetRequestQuery = serde_qs::from_str(query)
@@ -278,12 +323,8 @@ where
             ));
         }
 
-        // Get pipeline context from extensions (injected by ConnectLayer)
-        let ctx = req
-            .extensions()
-            .get::<Context>()
-            .cloned()
-            .ok_or_else(|| ConnectError::new(Code::Internal, "missing pipeline context"))?;
+        // Get context (with fallback to default if layer is missing)
+        let ctx = get_context_or_default(&req);
 
         let use_proto = ctx.protocol.is_proto();
         let request_encoding = ctx.compression.request_encoding;
@@ -317,12 +358,8 @@ where
             ));
         }
 
-        // Get pipeline context from extensions (injected by ConnectLayer)
-        let ctx = req
-            .extensions()
-            .get::<Context>()
-            .cloned()
-            .ok_or_else(|| ConnectError::new(Code::Internal, "missing pipeline context"))?;
+        // Get context (with fallback to default if layer is missing)
+        let ctx = get_context_or_default(&req);
 
         let use_proto = ctx.protocol.is_proto();
         let request_encoding = ctx.compression.request_encoding;

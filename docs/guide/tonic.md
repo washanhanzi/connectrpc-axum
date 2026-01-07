@@ -105,17 +105,6 @@ async fn say_hello_stream(
 }
 ```
 
-::: tip All Streaming Types Supported
-`ServiceBuilder` generates code for **all streaming types**: unary, server streaming, client streaming, and bidirectional streaming.
-
-Note: Bidirectional streaming requires HTTP/2 for full-duplex communication.
-:::
-
-::: warning TonicCompatibleBuilder Limitation
-`TonicCompatibleBuilder` currently only generates code for unary and server streaming methods.
-Services with client/bidi streaming methods should use `ServiceBuilder` for Connect-only deployments.
-:::
-
 ## Request Routing
 
 Requests are routed by `Content-Type` header:
