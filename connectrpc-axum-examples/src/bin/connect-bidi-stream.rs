@@ -4,13 +4,13 @@
 //! - Client sends a stream of messages
 //! - Server responds with a stream of messages
 //! - Uses HTTP/2 cleartext (h2c) for full-duplex communication
+//! - Uses the generated `EchoServiceBuilder` with declarative API
 //!
 //! Run with: cargo run --bin connect-bidi-stream
 //! Test with: ./client connect-bidi
 
 use connectrpc_axum::prelude::*;
-use connectrpc_axum::message::ConnectStreamingRequest;
-use connectrpc_axum_examples::{EchoRequest, EchoResponse};
+use connectrpc_axum_examples::{EchoRequest, EchoResponse, echoservice};
 use futures::{Stream, StreamExt};
 use hyper::server::conn::http2;
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -21,13 +21,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::net::TcpListener;
 
 /// Bidirectional streaming handler - echoes each message as it arrives
+///
+/// Uses `ConnectRequest<Streaming<T>>` for input and `StreamBody<S>` for output.
 async fn echo_bidi_stream(
-    req: ConnectStreamingRequest<EchoRequest>,
+    ConnectRequest(streaming): ConnectRequest<Streaming<EchoRequest>>,
 ) -> Result<
     ConnectResponse<StreamBody<impl Stream<Item = Result<EchoResponse, ConnectError>>>>,
     ConnectError,
 > {
-    let mut stream = req.stream;
+    let mut stream = streaming.into_stream();
     let counter = Arc::new(AtomicUsize::new(0));
     let counter_clone = counter.clone();
 
@@ -72,13 +74,10 @@ async fn echo_bidi_stream(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Build router with bidi streaming endpoint
-    let router = axum::Router::new()
-        .route(
-            "/echo.EchoService/EchoBidiStream",
-            post_bidi_stream(echo_bidi_stream),
-        )
-        .layer(ConnectLayer::new());
+    // Use generated builder - works for ALL streaming types including bidi streaming
+    let router = echoservice::EchoServiceBuilder::new()
+        .echo_bidi_stream(echo_bidi_stream)
+        .build_connect();
 
     let addr: SocketAddr = "0.0.0.0:3000".parse()?;
     let listener = TcpListener::bind(addr).await?;

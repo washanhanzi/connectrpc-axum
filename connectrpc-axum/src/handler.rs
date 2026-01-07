@@ -11,7 +11,7 @@ use crate::{
         Context, RequestProtocol, validate_streaming_content_type, validate_unary_content_type,
     },
     error::ConnectError,
-    message::{ConnectRequest, ConnectResponse, ConnectStreamingRequest, StreamBody},
+    message::{ConnectRequest, ConnectResponse, ConnectStreamingRequest, StreamBody, Streaming},
 };
 use futures::Stream;
 use prost::Message;
@@ -232,14 +232,200 @@ mod generated_handler_impls {
     all_tuples_nonempty!(impl_handler_for_connect_handler_wrapper);
 }
 
-/// Creates a POST method router for unary RPC handlers.
-pub fn post_unary<F, T, S>(f: F) -> MethodRouter<S>
+// =============== Unified Handler: Server Streaming ===============
+// Handler for: ConnectRequest<Req> -> ConnectResponse<StreamBody<St>>
+
+/// Handler implementation for server streaming using the unified ConnectHandlerWrapper.
+/// Input: single message, Output: stream of messages
+impl<F, Fut, Req, Resp, St> Handler<(ConnectRequest<Req>, StreamBody<St>), ()>
+    for ConnectHandlerWrapper<F>
+where
+    F: Fn(ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
+    St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
+    // Req must be a Message (not Streaming<T>) to distinguish from bidi streaming
+    Req: Message + DeserializeOwned + Default + Send + Sync + 'static,
+    Resp: Message + serde::Serialize + Send + Sync + 'static,
+{
+    type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
+
+    fn call(self, req: Request, _state: ()) -> Self::Future {
+        Box::pin(async move {
+            let ctx = req
+                .extensions()
+                .get::<Context>()
+                .cloned()
+                .unwrap_or_default();
+
+            // Validate: streaming handlers only accept streaming content-types
+            if let Some(err_response) = validate_streaming_protocol(&ctx) {
+                return err_response;
+            }
+
+            let connect_req = match ConnectRequest::<Req>::from_request(req, &()).await {
+                Ok(value) => value,
+                Err(err) => return err.into_response(),
+            };
+
+            let result = (self.0)(connect_req).await;
+
+            match result {
+                Ok(response) => response.into_response_with_context(&ctx),
+                Err(err) => {
+                    let use_proto = ctx.protocol.is_proto();
+                    err.into_streaming_response(use_proto)
+                }
+            }
+        })
+    }
+}
+
+// =============== Unified Handler: Client Streaming ===============
+// Handler for: ConnectRequest<Streaming<Req>> -> ConnectResponse<Resp>
+
+/// Handler implementation for client streaming using the unified ConnectHandlerWrapper.
+/// Input: stream of messages, Output: single message
+impl<F, Fut, Req, Resp> Handler<(ConnectRequest<Streaming<Req>>, Resp), ()>
+    for ConnectHandlerWrapper<F>
+where
+    F: Fn(ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
+    Req: Message + DeserializeOwned + Default + Send + 'static,
+    Resp: Message + serde::Serialize + Send + Clone + Sync + 'static,
+{
+    type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
+
+    fn call(self, req: Request, _state: ()) -> Self::Future {
+        Box::pin(async move {
+            let ctx = req
+                .extensions()
+                .get::<Context>()
+                .cloned()
+                .unwrap_or_default();
+
+            // Validate: streaming handlers only accept streaming content-types
+            if let Some(err_response) = validate_streaming_protocol(&ctx) {
+                return err_response;
+            }
+
+            let streaming_req = match ConnectRequest::<Streaming<Req>>::from_request(req, &()).await
+            {
+                Ok(value) => value,
+                Err(err) => return err.into_response(),
+            };
+
+            let result = (self.0)(streaming_req).await;
+
+            // Client streaming uses streaming framing for the response
+            match result {
+                Ok(response) => response.into_streaming_response_with_context(&ctx),
+                Err(err) => {
+                    let use_proto = ctx.protocol.is_proto();
+                    err.into_streaming_response(use_proto)
+                }
+            }
+        })
+    }
+}
+
+// =============== Unified Handler: Bidi Streaming ===============
+// Handler for: ConnectRequest<Streaming<Req>> -> ConnectResponse<StreamBody<St>>
+
+/// Handler implementation for bidirectional streaming using the unified ConnectHandlerWrapper.
+/// Input: stream of messages, Output: stream of messages
+/// Note: Requires HTTP/2 for full-duplex communication.
+impl<F, Fut, Req, Resp, St> Handler<(ConnectRequest<Streaming<Req>>, StreamBody<St>), ()>
+    for ConnectHandlerWrapper<F>
+where
+    F: Fn(ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
+    St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
+    Req: Message + DeserializeOwned + Default + Send + 'static,
+    Resp: Message + serde::Serialize + Send + Sync + 'static,
+{
+    type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
+
+    fn call(self, req: Request, _state: ()) -> Self::Future {
+        Box::pin(async move {
+            let ctx = req
+                .extensions()
+                .get::<Context>()
+                .cloned()
+                .unwrap_or_default();
+
+            // Validate: streaming handlers only accept streaming content-types
+            if let Some(err_response) = validate_streaming_protocol(&ctx) {
+                return err_response;
+            }
+
+            let streaming_req = match ConnectRequest::<Streaming<Req>>::from_request(req, &()).await
+            {
+                Ok(value) => value,
+                Err(err) => return err.into_response(),
+            };
+
+            let result = (self.0)(streaming_req).await;
+
+            match result {
+                Ok(response) => response.into_response_with_context(&ctx),
+                Err(err) => {
+                    let use_proto = ctx.protocol.is_proto();
+                    err.into_streaming_response(use_proto)
+                }
+            }
+        })
+    }
+}
+
+/// Creates a POST method router for any Connect RPC handler.
+///
+/// This unified function automatically detects the RPC type based on the handler signature:
+/// - `ConnectRequest<T>` → `ConnectResponse<U>` = Unary
+/// - `ConnectRequest<T>` → `ConnectResponse<StreamBody<S>>` = Server streaming
+/// - `ConnectRequest<Streaming<T>>` → `ConnectResponse<U>` = Client streaming
+/// - `ConnectRequest<Streaming<T>>` → `ConnectResponse<StreamBody<S>>` = Bidi streaming
+///
+/// # Example
+///
+/// ```ignore
+/// // Unary handler
+/// async fn unary(req: ConnectRequest<MyReq>) -> Result<ConnectResponse<MyResp>, ConnectError> { ... }
+///
+/// // Server streaming handler
+/// async fn server_stream(req: ConnectRequest<MyReq>) -> Result<ConnectResponse<StreamBody<impl Stream<...>>>, ConnectError> { ... }
+///
+/// // Client streaming handler
+/// async fn client_stream(req: ConnectRequest<Streaming<MyReq>>) -> Result<ConnectResponse<MyResp>, ConnectError> { ... }
+///
+/// // Bidi streaming handler
+/// async fn bidi_stream(req: ConnectRequest<Streaming<MyReq>>) -> Result<ConnectResponse<StreamBody<impl Stream<...>>>, ConnectError> { ... }
+///
+/// // All use the same post_connect function:
+/// Router::new()
+///     .route("/unary", post_connect(unary))
+///     .route("/server", post_connect(server_stream))
+///     .route("/client", post_connect(client_stream))
+///     .route("/bidi", post_connect(bidi_stream))
+/// ```
+pub fn post_connect<F, T, S>(f: F) -> MethodRouter<S>
 where
     S: Clone + Send + Sync + 'static,
     ConnectHandlerWrapper<F>: Handler<T, S>,
     T: 'static,
 {
     axum::routing::post(ConnectHandlerWrapper(f))
+}
+
+/// Creates a POST method router for unary RPC handlers.
+///
+/// This is an alias for `post_connect` for backwards compatibility.
+pub fn post_unary<F, T, S>(f: F) -> MethodRouter<S>
+where
+    S: Clone + Send + Sync + 'static,
+    ConnectHandlerWrapper<F>: Handler<T, S>,
+    T: 'static,
+{
+    post_connect(f)
 }
 
 /// Creates a GET method router for unary RPC handlers.

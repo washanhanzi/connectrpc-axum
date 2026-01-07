@@ -4,23 +4,25 @@
 //! - Client sends compressed frames with flag 0x01
 //! - Server decompresses using Connect-Content-Encoding: gzip
 //! - Server echoes back received messages to verify decompression worked
+//! - Uses the generated `EchoServiceBuilder` with declarative API
 //!
 //! Run with: cargo run --bin client-streaming-compression
 //! Test with Go client: go test -v -run TestClientStreamingCompression
 
 use connectrpc_axum::CompressionConfig;
-use connectrpc_axum::handler::post_client_stream;
 use connectrpc_axum::prelude::*;
-use connectrpc_axum_examples::{EchoRequest, EchoResponse};
+use connectrpc_axum_examples::{EchoRequest, EchoResponse, echoservice};
 use futures::StreamExt;
 use std::net::SocketAddr;
 
 /// Client streaming handler - collects messages and returns summary
+///
+/// Uses `ConnectRequest<Streaming<T>>` - the unified streaming input type.
 async fn echo_client_stream(
-    ConnectStreamingRequest { stream }: ConnectStreamingRequest<EchoRequest>,
+    ConnectRequest(streaming): ConnectRequest<Streaming<EchoRequest>>,
 ) -> Result<ConnectResponse<EchoResponse>, ConnectError> {
     let mut messages = Vec::new();
-    let mut stream = stream;
+    let mut stream = streaming.into_stream();
 
     while let Some(result) = stream.next().await {
         match result {
@@ -44,11 +46,10 @@ async fn echo_client_stream(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Build manual route for client streaming
-    let router = axum::Router::new().route(
-        "/echo.EchoService/EchoClientStream",
-        post_client_stream(echo_client_stream),
-    );
+    // Use generated builder - works for ALL streaming types including client streaming
+    let router = echoservice::EchoServiceBuilder::new()
+        .echo_client_stream(echo_client_stream)
+        .build();
 
     // Enable compression
     let app = connectrpc_axum::MakeServiceBuilder::new()

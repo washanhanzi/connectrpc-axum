@@ -13,9 +13,13 @@ pub mod tonic;
 pub use crate::tonic::{
     ContentTypeSwitch, TonicCompatible,
     // Handler types from tonic module
-    post_tonic_unary, post_tonic_stream, unimplemented_boxed_call, unimplemented_boxed_stream_call,
-    BoxedCall, BoxedStreamCall, BoxedStream, IntoFactory, IntoStreamFactory,
+    post_tonic_unary, post_tonic_stream, post_tonic_client_stream, post_tonic_bidi_stream,
+    unimplemented_boxed_call, unimplemented_boxed_stream_call,
+    unimplemented_boxed_client_stream_call, unimplemented_boxed_bidi_stream_call,
+    BoxedCall, BoxedStreamCall, BoxedClientStreamCall, BoxedBidiStreamCall, BoxedStream,
+    IntoFactory, IntoStreamFactory, IntoClientStreamFactory, IntoBidiStreamFactory,
     TonicCompatibleHandlerWrapper, TonicCompatibleStreamHandlerWrapper,
+    TonicCompatibleClientStreamHandlerWrapper, TonicCompatibleBidiStreamHandlerWrapper,
     // Parts types
     RequestContext, CapturedParts, FromRequestPartsLayer,
 };
@@ -29,7 +33,7 @@ pub use context::{
 // Re-export from pipeline module
 pub use pipeline::{RequestPipeline, ResponsePipeline};
 pub use handler::{
-    get_unary, post_bidi_stream, post_client_stream, post_server_stream, post_unary,
+    get_unary, post_bidi_stream, post_client_stream, post_connect, post_server_stream, post_unary,
     ConnectBidiStreamHandler, ConnectBidiStreamHandlerWrapper, ConnectClientStreamHandler,
     ConnectClientStreamHandlerWrapper, ConnectHandler, ConnectHandlerWrapper,
 };
@@ -58,14 +62,18 @@ pub mod prelude {
     pub use crate::error::{Code, ConnectError, ErrorDetail};
     #[cfg(feature = "tonic")]
     pub use crate::tonic::{
-        post_tonic_unary, post_tonic_stream, unimplemented_boxed_call, unimplemented_boxed_stream_call,
-        BoxedCall, BoxedStreamCall, BoxedStream, IntoFactory, IntoStreamFactory,
+        post_tonic_unary, post_tonic_stream, post_tonic_client_stream, post_tonic_bidi_stream,
+        unimplemented_boxed_call, unimplemented_boxed_stream_call,
+        unimplemented_boxed_client_stream_call, unimplemented_boxed_bidi_stream_call,
+        BoxedCall, BoxedStreamCall, BoxedClientStreamCall, BoxedBidiStreamCall, BoxedStream,
+        IntoFactory, IntoStreamFactory, IntoClientStreamFactory, IntoBidiStreamFactory,
         TonicCompatibleHandlerWrapper, TonicCompatibleStreamHandlerWrapper,
+        TonicCompatibleClientStreamHandlerWrapper, TonicCompatibleBidiStreamHandlerWrapper,
         ContentTypeSwitch, TonicCompatible,
         RequestContext, CapturedParts, FromRequestPartsLayer,
     };
     pub use crate::handler::{
-        get_unary, post_bidi_stream, post_client_stream, post_server_stream, post_unary,
+        get_unary, post_bidi_stream, post_client_stream, post_connect, post_server_stream, post_unary,
         ConnectBidiStreamHandler, ConnectBidiStreamHandlerWrapper, ConnectClientStreamHandler,
         ConnectClientStreamHandlerWrapper, ConnectHandler, ConnectHandlerWrapper,
         ConnectStreamHandlerWrapper,
@@ -73,6 +81,7 @@ pub mod prelude {
     pub use crate::layer::{ConnectLayer, ConnectService};
     pub use crate::message::{
         ConnectRequest, ConnectResponse, ConnectStreamResponse, ConnectStreamingRequest, StreamBody,
+        Streaming,
     };
     pub use crate::service_builder::MakeServiceBuilder;
 }

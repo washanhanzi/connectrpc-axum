@@ -18,8 +18,58 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::pin::Pin;
 
+/// Connect request wrapper for extracting messages from HTTP requests.
+///
+/// This type supports both single messages and streaming:
+/// - `ConnectRequest<T>` - extracts a single message (for unary/server-streaming handlers)
+/// - `ConnectRequest<Streaming<T>>` - extracts a message stream (for client-streaming/bidi handlers)
 #[derive(Debug, Clone)]
 pub struct ConnectRequest<T>(pub T);
+
+/// A stream of messages from the client.
+///
+/// Used with `ConnectRequest<Streaming<T>>` for client-streaming and bidirectional streaming RPCs.
+/// Similar to Tonic's `Streaming<T>` type.
+///
+/// # Example
+///
+/// ```ignore
+/// async fn client_stream_handler(
+///     req: ConnectRequest<Streaming<MyMessage>>,
+/// ) -> Result<ConnectResponse<MyResponse>, ConnectError> {
+///     let mut stream = req.0.into_stream();
+///     while let Some(msg) = stream.next().await {
+///         // process msg
+///     }
+///     Ok(ConnectResponse::new(MyResponse { ... }))
+/// }
+/// ```
+pub struct Streaming<T> {
+    inner: Pin<Box<dyn Stream<Item = Result<T, ConnectError>> + Send>>,
+}
+
+impl<T> Streaming<T> {
+    /// Create a new Streaming from a boxed stream.
+    pub fn new(stream: Pin<Box<dyn Stream<Item = Result<T, ConnectError>> + Send>>) -> Self {
+        Self { inner: stream }
+    }
+
+    /// Convert into the underlying stream.
+    pub fn into_stream(self) -> Pin<Box<dyn Stream<Item = Result<T, ConnectError>> + Send>> {
+        self.inner
+    }
+}
+
+impl<T> Stream for Streaming<T> {
+    type Item = Result<T, ConnectError>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
 
 impl<S, T> FromRequest<S> for ConnectRequest<T>
 where
@@ -243,6 +293,43 @@ where
         Ok(ConnectStreamingRequest {
             stream: Box::pin(stream),
         })
+    }
+}
+
+/// `FromRequest` implementation for streaming requests using the unified `ConnectRequest<Streaming<T>>` pattern.
+///
+/// This enables handlers to use the same `ConnectRequest` wrapper for both unary and streaming:
+/// - `ConnectRequest<T>` - single message (unary, server-streaming input)
+/// - `ConnectRequest<Streaming<T>>` - message stream (client-streaming, bidi input)
+impl<S, T> FromRequest<S> for ConnectRequest<Streaming<T>>
+where
+    S: Send + Sync,
+    T: Message + DeserializeOwned + Default + Send + 'static,
+{
+    type Rejection = ConnectError;
+
+    async fn from_request(req: Request, _state: &S) -> Result<Self, Self::Rejection> {
+        // Only POST is supported for streaming requests
+        if *req.method() != Method::POST {
+            return Err(ConnectError::new(
+                Code::Unimplemented,
+                "streaming requests only support POST method",
+            ));
+        }
+
+        // Get pipeline context from extensions (injected by ConnectLayer)
+        let ctx = req
+            .extensions()
+            .get::<Context>()
+            .cloned()
+            .ok_or_else(|| ConnectError::new(Code::Internal, "missing pipeline context"))?;
+
+        let use_proto = ctx.protocol.is_proto();
+        let request_encoding = ctx.compression.request_encoding;
+        let body = req.into_body();
+
+        let stream = create_frame_stream::<T>(body, use_proto, ctx.limits, request_encoding);
+        Ok(ConnectRequest(Streaming::new(Box::pin(stream))))
     }
 }
 

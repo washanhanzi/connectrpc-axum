@@ -3,22 +3,23 @@
 //! This example demonstrates Connect protocol client streaming:
 //! - Client sends a stream of messages
 //! - Server responds with a single message after consuming the stream
-//! - Uses the new ConnectStreamingRequest extractor
+//! - Uses the generated `EchoServiceBuilder` with declarative API
 //!
 //! Run with: cargo run --bin connect-client-stream
-//! Test with curl (sending framed messages)
+//! Test with Go client: go run ./cmd/client --protocol connect client-stream
 
 use connectrpc_axum::prelude::*;
-use connectrpc_axum::message::ConnectStreamingRequest;
-use connectrpc_axum_examples::{EchoRequest, EchoResponse};
+use connectrpc_axum_examples::{EchoRequest, EchoResponse, echoservice};
 use futures::StreamExt;
 use std::net::SocketAddr;
 
 /// Client streaming handler - collects all messages and responds once
+///
+/// Uses `ConnectRequest<Streaming<T>>` - the unified streaming input type.
 async fn echo_client_stream(
-    req: ConnectStreamingRequest<EchoRequest>,
+    ConnectRequest(streaming): ConnectRequest<Streaming<EchoRequest>>,
 ) -> Result<ConnectResponse<EchoResponse>, ConnectError> {
-    let mut stream = req.stream;
+    let mut stream = streaming.into_stream();
     let mut messages = Vec::new();
 
     // Consume all messages from the client stream
@@ -48,14 +49,10 @@ async fn echo_client_stream(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Manually wire up the client streaming endpoint
-    // (generated code would do this automatically once updated)
-    let router = axum::Router::new()
-        .route(
-            "/echo.EchoService/EchoClientStream",
-            post_client_stream(echo_client_stream),
-        )
-        .layer(ConnectLayer::new());
+    // Use generated builder - works for ALL streaming types including client streaming
+    let router = echoservice::EchoServiceBuilder::new()
+        .echo_client_stream(echo_client_stream)
+        .build_connect();
 
     let addr: SocketAddr = "0.0.0.0:3000".parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;

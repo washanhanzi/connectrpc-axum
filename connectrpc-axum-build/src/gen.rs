@@ -54,47 +54,31 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             })
             .collect();
 
-        // Generate Connect-only builder methods
-        // Skip client streaming and bidirectional streaming methods (not supported by Connect)
+        // Generate Connect-only builder methods for ALL streaming types
+        // Uses the unified post_connect function which auto-detects RPC type from handler signature
         let connect_builder_methods: Vec<_> = method_info
             .iter()
-            .filter(|(_method_name, _request_type, _response_type, _path, _assoc, _ss, is_cs)| {
-                // Only include methods that are NOT client streaming
-                // (unary and server-streaming are supported by Connect)
-                !is_cs
-            })
-            .map(|(method_name, _request_type, _response_type, path, _assoc, is_ss, _is_cs)| {
-                // Different signatures for streaming vs unary
-                if *is_ss {
-                    // Server streaming - use ConnectStreamHandlerWrapper
-                    quote! {
-                        /// Register a handler for this RPC method (server streaming)
-                        pub fn #method_name<F, T>(self, handler: F) -> #service_builder_name<S>
-                        where
-                            connectrpc_axum::handler::ConnectStreamHandlerWrapper<F>: axum::handler::Handler<T, S>,
-                            F: Clone + Send + Sync + 'static,
-                            T: 'static,
-                        {
-                            let method_router = connectrpc_axum::handler::post_server_stream(handler);
-                            #service_builder_name {
-                                router: self.router.route(#path, method_router),
-                            }
-                        }
-                    }
-                } else {
-                    // Unary - use ConnectHandlerWrapper
-                    quote! {
-                        /// Register a handler for this RPC method (unary)
-                        pub fn #method_name<F, T>(self, handler: F) -> #service_builder_name<S>
-                        where
-                            connectrpc_axum::handler::ConnectHandlerWrapper<F>: axum::handler::Handler<T, S>,
-                            F: Clone + Send + Sync + 'static,
-                            T: 'static,
-                        {
-                            let method_router = connectrpc_axum::handler::post_unary(handler);
-                            #service_builder_name {
-                                router: self.router.route(#path, method_router),
-                            }
+            .map(|(method_name, _request_type, _response_type, path, _assoc, is_ss, is_cs)| {
+                // Generate doc comment based on streaming type
+                let doc = match (*is_ss, *is_cs) {
+                    (false, false) => "Register a handler for this RPC method (unary)",
+                    (true, false) => "Register a handler for this RPC method (server streaming)",
+                    (false, true) => "Register a handler for this RPC method (client streaming)",
+                    (true, true) => "Register a handler for this RPC method (bidirectional streaming)",
+                };
+
+                // All methods use the unified ConnectHandlerWrapper + post_connect
+                quote! {
+                    #[doc = #doc]
+                    pub fn #method_name<F, T>(self, handler: F) -> #service_builder_name<S>
+                    where
+                        connectrpc_axum::handler::ConnectHandlerWrapper<F>: axum::handler::Handler<T, S>,
+                        F: Clone + Send + Sync + 'static,
+                        T: 'static,
+                    {
+                        let method_router = connectrpc_axum::handler::post_connect(handler);
+                        #service_builder_name {
+                            router: self.router.route(#path, method_router),
                         }
                     }
                 }
@@ -104,7 +88,8 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
         // Check if service has any client streaming or bidirectional streaming methods
         let has_client_streaming = method_info.iter().any(|(_, _, _, _, _, _, is_cs)| *is_cs);
 
-        // Only generate Tonic-compatible code if tonic is enabled and no client streaming
+        // Only generate Tonic-compatible code if tonic is enabled and no client/bidi streaming
+        // (code generation for client/bidi streaming not yet implemented)
         let (tonic_module_bits, tonic_out_of_module) =
             if self.include_tonic && !has_client_streaming {
                 // Tonic-related identifiers (only needed when tonic is enabled)
