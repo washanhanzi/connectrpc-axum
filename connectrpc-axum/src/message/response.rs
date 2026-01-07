@@ -44,11 +44,11 @@ where
     /// This is called by handler wrappers for unary responses.
     pub(crate) fn into_response_with_context(self, ctx: &Context) -> Response {
         // 1. Encode based on protocol
-        let body = if ctx.protocol.is_proto() {
-            encode_proto(&self.0)
+        let body: Bytes = if ctx.protocol.is_proto() {
+            Bytes::from(encode_proto(&self.0))
         } else {
             match encode_json(&self.0) {
-                Ok(bytes) => bytes,
+                Ok(bytes) => Bytes::from(bytes),
                 Err(_) => return internal_error_response(ctx.protocol.error_content_type()),
             }
         };
@@ -91,11 +91,11 @@ where
         let content_type = ctx.protocol.streaming_response_content_type();
 
         // 1. Encode the message
-        let payload = if ctx.protocol.is_proto() {
-            encode_proto(&self.0)
+        let payload: Bytes = if ctx.protocol.is_proto() {
+            Bytes::from(encode_proto(&self.0))
         } else {
             match encode_json(&self.0) {
-                Ok(bytes) => bytes,
+                Ok(bytes) => Bytes::from(bytes),
                 Err(_) => return internal_error_streaming_response(content_type),
             }
         };
@@ -199,11 +199,11 @@ where
             .map(move |result| match result {
                 Ok(msg) => {
                     // 1. Encode based on protocol
-                    let payload = if use_proto {
-                        encode_proto(&msg)
+                    let payload: Bytes = if use_proto {
+                        Bytes::from(encode_proto(&msg))
                     } else {
                         match encode_json(&msg) {
-                            Ok(bytes) => bytes,
+                            Ok(bytes) => Bytes::from(bytes),
                             Err(_) => {
                                 return (Bytes::from(internal_error_end_stream_frame()), true)
                             }

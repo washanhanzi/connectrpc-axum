@@ -25,10 +25,11 @@ pub use crate::tonic::{
 };
 // Re-export from context module
 pub use context::{
-    compress, compute_effective_timeout, decompress, detect_protocol, negotiate_response_encoding,
-    parse_timeout, Compression, CompressionConfig, CompressionContext, CompressionEncoding,
-    ConnectTimeout, Context, MessageLimits, RequestProtocol, ContextError, ServerConfig,
-    CONNECT_TIMEOUT_MS_HEADER, DEFAULT_MAX_MESSAGE_SIZE,
+    compress, compute_effective_timeout, decompress, default_codec, detect_protocol,
+    negotiate_response_encoding, parse_timeout, Codec, Compression, CompressionConfig,
+    CompressionContext, CompressionEncoding, ConnectTimeout, Context, GzipCodec, IdentityCodec,
+    MessageLimits, RequestProtocol, ContextError, ServerConfig, CONNECT_TIMEOUT_MS_HEADER,
+    DEFAULT_MAX_MESSAGE_SIZE,
 };
 // Re-export from pipeline module
 pub use pipeline::{RequestPipeline, ResponsePipeline};
@@ -52,11 +53,11 @@ pub use prelude::*;
 pub mod prelude {
     //! A prelude for `axum-connect` providing the most common types.
     pub use crate::context::{
-        compress, compute_effective_timeout, decompress, detect_protocol,
-        negotiate_response_encoding, parse_timeout, Compression, CompressionConfig,
-        CompressionContext, CompressionEncoding, ConnectTimeout, Context,
-        MessageLimits, RequestProtocol, ContextError, ServerConfig, CONNECT_TIMEOUT_MS_HEADER,
-        DEFAULT_MAX_MESSAGE_SIZE,
+        compress, compute_effective_timeout, decompress, default_codec, detect_protocol,
+        negotiate_response_encoding, parse_timeout, Codec, Compression, CompressionConfig,
+        CompressionContext, CompressionEncoding, ConnectTimeout, Context, GzipCodec,
+        IdentityCodec, MessageLimits, RequestProtocol, ContextError, ServerConfig,
+        CONNECT_TIMEOUT_MS_HEADER, DEFAULT_MAX_MESSAGE_SIZE,
     };
     pub use crate::pipeline::{RequestPipeline, ResponsePipeline};
     pub use crate::error::{Code, ConnectError, ErrorDetail};

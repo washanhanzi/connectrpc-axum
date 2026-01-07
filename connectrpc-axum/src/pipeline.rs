@@ -25,7 +25,7 @@
 //! - [`build_end_stream_frame`]: Build an EndStream frame for streaming responses
 
 use crate::context::{
-    CompressionEncoding, Context, RequestProtocol, compress, decompress, detect_protocol,
+    CompressionEncoding, Context, compress, decompress, detect_protocol,
     error::ContextError,
 };
 use crate::error::{Code, ConnectError};
@@ -61,11 +61,7 @@ pub fn decompress_bytes(
     bytes: Bytes,
     encoding: CompressionEncoding,
 ) -> Result<Bytes, ConnectError> {
-    if encoding == CompressionEncoding::Identity {
-        return Ok(bytes); // Zero-copy passthrough
-    }
-    decompress(&bytes, encoding)
-        .map(Bytes::from)
+    decompress(bytes, encoding)
         .map_err(|e| ConnectError::new(Code::InvalidArgument, format!("decompression failed: {e}")))
 }
 
@@ -190,15 +186,15 @@ where
 ///
 /// Returns an error if compression fails (matching connect-go behavior).
 pub fn compress_bytes(
-    data: Vec<u8>,
+    data: Bytes,
     encoding: CompressionEncoding,
     min_bytes: usize,
-) -> Result<(Vec<u8>, bool), ConnectError> {
+) -> Result<(Bytes, bool), ConnectError> {
     if encoding == CompressionEncoding::Identity || data.len() < min_bytes {
         return Ok((data, false));
     }
 
-    match compress(&data, encoding) {
+    match compress(data, encoding) {
         Ok(compressed) => Ok((compressed, true)),
         Err(e) => Err(ConnectError::new(Code::Internal, format!("compress: {e}"))),
     }
@@ -528,10 +524,10 @@ impl ResponsePipeline {
         T: Message + Serialize,
     {
         // 1. Encode based on protocol
-        let body = if ctx.protocol.is_proto() {
-            encode_proto(message)
+        let body: Bytes = if ctx.protocol.is_proto() {
+            Bytes::from(encode_proto(message))
         } else {
-            encode_json(message).map_err(|e| ContextError::new(ctx.protocol, e))?
+            Bytes::from(encode_json(message).map_err(|e| ContextError::new(ctx.protocol, e))?)
         };
 
         // 2. Compress if beneficial

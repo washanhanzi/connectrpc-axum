@@ -18,8 +18,8 @@ use std::time::Duration;
 
 // Re-export compression types and functions
 pub use compression::{
-    compress, decompress, negotiate_response_encoding, parse_compression, Compression,
-    CompressionConfig, CompressionEncoding,
+    compress, decompress, default_codec, negotiate_response_encoding, parse_compression,
+    Codec, Compression, CompressionConfig, CompressionEncoding, GzipCodec, IdentityCodec,
 };
 
 // Re-export config types

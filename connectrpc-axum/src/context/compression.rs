@@ -1,14 +1,25 @@
 //! Compression support for Connect unary RPCs.
 //!
 //! Uses standard HTTP headers: `Content-Encoding` / `Accept-Encoding`.
+//!
+//! ## Architecture
+//!
+//! Compression is handled via the [`Codec`] trait, which defines a standard interface
+//! for compression/decompression. Built-in codecs include:
+//! - [`IdentityCodec`]: No-op codec (zero-copy passthrough)
+//! - [`GzipCodec`]: Gzip compression via flate2
+//!
+//! For custom compression algorithms (zstd, brotli, etc.), implement the [`Codec`] trait.
 
 use crate::error::{Code, ConnectError};
 use axum::http::header::{ACCEPT_ENCODING, CONTENT_ENCODING};
 use axum::http::Request;
+use bytes::Bytes;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression as GzipLevel;
 use std::io::{self, Read, Write};
+use std::sync::Arc;
 
 /// Supported compression encodings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -34,6 +45,120 @@ impl CompressionEncoding {
             Self::Identity => "identity",
             Self::Gzip => "gzip",
         }
+    }
+}
+
+// ============================================================================
+// Codec Trait and Implementations
+// ============================================================================
+
+/// Trait for compression/decompression codecs.
+///
+/// Implement this trait to add custom compression algorithms.
+/// Built-in implementations: [`IdentityCodec`], [`GzipCodec`].
+///
+/// # Example
+///
+/// ```ignore
+/// use connectrpc_axum::compression::Codec;
+/// use bytes::Bytes;
+/// use std::io;
+///
+/// struct ZstdCodec { level: i32 }
+///
+/// impl Codec for ZstdCodec {
+///     fn name(&self) -> &'static str { "zstd" }
+///
+///     fn compress(&self, data: Bytes) -> io::Result<Bytes> {
+///         // ... zstd compression
+///     }
+///
+///     fn decompress(&self, data: Bytes) -> io::Result<Bytes> {
+///         // ... zstd decompression
+///     }
+/// }
+/// ```
+pub trait Codec: Send + Sync + 'static {
+    /// The encoding name for HTTP headers (e.g., "gzip", "zstd", "br").
+    fn name(&self) -> &'static str;
+
+    /// Compress data.
+    ///
+    /// Takes ownership of input to enable zero-copy for identity codec.
+    fn compress(&self, data: Bytes) -> io::Result<Bytes>;
+
+    /// Decompress data.
+    ///
+    /// Takes ownership of input to enable zero-copy for identity codec.
+    fn decompress(&self, data: Bytes) -> io::Result<Bytes>;
+}
+
+/// Identity codec - zero-copy passthrough (no compression).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IdentityCodec;
+
+impl Codec for IdentityCodec {
+    fn name(&self) -> &'static str {
+        "identity"
+    }
+
+    fn compress(&self, data: Bytes) -> io::Result<Bytes> {
+        Ok(data) // zero-copy
+    }
+
+    fn decompress(&self, data: Bytes) -> io::Result<Bytes> {
+        Ok(data) // zero-copy
+    }
+}
+
+/// Gzip codec using flate2.
+#[derive(Debug, Clone, Copy)]
+pub struct GzipCodec {
+    /// Compression level (0-9). Default is 6.
+    pub level: u32,
+}
+
+impl Default for GzipCodec {
+    fn default() -> Self {
+        Self { level: 6 }
+    }
+}
+
+impl GzipCodec {
+    /// Create a new GzipCodec with the specified compression level.
+    ///
+    /// Level ranges from 0 (no compression) to 9 (best compression).
+    pub fn with_level(level: u32) -> Self {
+        Self { level: level.min(9) }
+    }
+}
+
+impl Codec for GzipCodec {
+    fn name(&self) -> &'static str {
+        "gzip"
+    }
+
+    fn compress(&self, data: Bytes) -> io::Result<Bytes> {
+        let mut encoder = GzEncoder::new(Vec::new(), GzipLevel::new(self.level));
+        encoder.write_all(&data)?;
+        Ok(Bytes::from(encoder.finish()?))
+    }
+
+    fn decompress(&self, data: Bytes) -> io::Result<Bytes> {
+        let mut decoder = GzDecoder::new(&data[..]);
+        let mut decompressed = Vec::new();
+        decoder.read_to_end(&mut decompressed)?;
+        Ok(Bytes::from(decompressed))
+    }
+}
+
+/// Get the default codec for a compression encoding.
+///
+/// Returns a static reference to avoid allocation for built-in codecs.
+pub fn default_codec(encoding: CompressionEncoding) -> Arc<dyn Codec> {
+    match encoding {
+        CompressionEncoding::Identity => Arc::new(IdentityCodec),
+        CompressionEncoding::Gzip => Arc::new(GzipCodec::default()),
     }
 }
 
@@ -147,26 +272,25 @@ pub fn parse_compression<B>(
     })
 }
 
-pub fn compress(bytes: &[u8], encoding: CompressionEncoding) -> io::Result<Vec<u8>> {
+/// Compress bytes using the specified encoding.
+///
+/// Uses the default codec for the encoding. For custom codecs with
+/// specific configuration, use the [`Codec`] trait directly.
+pub fn compress(bytes: Bytes, encoding: CompressionEncoding) -> io::Result<Bytes> {
     match encoding {
-        CompressionEncoding::Identity => Ok(bytes.to_vec()),
-        CompressionEncoding::Gzip => {
-            let mut encoder = GzEncoder::new(Vec::new(), GzipLevel::default());
-            encoder.write_all(bytes)?;
-            encoder.finish()
-        }
+        CompressionEncoding::Identity => Ok(bytes), // zero-copy
+        CompressionEncoding::Gzip => GzipCodec::default().compress(bytes),
     }
 }
 
-pub fn decompress(bytes: &[u8], encoding: CompressionEncoding) -> io::Result<Vec<u8>> {
+/// Decompress bytes using the specified encoding.
+///
+/// Uses the default codec for the encoding. For custom codecs with
+/// specific configuration, use the [`Codec`] trait directly.
+pub fn decompress(bytes: Bytes, encoding: CompressionEncoding) -> io::Result<Bytes> {
     match encoding {
-        CompressionEncoding::Identity => Ok(bytes.to_vec()),
-        CompressionEncoding::Gzip => {
-            let mut decoder = GzDecoder::new(bytes);
-            let mut decompressed = Vec::new();
-            decoder.read_to_end(&mut decompressed)?;
-            Ok(decompressed)
-        }
+        CompressionEncoding::Identity => Ok(bytes), // zero-copy
+        CompressionEncoding::Gzip => GzipCodec::default().decompress(bytes),
     }
 }
 
@@ -241,32 +365,69 @@ mod tests {
 
     #[test]
     fn test_compress_decompress_gzip() {
-        let original = b"Hello, World! This is a test message.";
-        let compressed = compress(original, CompressionEncoding::Gzip).unwrap();
+        let original = Bytes::from_static(b"Hello, World! This is a test message.");
+        let compressed = compress(original.clone(), CompressionEncoding::Gzip).unwrap();
 
         // Compressed should be different from original
-        assert_ne!(compressed.as_slice(), original);
+        assert_ne!(compressed, original);
 
         // Decompress should give back original
-        let decompressed = decompress(&compressed, CompressionEncoding::Gzip).unwrap();
+        let decompressed = decompress(compressed, CompressionEncoding::Gzip).unwrap();
         assert_eq!(decompressed, original);
     }
 
     #[test]
     fn test_compress_decompress_identity() {
-        let original = b"Hello, World!";
-        let compressed = compress(original, CompressionEncoding::Identity).unwrap();
+        let original = Bytes::from_static(b"Hello, World!");
+        let compressed = compress(original.clone(), CompressionEncoding::Identity).unwrap();
         assert_eq!(compressed, original);
 
-        let decompressed = decompress(&compressed, CompressionEncoding::Identity).unwrap();
+        let decompressed = decompress(compressed, CompressionEncoding::Identity).unwrap();
         assert_eq!(decompressed, original);
     }
 
     #[test]
     fn test_decompress_invalid_gzip() {
-        let invalid = b"not valid gzip data";
+        let invalid = Bytes::from_static(b"not valid gzip data");
         let result = decompress(invalid, CompressionEncoding::Gzip);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_codec_trait_gzip() {
+        let codec = GzipCodec::default();
+        assert_eq!(codec.name(), "gzip");
+
+        let original = Bytes::from_static(b"Hello, World! This is a test message.");
+        let compressed = codec.compress(original.clone()).unwrap();
+        assert_ne!(compressed, original);
+
+        let decompressed = codec.decompress(compressed).unwrap();
+        assert_eq!(decompressed, original);
+    }
+
+    #[test]
+    fn test_codec_trait_identity() {
+        let codec = IdentityCodec;
+        assert_eq!(codec.name(), "identity");
+
+        let original = Bytes::from_static(b"Hello, World!");
+        let compressed = codec.compress(original.clone()).unwrap();
+        assert_eq!(compressed, original);
+
+        let decompressed = codec.decompress(compressed).unwrap();
+        assert_eq!(decompressed, original);
+    }
+
+    #[test]
+    fn test_gzip_codec_with_level() {
+        let codec = GzipCodec::with_level(9);
+        assert_eq!(codec.level, 9);
+
+        let original = Bytes::from_static(b"Hello, World! This is a test message.");
+        let compressed = codec.compress(original.clone()).unwrap();
+        let decompressed = codec.decompress(compressed).unwrap();
+        assert_eq!(decompressed, original);
     }
 
     #[test]
