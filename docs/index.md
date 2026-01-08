@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: "connectrpc-axum"
-  text: "Speak Every Protocol"
-  tagline: Connect, gRPC, gRPC-Web, and HTTP — all on the same port
+  text: "One Axum handler serves them ALL"
+  tagline: Connect, gRPC, gRPC-Web, and HTTP — all on one port
   actions:
     - theme: brand
       text: Get Started →
