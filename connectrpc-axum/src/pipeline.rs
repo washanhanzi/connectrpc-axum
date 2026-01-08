@@ -409,7 +409,7 @@ static WARNED_MISSING_LAYER: AtomicBool = AtomicBool::new(false);
 /// 1. Detect the protocol from request headers (Content-Type or query params)
 /// 2. Create a default context with no compression and default limits
 /// 3. Log a warning (once per process) about the missing layer
-fn get_context_or_default<B>(req: &Request<B>) -> Context {
+pub fn get_context_or_default<B>(req: &Request<B>) -> Context {
     if let Some(ctx) = req.extensions().get::<Context>() {
         return ctx.clone();
     }
@@ -488,6 +488,39 @@ impl RequestPipeline {
             decode_proto(&body).map_err(|e| ContextError::new(ctx.protocol, e))
         } else {
             decode_json(&body).map_err(|e| ContextError::new(ctx.protocol, e))
+        }
+    }
+
+    /// Decode from enveloped bytes (for streaming-style unary requests).
+    ///
+    /// Used when Content-Type is `application/connect+json` or `application/connect+proto`.
+    /// These use envelope framing even for unary requests.
+    ///
+    /// Composes: decompress → check_size → unwrap_envelope → decode
+    pub fn decode_enveloped_bytes<T>(ctx: &Context, body: Bytes) -> Result<T, ContextError>
+    where
+        T: Message + DeserializeOwned + Default,
+    {
+        // 1. Decompress if needed
+        let body = decompress_bytes(body, ctx.compression.request_encoding)
+            .map_err(|e| ContextError::new(ctx.protocol, e))?;
+
+        // 2. Check decompressed size
+        ctx.limits.check_size(body.len()).map_err(|msg| {
+            ContextError::new(
+                ctx.protocol,
+                ConnectError::new(Code::ResourceExhausted, msg),
+            )
+        })?;
+
+        // 3. Unwrap envelope
+        let payload = unwrap_envelope(&body).map_err(|e| ContextError::new(ctx.protocol, e))?;
+
+        // 4. Decode based on protocol
+        if ctx.protocol.is_proto() {
+            decode_proto(&payload).map_err(|e| ContextError::new(ctx.protocol, e))
+        } else {
+            decode_json(&payload).map_err(|e| ContextError::new(ctx.protocol, e))
         }
     }
 }

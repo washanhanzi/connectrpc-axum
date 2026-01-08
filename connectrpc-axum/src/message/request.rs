@@ -1,9 +1,9 @@
 //! Extractor for Connect requests.
-use crate::context::{CompressionEncoding, Context, MessageLimits, detect_protocol};
+use crate::context::{CompressionEncoding, MessageLimits};
 use crate::error::{Code, ConnectError};
 use crate::pipeline::{
-    RequestPipeline, decode_json, decode_proto, decompress_bytes, envelope_flags, read_body,
-    unwrap_envelope,
+    RequestPipeline, decode_json, decode_proto, decompress_bytes, envelope_flags,
+    get_context_or_default, read_body,
 };
 use axum::{
     body::Body,
@@ -17,42 +17,6 @@ use prost::Message;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-// Flag to ensure we only log the missing layer warning once per process
-static WARNED_MISSING_LAYER: AtomicBool = AtomicBool::new(false);
-
-/// Get context from request extensions, or create a default one if missing.
-///
-/// If the `ConnectLayer` middleware was not applied, this will:
-/// 1. Detect the protocol from request headers (Content-Type or query params)
-/// 2. Create a default context with no compression and default limits
-/// 3. Log a warning (once per process) about the missing layer
-///
-/// This provides a more user-friendly experience for developers who forget
-/// to add the `ConnectLayer` middleware, while still allowing requests to
-/// be processed with sensible defaults.
-fn get_context_or_default<B>(req: &Request<B>) -> Context {
-    if let Some(ctx) = req.extensions().get::<Context>() {
-        return ctx.clone();
-    }
-
-    // Log warning once per process to avoid log spam
-    if !WARNED_MISSING_LAYER.swap(true, Ordering::Relaxed) {
-        tracing::warn!(
-            target: "connectrpc_axum",
-            "ConnectLayer not found. \
-             Using default context with protocol detected from headers."
-        );
-    }
-
-    // Create default context by detecting protocol from headers
-    let protocol = detect_protocol(req);
-    Context {
-        protocol,
-        ..Default::default()
-    }
-}
 
 /// Connect request wrapper for extracting messages from HTTP requests.
 ///
@@ -168,11 +132,11 @@ where
 
 /// Handle streaming-style POST requests used for unary (application/connect+json, application/connect+proto).
 ///
-/// Flow: read_body → decompress → check_size → unwrap_envelope → decode
+/// Flow: read_body → decode_enveloped_bytes (decompress → check_size → unwrap_envelope → decode)
 /// Has envelope handling.
 async fn from_streaming_post_request<T>(
     req: Request,
-    ctx: Context,
+    ctx: crate::context::Context,
 ) -> Result<ConnectRequest<T>, ConnectError>
 where
     T: Message + DeserializeOwned + Default,
@@ -181,23 +145,10 @@ where
     let max_size = ctx.limits.max_message_size().unwrap_or(usize::MAX);
     let bytes = read_body(req.into_body(), max_size).await?;
 
-    // 2. Decompress if needed
-    let bytes = decompress_bytes(bytes, ctx.compression.request_encoding)?;
-
-    // 3. Check size after decompression
-    ctx.limits
-        .check_size(bytes.len())
-        .map_err(|e| ConnectError::new(Code::ResourceExhausted, e))?;
-
-    // 4. Unwrap envelope and decode
-    let payload = unwrap_envelope(&bytes)?;
-
-    // 5. Decode based on protocol encoding
-    if ctx.protocol.is_proto() {
-        decode_proto(&payload).map(ConnectRequest)
-    } else {
-        decode_json(&payload).map(ConnectRequest)
-    }
+    // 2. Decompress, check size, unwrap envelope, and decode
+    RequestPipeline::decode_enveloped_bytes(&ctx, bytes)
+        .map(ConnectRequest)
+        .map_err(|e| e.into_connect_error())
 }
 
 /// Query parameters for GET unary requests.
