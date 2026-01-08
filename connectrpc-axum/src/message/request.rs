@@ -254,10 +254,20 @@ where
     // Get message content (layer validation ensures this is present)
     let message_str = params.message.unwrap_or_default();
 
-    // 1. Decode base64 if specified
+    // 1. Decode base64 if specified (handle both padded and unpadded)
     let bytes = if params.base64.as_deref() == Some("1") {
-        use base64::{Engine as _, engine::general_purpose};
-        general_purpose::URL_SAFE
+        use base64::{
+            Engine as _,
+            alphabet,
+            engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
+        };
+        // URL-safe base64 decoder that accepts both padded and unpadded input
+        const URL_SAFE_INDIFFERENT: GeneralPurpose = GeneralPurpose::new(
+            &alphabet::URL_SAFE,
+            GeneralPurposeConfig::new()
+                .with_decode_padding_mode(DecodePaddingMode::Indifferent),
+        );
+        URL_SAFE_INDIFFERENT
             .decode(&message_str)
             .map_err(|err| ConnectError::new(Code::InvalidArgument, err.to_string()))?
     } else {

@@ -1,12 +1,16 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"testing"
+
+	"github.com/connectrpc-axum/examples/go-client/gen"
+	"google.golang.org/protobuf/proto"
 )
 
 // TestGetRequestValidation verifies GET unary request validation.
@@ -171,4 +175,152 @@ func containsAt(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// TestGetRequestBase64Encoding verifies GET unary requests with base64-encoded protobuf messages.
+//
+// Tests that the server correctly handles both padded and unpadded URL-safe base64 encoding,
+// matching the connect-go reference implementation behavior.
+func TestGetRequestBase64Encoding(t *testing.T) {
+	s := startServer(t, "get-request", "")
+	defer s.stop()
+
+	baseURL := serverURL + "/hello.HelloWorldService/SayHello"
+
+	// Create a protobuf message
+	msg := &gen.HelloRequest{Name: proto.String("Base64 Tester")}
+	msgBytes, err := proto.Marshal(msg)
+	if err != nil {
+		t.Fatalf("Failed to marshal protobuf: %v", err)
+	}
+
+	// Encode with padding (standard URL-safe base64)
+	paddedBase64 := base64.URLEncoding.EncodeToString(msgBytes)
+	// Encode without padding (raw URL-safe base64)
+	unpaddedBase64 := base64.RawURLEncoding.EncodeToString(msgBytes)
+
+	t.Logf("Original bytes length: %d", len(msgBytes))
+	t.Logf("Padded base64: %q (len=%d)", paddedBase64, len(paddedBase64))
+	t.Logf("Unpadded base64: %q (len=%d)", unpaddedBase64, len(unpaddedBase64))
+
+	tests := []struct {
+		name       string
+		base64Msg  string
+		wantStatus int
+	}{
+		{
+			name:       "padded_base64",
+			base64Msg:  paddedBase64,
+			wantStatus: 200,
+		},
+		{
+			name:       "unpadded_base64",
+			base64Msg:  unpaddedBase64,
+			wantStatus: 200,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			query := fmt.Sprintf("connect=v1&encoding=proto&base64=1&message=%s", url.QueryEscape(tc.base64Msg))
+			reqURL := baseURL + "?" + query
+			resp, err := http.Get(reqURL)
+			if err != nil {
+				t.Fatalf("HTTP request failed: %v", err)
+			}
+			defer resp.Body.Close()
+
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("Failed to read response body: %v", err)
+			}
+
+			if resp.StatusCode != tc.wantStatus {
+				t.Errorf("Status = %d, want %d. Body: %s", resp.StatusCode, tc.wantStatus, string(body))
+				return
+			}
+
+			// Parse as protobuf response
+			var helloResp gen.HelloResponse
+			if err := proto.Unmarshal(body, &helloResp); err != nil {
+				t.Errorf("Failed to unmarshal protobuf response: %v. Body (hex): %x", err, body)
+				return
+			}
+
+			t.Logf("Success: %s", helloResp.Message)
+			if helloResp.Message == "" {
+				t.Error("Empty response message")
+			}
+		})
+	}
+}
+
+// TestGetRequestBase64EdgeCases tests edge cases for base64 encoding where
+// the padding makes a difference (length % 4 != 0 for unpadded).
+func TestGetRequestBase64EdgeCases(t *testing.T) {
+	s := startServer(t, "get-request", "")
+	defer s.stop()
+
+	baseURL := serverURL + "/hello.HelloWorldService/SayHello"
+
+	// Test different name lengths to hit different padding scenarios
+	// Base64 output length depends on input: ceil(n * 4/3) rounded to multiple of 4 with padding
+	testNames := []string{
+		"A",      // Very short - different padding
+		"AB",     // 2 chars
+		"ABC",    // 3 chars - no padding needed
+		"ABCD",   // 4 chars
+		"Hello",  // 5 chars
+		"World!", // 6 chars
+	}
+
+	for _, name := range testNames {
+		msg := &gen.HelloRequest{Name: proto.String(name)}
+		msgBytes, err := proto.Marshal(msg)
+		if err != nil {
+			t.Fatalf("Failed to marshal protobuf: %v", err)
+		}
+
+		paddedBase64 := base64.URLEncoding.EncodeToString(msgBytes)
+		unpaddedBase64 := base64.RawURLEncoding.EncodeToString(msgBytes)
+
+		// Test both padded and unpadded for each name length
+		for _, tc := range []struct {
+			variant   string
+			base64Msg string
+		}{
+			{"padded", paddedBase64},
+			{"unpadded", unpaddedBase64},
+		} {
+			testName := fmt.Sprintf("name=%q_%s_len%%4=%d", name, tc.variant, len(tc.base64Msg)%4)
+			t.Run(testName, func(t *testing.T) {
+				query := fmt.Sprintf("connect=v1&encoding=proto&base64=1&message=%s", url.QueryEscape(tc.base64Msg))
+				reqURL := baseURL + "?" + query
+				resp, err := http.Get(reqURL)
+				if err != nil {
+					t.Fatalf("HTTP request failed: %v", err)
+				}
+				defer resp.Body.Close()
+
+				body, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatalf("Failed to read response body: %v", err)
+				}
+
+				if resp.StatusCode != 200 {
+					t.Errorf("Status = %d, want 200. Body: %s", resp.StatusCode, string(body))
+					return
+				}
+
+				var helloResp gen.HelloResponse
+				if err := proto.Unmarshal(body, &helloResp); err != nil {
+					t.Errorf("Failed to unmarshal protobuf response: %v", err)
+					return
+				}
+
+				t.Logf("name=%q, %s (len=%d, %%4=%d): %s",
+					name, tc.variant, len(tc.base64Msg), len(tc.base64Msg)%4, helloResp.Message)
+			})
+		}
+	}
 }
