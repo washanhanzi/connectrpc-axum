@@ -1,32 +1,8 @@
 # Development
 
-## Claude Code Slash Commands
+## Claude Code Skills
 
-This project provides [slash commands](https://docs.anthropic.com/en/docs/claude-code/slash-commands) for common development tasks:
-
-| Command | Description |
-|---------|-------------|
-| `/connectrpc-axum:submit-issue` | Report bugs, request features, or ask questions |
-| `/connectrpc-axum:test` | Run the full test suite |
-| `/connectrpc-axum:compare-repo` | Compare an external GitHub repository against connectrpc-axum |
-| `/connectrpc-axum:sync-arch-doc` | Sync architecture documentation with main branch changes |
-
-Usage:
-
-```bash
-claude /connectrpc-axum:submit-issue "Description of your issue or feature request"
-claude /connectrpc-axum:test
-claude /connectrpc-axum:compare-repo https://github.com/owner/repo
-claude /connectrpc-axum:sync-arch-doc
-```
-
-If not using Claude Code, see the corresponding skill files in [`.claude/skills/`](https://github.com/washanhanzi/connectrpc-axum/tree/main/.claude/skills/) for instructions.
-
-## Project Skills
-
-This project includes several [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills) to assist with development:
-
-### User-Invocable Skills
+This project includes [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills) to assist with development. See the skill files in [`.claude/skills/`](https://github.com/washanhanzi/connectrpc-axum/tree/main/.claude/skills/) for details.
 
 | Skill | Description |
 |-------|-------------|

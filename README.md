@@ -26,23 +26,15 @@ A Rust library that brings [ConnectRPC](https://connectrpc.com/) protocol suppor
 
 ## Development
 
-### Claude Code Slash Commands
+### Claude Code Skills
 
-This project provides [slash commands](https://docs.anthropic.com/en/docs/claude-code/slash-commands) for common development tasks:
+This project includes [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills) to assist with development. See the skill files in [`.claude/skills/`](.claude/skills/) for details.
 
-| Command | Description |
-|---------|-------------|
-| `/connectrpc-axum:submit-issue` | Report bugs, request features, or ask questions |
-| `/connectrpc-axum:test` | Run the full test suite |
-
-Usage:
-
-```bash
-claude /connectrpc-axum:submit-issue "Description of your issue or feature request"
-claude /connectrpc-axum:test
-```
-
-If not using Claude Code, see the corresponding skill files in [`.claude/skills/`](.claude/skills/) for instructions.
+| Skill | Description |
+|-------|-------------|
+| `submit-issue` | Report bugs, request features, or ask questions |
+| `test` | Run the full test suite |
+| `compare-repo` | Compare an external GitHub repository against connectrpc-axum |
 
 ### Architecture
 
