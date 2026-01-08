@@ -401,6 +401,8 @@ where
 
                 // Check if we have the complete frame
                 if buffer.len() < 5 + length {
+                    // Pre-allocate space for the frame to reduce reallocations
+                    buffer.reserve(5 + length - buffer.len());
                     break; // Need more data
                 }
 
