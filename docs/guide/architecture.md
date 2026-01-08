@@ -34,13 +34,13 @@ For mixed Connect/gRPC deployments, `ContentTypeSwitch` routes by `Content-Type`
 
 ### 2. Middleware Processing (ConnectLayer)
 
-Before your handler runs, `ConnectLayer` parses headers and builds a `Context`:
+Before your handler runs, `ConnectLayer` parses headers and builds a `ConnectContext`:
 
 - Parses `Content-Type` to determine encoding (JSON/Protobuf)
 - Parses `?encoding=` query param for GET requests
 - Validates `Connect-Protocol-Version` header when required
 - Extracts compression encoding from headers
-- Stores the `Context` in request extensions
+- Stores the `ConnectContext` in request extensions
 
 ### 3. Handler Execution
 
@@ -63,6 +63,7 @@ The `pipeline.rs` module provides the low-level functions used by extractors and
 - `decompress_bytes` - Decompress based on encoding
 - `decode_proto` / `decode_json` - Decode message from bytes
 - `unwrap_envelope` - Unwrap Connect streaming frame
+- `decode_enveloped_bytes` - Decode from enveloped bytes (for `application/connect+json` or `application/connect+proto`)
 
 **Response side:**
 - `encode_proto` / `encode_json` - Encode message to bytes
@@ -78,7 +79,7 @@ These are the types you interact with when building services:
 
 | Type | Purpose |
 |------|---------|
-| `Context` | Protocol, compression, timeout, limits - set by layer, read by handlers |
+| `ConnectContext` | Protocol, compression, timeout, limits - set by layer, read by handlers |
 | `RequestProtocol` | Enum identifying Connect variant (Unary/Stream × Json/Proto) |
 | `MessageLimits` | Max message size configuration (default 4MB) |
 | `Codec` | Trait for compression/decompression (implement for custom algorithms) |
