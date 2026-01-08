@@ -28,7 +28,7 @@ pub use context::{
     compress, compute_effective_timeout, decompress, default_codec, detect_protocol,
     negotiate_response_encoding, parse_timeout, Codec, Compression, CompressionConfig,
     CompressionContext, CompressionEncoding, ConnectTimeout, ConnectContext, GzipCodec, IdentityCodec,
-    MessageLimits, RequestProtocol, ContextError, ServerConfig, CONNECT_TIMEOUT_MS_HEADER,
+    MessageLimits, RequestProtocol, ContextError, CONNECT_TIMEOUT_MS_HEADER,
     DEFAULT_MAX_MESSAGE_SIZE,
 };
 // Re-export from pipeline module
@@ -56,7 +56,7 @@ pub mod prelude {
         compress, compute_effective_timeout, decompress, default_codec, detect_protocol,
         negotiate_response_encoding, parse_timeout, Codec, Compression, CompressionConfig,
         CompressionContext, CompressionEncoding, ConnectTimeout, ConnectContext, GzipCodec,
-        IdentityCodec, MessageLimits, RequestProtocol, ContextError, ServerConfig,
+        IdentityCodec, MessageLimits, RequestProtocol, ContextError,
         CONNECT_TIMEOUT_MS_HEADER, DEFAULT_MAX_MESSAGE_SIZE,
     };
     pub use crate::pipeline::{RequestPipeline, ResponsePipeline};

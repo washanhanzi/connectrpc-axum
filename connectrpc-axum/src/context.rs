@@ -22,8 +22,8 @@ pub use compression::{
     decompress, default_codec, negotiate_response_encoding, parse_compression,
 };
 
-// Re-export config types
-pub use config::ServerConfig;
+// Re-export config types (crate-internal)
+pub(crate) use config::ServerConfig;
 
 // Re-export error types
 pub use error::ContextError;
@@ -99,7 +99,7 @@ impl ConnectContext {
     /// Returns error only for malformed headers (e.g., unsupported compression).
     ///
     /// Call [`validate`] after building to check protocol requirements.
-    pub fn from_request<B>(req: &Request<B>, config: &ServerConfig) -> Result<Self, ContextError> {
+    pub(crate) fn from_request<B>(req: &Request<B>, config: &ServerConfig) -> Result<Self, ContextError> {
         // Detect protocol from Content-Type or query params
         let protocol = detect_protocol(req);
 
