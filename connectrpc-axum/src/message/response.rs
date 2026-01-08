@@ -1,5 +1,5 @@
 //! Response types for Connect.
-use crate::context::{CompressionEncoding, Context};
+use crate::context::{CompressionEncoding, ConnectContext};
 use crate::error::{
     internal_error_end_stream_frame, internal_error_response, internal_error_streaming_response,
     ConnectError,
@@ -42,7 +42,7 @@ where
 {
     /// Encode the response using pipeline context.
     /// This is called by handler wrappers for unary responses.
-    pub(crate) fn into_response_with_context(self, ctx: &Context) -> Response {
+    pub(crate) fn into_response_with_context(self, ctx: &ConnectContext) -> Response {
         // 1. Encode based on protocol
         let body: Bytes = if ctx.protocol.is_proto() {
             Bytes::from(encode_proto(&self.0))
@@ -87,7 +87,7 @@ where
     ///
     /// This is used for client streaming RPCs where the response is a single message
     /// but must be sent in streaming format with framing.
-    pub(crate) fn into_streaming_response_with_context(self, ctx: &Context) -> Response {
+    pub(crate) fn into_streaming_response_with_context(self, ctx: &ConnectContext) -> Response {
         let content_type = ctx.protocol.streaming_response_content_type();
 
         // 1. Encode the message
@@ -169,7 +169,7 @@ where
 {
     /// Encode the streaming response using pipeline context.
     /// This is called by handler wrappers for streaming responses with compression support.
-    pub(crate) fn into_response_with_context(self, ctx: &Context) -> Response {
+    pub(crate) fn into_response_with_context(self, ctx: &ConnectContext) -> Response {
         self.into_response_with_context_inner(
             ctx.protocol.is_proto(),
             ctx.protocol.streaming_response_content_type(),

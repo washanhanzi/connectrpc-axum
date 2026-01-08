@@ -3,7 +3,7 @@
 //! The [`ConnectLayer`] middleware detects the protocol variant from incoming requests,
 //! builds a [`Context`], and stores it in request extensions for use by pipelines.
 
-use crate::context::{CompressionConfig, Context, MessageLimits, ServerConfig};
+use crate::context::{CompressionConfig, ConnectContext, MessageLimits, ServerConfig};
 use crate::error::{Code, ConnectError};
 use axum::http::Request;
 use axum::response::Response;
@@ -161,7 +161,7 @@ where
 
     fn call(&mut self, mut req: Request<ReqBody>) -> Self::Future {
         // 1. Build request context from request headers
-        let request_ctx = match Context::from_request(&req, &self.config) {
+        let request_ctx = match ConnectContext::from_request(&req, &self.config) {
             Ok(ctx) => ctx,
             Err(err) => {
                 let response = err.into_response();

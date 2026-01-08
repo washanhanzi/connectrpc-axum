@@ -136,7 +136,7 @@ where
 /// Has envelope handling.
 async fn from_streaming_post_request<T>(
     req: Request,
-    ctx: crate::context::Context,
+    ctx: crate::context::ConnectContext,
 ) -> Result<ConnectRequest<T>, ConnectError>
 where
     T: Message + DeserializeOwned + Default,

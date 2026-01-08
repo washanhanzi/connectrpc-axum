@@ -27,7 +27,7 @@ pub use crate::tonic::{
 pub use context::{
     compress, compute_effective_timeout, decompress, default_codec, detect_protocol,
     negotiate_response_encoding, parse_timeout, Codec, Compression, CompressionConfig,
-    CompressionContext, CompressionEncoding, ConnectTimeout, Context, GzipCodec, IdentityCodec,
+    CompressionContext, CompressionEncoding, ConnectTimeout, ConnectContext, GzipCodec, IdentityCodec,
     MessageLimits, RequestProtocol, ContextError, ServerConfig, CONNECT_TIMEOUT_MS_HEADER,
     DEFAULT_MAX_MESSAGE_SIZE,
 };
@@ -55,7 +55,7 @@ pub mod prelude {
     pub use crate::context::{
         compress, compute_effective_timeout, decompress, default_codec, detect_protocol,
         negotiate_response_encoding, parse_timeout, Codec, Compression, CompressionConfig,
-        CompressionContext, CompressionEncoding, ConnectTimeout, Context, GzipCodec,
+        CompressionContext, CompressionEncoding, ConnectTimeout, ConnectContext, GzipCodec,
         IdentityCodec, MessageLimits, RequestProtocol, ContextError, ServerConfig,
         CONNECT_TIMEOUT_MS_HEADER, DEFAULT_MAX_MESSAGE_SIZE,
     };

@@ -25,7 +25,7 @@
 //! - [`build_end_stream_frame`]: Build an EndStream frame for streaming responses
 
 use crate::context::{
-    CompressionEncoding, Context, compress, decompress, detect_protocol,
+    CompressionEncoding, ConnectContext, compress, decompress, detect_protocol,
     error::ContextError,
 };
 use crate::error::{Code, ConnectError};
@@ -409,8 +409,8 @@ static WARNED_MISSING_LAYER: AtomicBool = AtomicBool::new(false);
 /// 1. Detect the protocol from request headers (Content-Type or query params)
 /// 2. Create a default context with no compression and default limits
 /// 3. Log a warning (once per process) about the missing layer
-pub fn get_context_or_default<B>(req: &Request<B>) -> Context {
-    if let Some(ctx) = req.extensions().get::<Context>() {
+pub fn get_context_or_default<B>(req: &Request<B>) -> ConnectContext {
+    if let Some(ctx) = req.extensions().get::<ConnectContext>() {
         return ctx.clone();
     }
 
@@ -427,7 +427,7 @@ pub fn get_context_or_default<B>(req: &Request<B>) -> Context {
 
     // Create default context by detecting protocol from headers
     let protocol = detect_protocol(req);
-    Context {
+    ConnectContext {
         protocol,
         ..Default::default()
     }
@@ -467,7 +467,7 @@ impl RequestPipeline {
     /// Decode from raw bytes (for use when body is already read).
     ///
     /// Composes: decompress → check_size → decode
-    pub fn decode_bytes<T>(ctx: &Context, body: Bytes) -> Result<T, ContextError>
+    pub fn decode_bytes<T>(ctx: &ConnectContext, body: Bytes) -> Result<T, ContextError>
     where
         T: Message + DeserializeOwned + Default,
     {
@@ -497,7 +497,7 @@ impl RequestPipeline {
     /// These use envelope framing even for unary requests.
     ///
     /// Composes: decompress → check_size → unwrap_envelope → decode
-    pub fn decode_enveloped_bytes<T>(ctx: &Context, body: Bytes) -> Result<T, ContextError>
+    pub fn decode_enveloped_bytes<T>(ctx: &ConnectContext, body: Bytes) -> Result<T, ContextError>
     where
         T: Message + DeserializeOwned + Default,
     {
@@ -550,7 +550,7 @@ impl ResponsePipeline {
 
     /// Encode with explicit context (when request not available).
     pub fn encode_with_context<T>(
-        ctx: &Context,
+        ctx: &ConnectContext,
         message: &T,
     ) -> Result<Response<Body>, ContextError>
     where

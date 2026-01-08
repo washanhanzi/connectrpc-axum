@@ -8,7 +8,8 @@ use std::{any::Any, future::Future, pin::Pin};
 
 use crate::{
     context::{
-        Context, RequestProtocol, validate_streaming_content_type, validate_unary_content_type,
+        ConnectContext, RequestProtocol, validate_streaming_content_type,
+        validate_unary_content_type,
     },
     error::ConnectError,
     message::{ConnectRequest, ConnectResponse, ConnectStreamingRequest, StreamBody, Streaming},
@@ -54,7 +55,7 @@ where
 ///
 /// Unary handlers only accept unary content-types (`application/json`, `application/proto`).
 /// Streaming content-types are rejected with `Code::Unknown`.
-fn validate_unary_protocol(ctx: &Context) -> Option<Response> {
+fn validate_unary_protocol(ctx: &ConnectContext) -> Option<Response> {
     validate_unary_content_type(ctx.protocol)
         .map(|err| err.into_response_with_protocol(ctx.protocol))
 }
@@ -64,7 +65,7 @@ fn validate_unary_protocol(ctx: &Context) -> Option<Response> {
 /// Streaming handlers only accept streaming content-types
 /// (`application/connect+json`, `application/connect+proto`).
 /// Unary content-types are rejected with `Code::Unknown`.
-fn validate_streaming_protocol(ctx: &Context) -> Option<Response> {
+fn validate_streaming_protocol(ctx: &ConnectContext) -> Option<Response> {
     validate_streaming_content_type(ctx.protocol).map(|err| {
         let use_proto = ctx.protocol.is_proto();
         err.into_streaming_response(use_proto)
@@ -122,7 +123,7 @@ where
             // Extract pipeline context from extensions (set by ConnectLayer)
             let ctx = req
                 .extensions()
-                .get::<Context>()
+                .get::<ConnectContext>()
                 .cloned()
                 .unwrap_or_default();
 
@@ -180,7 +181,7 @@ macro_rules! impl_handler_for_connect_handler_wrapper {
                     // Extract pipeline context from extensions (set by ConnectLayer)
                     let ctx = req
                         .extensions()
-                        .get::<Context>()
+                        .get::<ConnectContext>()
                         .cloned()
                         .unwrap_or_default();
 
@@ -253,7 +254,7 @@ where
         Box::pin(async move {
             let ctx = req
                 .extensions()
-                .get::<Context>()
+                .get::<ConnectContext>()
                 .cloned()
                 .unwrap_or_default();
 
@@ -299,7 +300,7 @@ where
         Box::pin(async move {
             let ctx = req
                 .extensions()
-                .get::<Context>()
+                .get::<ConnectContext>()
                 .cloned()
                 .unwrap_or_default();
 
@@ -349,7 +350,7 @@ where
         Box::pin(async move {
             let ctx = req
                 .extensions()
-                .get::<Context>()
+                .get::<ConnectContext>()
                 .cloned()
                 .unwrap_or_default();
 
@@ -479,7 +480,7 @@ where
             // Extract pipeline context from extensions (set by ConnectLayer)
             let ctx = req
                 .extensions()
-                .get::<Context>()
+                .get::<ConnectContext>()
                 .cloned()
                 .unwrap_or_default();
 
@@ -541,7 +542,7 @@ macro_rules! impl_handler_for_connect_stream_handler_wrapper {
                     // Extract pipeline context from extensions (set by ConnectLayer)
                     let ctx = req
                         .extensions()
-                        .get::<Context>()
+                        .get::<ConnectContext>()
                         .cloned()
                         .unwrap_or_default();
 
@@ -633,7 +634,7 @@ where
             // Extract pipeline context from extensions (set by ConnectLayer)
             let ctx = req
                 .extensions()
-                .get::<Context>()
+                .get::<ConnectContext>()
                 .cloned()
                 .unwrap_or_default();
 
@@ -709,7 +710,7 @@ where
             // Extract pipeline context from extensions (set by ConnectLayer)
             let ctx = req
                 .extensions()
-                .get::<Context>()
+                .get::<ConnectContext>()
                 .cloned()
                 .unwrap_or_default();
 

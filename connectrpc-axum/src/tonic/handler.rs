@@ -13,7 +13,7 @@ use futures::Stream;
 use std::{future::Future, pin::Pin};
 
 use crate::{
-    context::{Context, validate_streaming_content_type},
+    context::{ConnectContext, validate_streaming_content_type},
     error::ConnectError,
     handler::handle_extractor_rejection,
     message::{ConnectRequest, ConnectResponse, StreamBody, Streaming},
@@ -91,9 +91,7 @@ pub type BoxedClientStreamCall<Req, Resp> = Box<
             Option<RequestContext>,
             ConnectRequest<Streaming<Req>>,
         ) -> Pin<
-            Box<
-                dyn Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
-            >,
+            Box<dyn Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static>,
         > + Send
         + Sync,
 >;
@@ -247,7 +245,8 @@ where
 // =============== IntoBidiStreamFactory implementations ===============
 
 // no-extractor: (ConnectRequest<Streaming<Req>>,)
-impl<F, Fut, Req, Resp, St, S> IntoBidiStreamFactory<(ConnectRequest<Streaming<Req>>,), Req, Resp, S>
+impl<F, Fut, Req, Resp, St, S>
+    IntoBidiStreamFactory<(ConnectRequest<Streaming<Req>>,), Req, Resp, S>
     for TonicCompatibleBidiStreamHandlerWrapper<F>
 where
     F: Fn(ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
@@ -500,7 +499,7 @@ where
         Box::pin(async move {
             let ctx = req
                 .extensions()
-                .get::<Context>()
+                .get::<ConnectContext>()
                 .cloned()
                 .unwrap_or_default();
 
@@ -539,7 +538,7 @@ macro_rules! impl_handler_for_tonic_wrapper_with_extractors {
 
             fn call(self, req: Request, state: S) -> Self::Future {
                 Box::pin(async move {
-                    let ctx = req.extensions().get::<Context>().cloned().unwrap_or_default();
+                    let ctx = req.extensions().get::<ConnectContext>().cloned().unwrap_or_default();
                     let (mut parts, body) = req.into_parts();
 
                     // Extract each FromRequestParts
@@ -610,7 +609,7 @@ where
         Box::pin(async move {
             let ctx = req
                 .extensions()
-                .get::<Context>()
+                .get::<ConnectContext>()
                 .cloned()
                 .unwrap_or_default();
 
@@ -653,7 +652,7 @@ macro_rules! impl_handler_for_tonic_stream_wrapper_with_extractors {
 
             fn call(self, req: Request, state: S) -> Self::Future {
                 Box::pin(async move {
-                    let ctx = req.extensions().get::<Context>().cloned().unwrap_or_default();
+                    let ctx = req.extensions().get::<ConnectContext>().cloned().unwrap_or_default();
                     let (mut parts, body) = req.into_parts();
 
                     // Extract each FromRequestParts
@@ -691,7 +690,7 @@ all_extractor_tuples!(impl_handler_for_tonic_stream_wrapper_with_extractors);
 // =============== Client Streaming Handler Implementations ===============
 
 /// Validate protocol for streaming handlers. Returns error response if invalid.
-fn validate_streaming_protocol(ctx: &Context) -> Option<Response> {
+fn validate_streaming_protocol(ctx: &ConnectContext) -> Option<Response> {
     validate_streaming_content_type(ctx.protocol).map(|err| {
         let use_proto = ctx.protocol.is_proto();
         err.into_streaming_response(use_proto)
@@ -713,7 +712,7 @@ where
         Box::pin(async move {
             let ctx = req
                 .extensions()
-                .get::<Context>()
+                .get::<ConnectContext>()
                 .cloned()
                 .unwrap_or_default();
 
@@ -760,7 +759,7 @@ macro_rules! impl_handler_for_tonic_client_stream_wrapper_with_extractors {
 
             fn call(self, req: Request, state: S) -> Self::Future {
                 Box::pin(async move {
-                    let ctx = req.extensions().get::<Context>().cloned().unwrap_or_default();
+                    let ctx = req.extensions().get::<ConnectContext>().cloned().unwrap_or_default();
 
                     // Validate: streaming handlers only accept streaming content-types
                     if let Some(err_response) = validate_streaming_protocol(&ctx) {
@@ -829,7 +828,7 @@ where
         Box::pin(async move {
             let ctx = req
                 .extensions()
-                .get::<Context>()
+                .get::<ConnectContext>()
                 .cloned()
                 .unwrap_or_default();
 
@@ -877,7 +876,7 @@ macro_rules! impl_handler_for_tonic_bidi_stream_wrapper_with_extractors {
 
             fn call(self, req: Request, state: S) -> Self::Future {
                 Box::pin(async move {
-                    let ctx = req.extensions().get::<Context>().cloned().unwrap_or_default();
+                    let ctx = req.extensions().get::<ConnectContext>().cloned().unwrap_or_default();
 
                     // Validate: streaming handlers only accept streaming content-types
                     if let Some(err_response) = validate_streaming_protocol(&ctx) {

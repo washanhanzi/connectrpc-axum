@@ -18,8 +18,8 @@ use std::time::Duration;
 
 // Re-export compression types and functions
 pub use compression::{
-    compress, decompress, default_codec, negotiate_response_encoding, parse_compression,
-    Codec, Compression, CompressionConfig, CompressionEncoding, GzipCodec, IdentityCodec,
+    Codec, Compression, CompressionConfig, CompressionEncoding, GzipCodec, IdentityCodec, compress,
+    decompress, default_codec, negotiate_response_encoding, parse_compression,
 };
 
 // Re-export config types
@@ -29,19 +29,19 @@ pub use config::ServerConfig;
 pub use error::ContextError;
 
 // Re-export limit types
-pub use limit::{MessageLimits, DEFAULT_MAX_MESSAGE_SIZE};
+pub use limit::{DEFAULT_MAX_MESSAGE_SIZE, MessageLimits};
 
 // Re-export protocol types and functions
 pub use protocol::{
-    detect_protocol, validate_content_type, validate_get_query_params, validate_protocol_version,
-    validate_streaming_content_type, validate_unary_content_type, RequestProtocol,
-    CONNECT_PROTOCOL_VERSION, CONNECT_PROTOCOL_VERSION_HEADER,
+    CONNECT_PROTOCOL_VERSION, CONNECT_PROTOCOL_VERSION_HEADER, RequestProtocol, detect_protocol,
+    validate_content_type, validate_get_query_params, validate_protocol_version,
+    validate_streaming_content_type, validate_unary_content_type,
 };
 
 // Re-export timeout types and functions
 pub use timeout::{
-    compute_effective_timeout, parse_timeout, parse_timeout_ms, ConnectTimeout,
-    CONNECT_TIMEOUT_MS_HEADER,
+    CONNECT_TIMEOUT_MS_HEADER, ConnectTimeout, compute_effective_timeout, parse_timeout,
+    parse_timeout_ms,
 };
 
 // ============================================================================
@@ -53,7 +53,7 @@ pub use timeout::{
 /// Created by ConnectLayer, stored in request extensions.
 /// Used by pipelines to process messages.
 #[derive(Debug, Default, Clone)]
-pub struct Context {
+pub struct ConnectContext {
     /// Protocol variant (unary/streaming, json/proto)
     pub protocol: RequestProtocol,
     /// Compression settings
@@ -92,7 +92,7 @@ impl CompressionContext {
     }
 }
 
-impl Context {
+impl ConnectContext {
     /// Build request context from request headers and server config.
     ///
     /// Detects protocol, parses compression headers, and computes timeout.
