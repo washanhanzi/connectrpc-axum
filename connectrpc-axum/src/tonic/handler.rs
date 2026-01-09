@@ -13,9 +13,9 @@ use futures::Stream;
 use std::{future::Future, pin::Pin};
 
 use crate::{
-    context::{ConnectContext, validate_streaming_content_type},
+    context::ConnectContext,
     error::ConnectError,
-    handler::handle_extractor_rejection,
+    handler::{handle_extractor_rejection, validate_streaming_protocol},
     message::{ConnectRequest, ConnectResponse, StreamBody, Streaming},
 };
 use prost::Message;
@@ -688,14 +688,6 @@ macro_rules! impl_handler_for_tonic_stream_wrapper_with_extractors {
 all_extractor_tuples!(impl_handler_for_tonic_stream_wrapper_with_extractors);
 
 // =============== Client Streaming Handler Implementations ===============
-
-/// Validate protocol for streaming handlers. Returns error response if invalid.
-fn validate_streaming_protocol(ctx: &ConnectContext) -> Option<Response> {
-    validate_streaming_content_type(ctx.protocol).map(|err| {
-        let use_proto = ctx.protocol.is_proto();
-        err.into_streaming_response(use_proto)
-    })
-}
 
 // Implement Handler for TonicCompatibleClientStreamHandlerWrapper (no-state)
 impl<F, Fut, Req, Resp> Handler<(ConnectRequest<Streaming<Req>>,), ()>

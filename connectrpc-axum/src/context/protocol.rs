@@ -364,16 +364,18 @@ pub fn validate_get_query_params<B>(req: &Request<B>, require_connect: bool) -> 
     }
 
     // Validate compression if present (matching connect-go: negotiateCompression)
-    if let Some(comp) = compression {
-        if !comp.is_empty() && comp != "identity" && comp != "gzip" {
-            return Some(ConnectError::new(
-                Code::Unimplemented,
-                format!(
-                    "unknown compression \"{}\": supported encodings are gzip, identity",
-                    comp
-                ),
-            ));
-        }
+    if let Some(comp) = compression
+        && !comp.is_empty()
+        && comp != "identity"
+        && comp != "gzip"
+    {
+        return Some(ConnectError::new(
+            Code::Unimplemented,
+            format!(
+                "unknown compression \"{}\": supported encodings are gzip, identity",
+                comp
+            ),
+        ));
     }
 
     None

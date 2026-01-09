@@ -151,22 +151,22 @@ impl CompileBuilder {
         for entry in fs::read_dir(&out_dir)? {
             let entry = entry?;
             let path = entry.path();
-            if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-                if file_name.ends_with(".serde.rs") {
-                    // Get the base name (e.g., "hello" from "hello.serde.rs")
-                    let base_name = file_name.strip_suffix(".serde.rs").unwrap();
-                    let main_file = format!("{}/{}.rs", out_dir, base_name);
+            if let Some(file_name) = path.file_name().and_then(|n| n.to_str())
+                && file_name.ends_with(".serde.rs")
+            {
+                // Get the base name (e.g., "hello" from "hello.serde.rs")
+                let base_name = file_name.strip_suffix(".serde.rs").unwrap();
+                let main_file = format!("{}/{}.rs", out_dir, base_name);
 
-                    if std::path::Path::new(&main_file).exists() {
-                        // Append serde implementations to the main file
-                        let mut content = fs::read_to_string(&main_file)?;
-                        content.push_str("\n// --- pbjson serde implementations ---\n");
-                        content.push_str(&fs::read_to_string(&path)?);
-                        fs::write(&main_file, content)?;
+                if std::path::Path::new(&main_file).exists() {
+                    // Append serde implementations to the main file
+                    let mut content = fs::read_to_string(&main_file)?;
+                    content.push_str("\n// --- pbjson serde implementations ---\n");
+                    content.push_str(&fs::read_to_string(&path)?);
+                    fs::write(&main_file, content)?;
 
-                        // Remove the separate .serde.rs file
-                        let _ = fs::remove_file(&path);
-                    }
+                    // Remove the separate .serde.rs file
+                    let _ = fs::remove_file(&path);
                 }
             }
         }

@@ -65,7 +65,7 @@ fn validate_unary_protocol(ctx: &ConnectContext) -> Option<Response> {
 /// Streaming handlers only accept streaming content-types
 /// (`application/connect+json`, `application/connect+proto`).
 /// Unary content-types are rejected with `Code::Unknown`.
-fn validate_streaming_protocol(ctx: &ConnectContext) -> Option<Response> {
+pub(crate) fn validate_streaming_protocol(ctx: &ConnectContext) -> Option<Response> {
     validate_streaming_content_type(ctx.protocol).map(|err| {
         let use_proto = ctx.protocol.is_proto();
         err.into_streaming_response(use_proto)

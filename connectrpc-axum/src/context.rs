@@ -100,22 +100,17 @@ impl ConnectContext {
     ///
     /// Call [`validate`] after building to check protocol requirements.
     pub(crate) fn from_request<B>(req: &Request<B>, config: &ServerConfig) -> Result<Self, ContextError> {
-        // Detect protocol from Content-Type or query params
         let protocol = detect_protocol(req);
 
-        // Parse compression for all POST requests (unary and streaming)
+        // Parse compression for POST requests (unary and streaming)
         let compression = if *req.method() == Method::POST {
-            match parse_compression(req, protocol.is_streaming()) {
-                Ok(c) => {
-                    CompressionContext::new(c.request, c.response, config.compression.min_bytes)
-                }
-                Err(err) => return Err(ContextError::new(protocol, err)),
-            }
+            let c = parse_compression(req, protocol.is_streaming())
+                .map_err(|err| ContextError::new(protocol, err))?;
+            CompressionContext::new(c.request, c.response, config.compression.min_bytes)
         } else {
             CompressionContext::default()
         };
 
-        // Compute effective timeout
         let client_timeout = parse_timeout(req);
         let timeout = compute_effective_timeout(config.server_timeout, client_timeout);
 

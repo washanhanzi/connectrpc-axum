@@ -79,13 +79,13 @@ impl MessageLimits {
     /// Returns `Ok(())` if the size is within limits, or `Err(String)` if it exceeds.
     /// Use this variant when you need to customize the error handling.
     pub fn check_size(&self, size: usize) -> Result<(), String> {
-        if let Some(max) = self.max_message_size {
-            if size > max {
-                return Err(format!(
-                    "message size {} bytes exceeds maximum allowed size of {} bytes",
-                    size, max
-                ));
-            }
+        if let Some(max) = self.max_message_size
+            && size > max
+        {
+            return Err(format!(
+                "message size {} bytes exceeds maximum allowed size of {} bytes",
+                size, max
+            ));
         }
         Ok(())
     }
@@ -94,16 +94,16 @@ impl MessageLimits {
     ///
     /// Returns `Ok(())` if the size is within limits, or `Err(ConnectError)` if it exceeds.
     pub fn check_size_connect(&self, size: usize) -> Result<(), ConnectError> {
-        if let Some(max) = self.max_message_size {
-            if size > max {
-                return Err(ConnectError::new(
-                    Code::ResourceExhausted,
-                    format!(
-                        "message size {} bytes exceeds maximum allowed size of {} bytes",
-                        size, max
-                    ),
-                ));
-            }
+        if let Some(max) = self.max_message_size
+            && size > max
+        {
+            return Err(ConnectError::new(
+                Code::ResourceExhausted,
+                format!(
+                    "message size {} bytes exceeds maximum allowed size of {} bytes",
+                    size, max
+                ),
+            ));
         }
         Ok(())
     }

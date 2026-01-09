@@ -365,10 +365,10 @@ pub fn build_end_stream_frame(error: Option<&ConnectError>, trailers: Option<&He
     let mut metadata = trailers.map(Metadata::from_headers).unwrap_or_default();
 
     // Merge error metadata into trailers (like connect-go does)
-    if let Some(err) = error {
-        if let Some(meta) = err.meta() {
-            metadata.merge_headers(meta);
-        }
+    if let Some(err) = error
+        && let Some(meta) = err.meta()
+    {
+        metadata.merge_headers(meta);
     }
 
     let msg = EndStreamMessage { error, metadata };
@@ -451,44 +451,24 @@ impl RequestPipeline {
     where
         T: Message + DeserializeOwned + Default,
     {
-        // Get context (with fallback to default if layer is missing)
         let ctx = get_context_or_default(&req);
-
-        // 2. Read body bytes with size limit
         let max_size = ctx.limits.max_message_size().unwrap_or(usize::MAX);
         let body = read_body(req.into_body(), max_size)
             .await
             .map_err(|e| ContextError::new(ctx.protocol, e))?;
 
-        // 3. Decode using the body
         Self::decode_bytes(&ctx, body)
     }
 
     /// Decode from raw bytes (for use when body is already read).
     ///
-    /// Composes: decompress → check_size → decode
+    /// Composes: decompress -> check_size -> decode
     pub fn decode_bytes<T>(ctx: &ConnectContext, body: Bytes) -> Result<T, ContextError>
     where
         T: Message + DeserializeOwned + Default,
     {
-        // 1. Decompress if needed
-        let body = decompress_bytes(body, ctx.compression.request_encoding)
-            .map_err(|e| ContextError::new(ctx.protocol, e))?;
-
-        // 2. Check decompressed size
-        ctx.limits.check_size(body.len()).map_err(|msg| {
-            ContextError::new(
-                ctx.protocol,
-                ConnectError::new(Code::ResourceExhausted, msg),
-            )
-        })?;
-
-        // 3. Decode based on protocol
-        if ctx.protocol.is_proto() {
-            decode_proto(&body).map_err(|e| ContextError::new(ctx.protocol, e))
-        } else {
-            decode_json(&body).map_err(|e| ContextError::new(ctx.protocol, e))
-        }
+        let body = Self::decompress_and_check(ctx, body)?;
+        Self::decode_message(ctx, &body)
     }
 
     /// Decode from enveloped bytes (for streaming-style unary requests).
@@ -496,16 +476,21 @@ impl RequestPipeline {
     /// Used when Content-Type is `application/connect+json` or `application/connect+proto`.
     /// These use envelope framing even for unary requests.
     ///
-    /// Composes: decompress → check_size → unwrap_envelope → decode
+    /// Composes: decompress -> check_size -> unwrap_envelope -> decode
     pub fn decode_enveloped_bytes<T>(ctx: &ConnectContext, body: Bytes) -> Result<T, ContextError>
     where
         T: Message + DeserializeOwned + Default,
     {
-        // 1. Decompress if needed
+        let body = Self::decompress_and_check(ctx, body)?;
+        let payload = unwrap_envelope(&body).map_err(|e| ContextError::new(ctx.protocol, e))?;
+        Self::decode_message(ctx, &payload)
+    }
+
+    /// Helper: decompress and check size limits.
+    fn decompress_and_check(ctx: &ConnectContext, body: Bytes) -> Result<Bytes, ContextError> {
         let body = decompress_bytes(body, ctx.compression.request_encoding)
             .map_err(|e| ContextError::new(ctx.protocol, e))?;
 
-        // 2. Check decompressed size
         ctx.limits.check_size(body.len()).map_err(|msg| {
             ContextError::new(
                 ctx.protocol,
@@ -513,14 +498,18 @@ impl RequestPipeline {
             )
         })?;
 
-        // 3. Unwrap envelope
-        let payload = unwrap_envelope(&body).map_err(|e| ContextError::new(ctx.protocol, e))?;
+        Ok(body)
+    }
 
-        // 4. Decode based on protocol
+    /// Helper: decode message based on protocol.
+    fn decode_message<T>(ctx: &ConnectContext, bytes: &[u8]) -> Result<T, ContextError>
+    where
+        T: Message + DeserializeOwned + Default,
+    {
         if ctx.protocol.is_proto() {
-            decode_proto(&payload).map_err(|e| ContextError::new(ctx.protocol, e))
+            decode_proto(bytes).map_err(|e| ContextError::new(ctx.protocol, e))
         } else {
-            decode_json(&payload).map_err(|e| ContextError::new(ctx.protocol, e))
+            decode_json(bytes).map_err(|e| ContextError::new(ctx.protocol, e))
         }
     }
 }
