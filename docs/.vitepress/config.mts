@@ -44,7 +44,8 @@ export default defineConfig({
               text: 'MakeServiceBuilder',
               link: '/guide/configuration',
               items: [
-                { text: 'Timeout', link: '/guide/timeout' }
+                { text: 'Timeout', link: '/guide/timeout' },
+                { text: 'Compression', link: '/guide/compression' }
               ]
             },
             { text: 'HTTP Endpoints', link: '/guide/http-endpoints' },

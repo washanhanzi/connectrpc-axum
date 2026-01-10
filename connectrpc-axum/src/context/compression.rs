@@ -201,12 +201,47 @@ impl CompressionConfig {
 }
 
 /// Negotiate response encoding from Accept-Encoding header.
+///
+/// Follows connect-go's approach: first supported encoding wins (client preference order).
+/// Respects `q=0` which means "not acceptable" per RFC 7231.
 pub fn negotiate_response_encoding(accept: Option<&str>) -> CompressionEncoding {
-    // Simple: if gzip is in Accept-Encoding, use it
-    match accept {
-        Some(s) if s.contains("gzip") => CompressionEncoding::Gzip,
-        _ => CompressionEncoding::Identity,
+    let Some(accept) = accept else {
+        return CompressionEncoding::Identity;
+    };
+
+    for token in accept.split(',') {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+
+        // Parse "gzip;q=0.5" into encoding="gzip", q_value=Some("0.5")
+        let (encoding, q_value) = match token.split_once(';') {
+            Some((enc, params)) => {
+                let q = params
+                    .split(';')
+                    .find_map(|p| p.trim().strip_prefix("q="));
+                (enc.trim(), q)
+            }
+            None => (token, None),
+        };
+
+        // Skip if q=0 (explicitly disabled)
+        if let Some(q) = q_value {
+            if q.trim() == "0" || q.trim() == "0.0" || q.trim() == "0.00" || q.trim() == "0.000" {
+                continue;
+            }
+        }
+
+        // Return first supported encoding
+        match encoding {
+            "gzip" => return CompressionEncoding::Gzip,
+            "identity" => return CompressionEncoding::Identity,
+            _ => continue,
+        }
     }
+
+    CompressionEncoding::Identity
 }
 
 /// Header name for Connect streaming request compression.
@@ -360,6 +395,89 @@ mod tests {
         assert_eq!(
             negotiate_response_encoding(Some("")),
             CompressionEncoding::Identity
+        );
+    }
+
+    #[test]
+    fn test_negotiate_response_encoding_order() {
+        // First supported encoding wins (client preference order)
+        assert_eq!(
+            negotiate_response_encoding(Some("br, gzip")),
+            CompressionEncoding::Gzip
+        );
+        assert_eq!(
+            negotiate_response_encoding(Some("gzip, identity")),
+            CompressionEncoding::Gzip
+        );
+        assert_eq!(
+            negotiate_response_encoding(Some("identity, gzip")),
+            CompressionEncoding::Identity
+        );
+        assert_eq!(
+            negotiate_response_encoding(Some("br, zstd, gzip")),
+            CompressionEncoding::Gzip
+        );
+    }
+
+    #[test]
+    fn test_negotiate_response_encoding_q_values() {
+        // q=0 means "not acceptable" - should be skipped
+        assert_eq!(
+            negotiate_response_encoding(Some("gzip;q=0")),
+            CompressionEncoding::Identity
+        );
+        assert_eq!(
+            negotiate_response_encoding(Some("gzip;q=0, identity")),
+            CompressionEncoding::Identity
+        );
+        assert_eq!(
+            negotiate_response_encoding(Some("gzip;q=0.0")),
+            CompressionEncoding::Identity
+        );
+
+        // Non-zero q values should be accepted (we ignore the actual weight)
+        assert_eq!(
+            negotiate_response_encoding(Some("gzip;q=1")),
+            CompressionEncoding::Gzip
+        );
+        assert_eq!(
+            negotiate_response_encoding(Some("gzip;q=0.5")),
+            CompressionEncoding::Gzip
+        );
+        assert_eq!(
+            negotiate_response_encoding(Some("gzip;q=0.001")),
+            CompressionEncoding::Gzip
+        );
+
+        // Mixed: skip disabled, use first enabled
+        assert_eq!(
+            negotiate_response_encoding(Some("br;q=1, gzip;q=0, identity")),
+            CompressionEncoding::Identity
+        );
+        assert_eq!(
+            negotiate_response_encoding(Some("gzip;q=0, identity;q=0")),
+            CompressionEncoding::Identity
+        );
+    }
+
+    #[test]
+    fn test_negotiate_response_encoding_whitespace() {
+        // Handle various whitespace scenarios
+        assert_eq!(
+            negotiate_response_encoding(Some("  gzip  ")),
+            CompressionEncoding::Gzip
+        );
+        assert_eq!(
+            negotiate_response_encoding(Some("gzip ; q=0")),
+            CompressionEncoding::Identity
+        );
+        assert_eq!(
+            negotiate_response_encoding(Some("gzip;  q=0")),
+            CompressionEncoding::Identity
+        );
+        assert_eq!(
+            negotiate_response_encoding(Some("br ,  gzip")),
+            CompressionEncoding::Gzip
         );
     }
 

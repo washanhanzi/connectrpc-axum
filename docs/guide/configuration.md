@@ -70,6 +70,10 @@ MakeServiceBuilder::new()
 
 See [Timeout](./timeout.md) for detailed timeout configuration.
 
+### Compression
+
+See [Compression](./compression.md) for detailed compression configuration.
+
 ### Protocol Header Validation
 
 Require the `Connect-Protocol-Version` header for Connect protocol requests:
