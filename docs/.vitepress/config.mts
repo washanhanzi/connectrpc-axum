@@ -40,7 +40,13 @@ export default defineConfig({
           text: 'Guide',
           items: [
             { text: 'Getting Started', link: '/guide/' },
-            { text: 'MakeServiceBuilder', link: '/guide/configuration' },
+            {
+              text: 'MakeServiceBuilder',
+              link: '/guide/configuration',
+              items: [
+                { text: 'Timeout', link: '/guide/timeout' }
+              ]
+            },
             { text: 'HTTP Endpoints', link: '/guide/http-endpoints' },
             {
               text: 'Tonic gRPC',

@@ -68,23 +68,7 @@ MakeServiceBuilder::new()
 
 ### Timeout
 
-Set server-side maximum timeout. Works with client `Connect-Timeout-Ms` header:
-
-```rust
-use std::time::Duration;
-
-MakeServiceBuilder::new()
-    .add_router(router)
-    .timeout(Duration::from_secs(30))
-    .build()
-```
-
-| Scenario | Effective Timeout |
-|----------|-------------------|
-| Client sends `Connect-Timeout-Ms: 5000` | 5 seconds |
-| Server sets `.timeout(30s)` | 30 seconds |
-| Both (client: 5s, server: 30s) | 5 seconds (minimum) |
-| Both (client: 60s, server: 30s) | 30 seconds (minimum) |
+See [Timeout](./timeout.md) for detailed timeout configuration.
 
 ### Protocol Header Validation
 
