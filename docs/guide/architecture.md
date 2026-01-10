@@ -95,7 +95,7 @@ These are the types you interact with when building services:
 | `Streaming<T>` | Stream of messages from client (similar to Tonic's `Streaming<T>`) |
 | `ConnectStreamingRequest<T>` | Extractor for client streaming requests (legacy) |
 | `ConnectResponse<T>` | Response wrapper - encodes per detected protocol |
-| `ConnectStreamResponse<S>` | Server streaming response wrapper |
+| `ConnectResponse<StreamBody<S>>` | Server streaming response wrapper |
 | `StreamBody<S>` | Marker for streaming response bodies |
 
 ### Error Handling
@@ -277,8 +277,7 @@ The `default_codec()` function returns the appropriate codec for a `CompressionE
 | Module | Purpose |
 |--------|---------|
 | `request.rs` | `ConnectRequest<T>` and `Streaming<T>` extractors |
-| `response.rs` | `ConnectResponse<T>` encoding |
-| `stream.rs` | Streaming types and frame handling |
+| `response.rs` | `ConnectResponse<T>` and `ConnectResponse<StreamBody<S>>` encoding |
 
 ## Code Generation
 

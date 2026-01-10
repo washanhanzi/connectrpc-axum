@@ -81,8 +81,7 @@ pub mod prelude {
     };
     pub use crate::layer::{ConnectLayer, ConnectService};
     pub use crate::message::{
-        ConnectRequest, ConnectResponse, ConnectStreamResponse, ConnectStreamingRequest, StreamBody,
-        Streaming,
+        ConnectRequest, ConnectResponse, ConnectStreamingRequest, StreamBody, Streaming,
     };
     pub use crate::service_builder::MakeServiceBuilder;
 }
