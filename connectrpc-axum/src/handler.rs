@@ -12,7 +12,7 @@ use crate::{
         validate_unary_content_type,
     },
     error::ConnectError,
-    message::{ConnectRequest, ConnectResponse, ConnectStreamingRequest, StreamBody, Streaming},
+    message::{ConnectRequest, ConnectResponse, StreamBody, Streaming},
 };
 use futures::Stream;
 use prost::Message;
@@ -619,10 +619,10 @@ pub struct ConnectClientStreamHandlerWrapper<F>(pub F);
 /// Type alias for compatibility with generated code
 pub type ConnectClientStreamHandler<F> = ConnectClientStreamHandlerWrapper<F>;
 
-impl<F, Fut, Req, Resp> Handler<(ConnectStreamingRequest<Req>,), ()>
+impl<F, Fut, Req, Resp> Handler<(ConnectRequest<Streaming<Req>>,), ()>
     for ConnectClientStreamHandlerWrapper<F>
 where
-    F: Fn(ConnectStreamingRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
+    F: Fn(ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
     Req: Message + DeserializeOwned + Default + Send + 'static,
     Resp: Message + serde::Serialize + Send + Clone + Sync + 'static,
@@ -644,10 +644,11 @@ where
             }
 
             // Extract the streaming request
-            let streaming_req = match ConnectStreamingRequest::<Req>::from_request(req, &()).await {
-                Ok(value) => value,
-                Err(err) => return err.into_response(),
-            };
+            let streaming_req =
+                match ConnectRequest::<Streaming<Req>>::from_request(req, &()).await {
+                    Ok(value) => value,
+                    Err(err) => return err.into_response(),
+                };
 
             // Call the handler function
             // Note: Timeout is enforced by ConnectLayer, not here
@@ -672,7 +673,7 @@ where
 /// Client streaming: client sends a stream of messages, server responds with one message.
 pub fn post_client_stream<F, Req, Resp, Fut>(f: F) -> MethodRouter<()>
 where
-    F: Fn(ConnectStreamingRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
+    F: Fn(ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
     Req: Message + DeserializeOwned + Default + Send + 'static,
     Resp: Message + serde::Serialize + Send + Clone + Sync + 'static,
@@ -694,10 +695,10 @@ pub struct ConnectBidiStreamHandlerWrapper<F>(pub F);
 /// Type alias for compatibility with generated code
 pub type ConnectBidiStreamHandler<F> = ConnectBidiStreamHandlerWrapper<F>;
 
-impl<F, Fut, Req, Resp, St> Handler<(ConnectStreamingRequest<Req>,), ()>
+impl<F, Fut, Req, Resp, St> Handler<(ConnectRequest<Streaming<Req>>,), ()>
     for ConnectBidiStreamHandlerWrapper<F>
 where
-    F: Fn(ConnectStreamingRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
+    F: Fn(ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
     St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
     Req: Message + DeserializeOwned + Default + Send + 'static,
@@ -720,10 +721,11 @@ where
             }
 
             // Extract the streaming request
-            let streaming_req = match ConnectStreamingRequest::<Req>::from_request(req, &()).await {
-                Ok(value) => value,
-                Err(err) => return err.into_response(),
-            };
+            let streaming_req =
+                match ConnectRequest::<Streaming<Req>>::from_request(req, &()).await {
+                    Ok(value) => value,
+                    Err(err) => return err.into_response(),
+                };
 
             // Call the handler function
             // Note: Timeout is enforced by ConnectLayer, not here
@@ -748,7 +750,7 @@ where
 /// Requires HTTP/2 for full-duplex communication.
 pub fn post_bidi_stream<F, Req, Resp, St, Fut>(f: F) -> MethodRouter<()>
 where
-    F: Fn(ConnectStreamingRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
+    F: Fn(ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
     St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
     Req: Message + DeserializeOwned + Default + Send + 'static,

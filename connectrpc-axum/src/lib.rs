@@ -80,8 +80,6 @@ pub mod prelude {
         ConnectStreamHandlerWrapper,
     };
     pub use crate::layer::{ConnectLayer, ConnectService};
-    pub use crate::message::{
-        ConnectRequest, ConnectResponse, ConnectStreamingRequest, StreamBody, Streaming,
-    };
+    pub use crate::message::{ConnectRequest, ConnectResponse, StreamBody, Streaming};
     pub use crate::service_builder::MakeServiceBuilder;
 }

@@ -63,6 +63,11 @@ The `pipeline.rs` module provides the low-level functions used by extractors and
 - `decompress_bytes` - Decompress based on encoding
 - `decode_proto` / `decode_json` - Decode message from bytes
 - `unwrap_envelope` - Unwrap Connect streaming frame
+- `get_context_or_default` - Get `ConnectContext` from request extensions (with fallback)
+
+**`RequestPipeline` methods:**
+- `decode` - Decode from HTTP request (read body, decompress, decode)
+- `decode_bytes` - Decode from raw bytes (decompress, check size, decode)
 - `decode_enveloped_bytes` - Decode from enveloped bytes (for `application/connect+json` or `application/connect+proto`)
 
 **Response side:**
@@ -91,9 +96,8 @@ These are the types you interact with when building services:
 | Type | Purpose |
 |------|---------|
 | `ConnectRequest<T>` | Axum extractor - deserializes protobuf/JSON from request body |
-| `ConnectRequest<Streaming<T>>` | Extractor for client/bidi streaming requests (unified pattern) |
+| `ConnectRequest<Streaming<T>>` | Extractor for client/bidi streaming requests |
 | `Streaming<T>` | Stream of messages from client (similar to Tonic's `Streaming<T>`) |
-| `ConnectStreamingRequest<T>` | Extractor for client streaming requests (legacy) |
 | `ConnectResponse<T>` | Response wrapper - encodes per detected protocol |
 | `ConnectResponse<StreamBody<S>>` | Server streaming response wrapper |
 | `StreamBody<S>` | Marker for streaming response bodies |
@@ -272,12 +276,14 @@ Built-in implementations:
 
 The `default_codec()` function returns the appropriate codec for a `CompressionEncoding`. Custom codecs (zstd, brotli, etc.) can implement the `Codec` trait.
 
+Response compression negotiation follows RFC 7231: `negotiate_response_encoding()` parses `Accept-Encoding` headers respecting client preference order and `q=0` (not acceptable) values.
+
 ### message/ module
 
 | Module | Purpose |
 |--------|---------|
 | `request.rs` | `ConnectRequest<T>` and `Streaming<T>` extractors |
-| `response.rs` | `ConnectResponse<T>` and `ConnectResponse<StreamBody<S>>` encoding |
+| `response.rs` | `ConnectResponse<T>` and streaming response encoding |
 
 ## Code Generation
 

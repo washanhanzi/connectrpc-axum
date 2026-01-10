@@ -256,48 +256,6 @@ where
     Ok(ConnectRequest(message))
 }
 
-/// Streaming request extractor for client streaming and bidi streaming RPCs.
-///
-/// Parses multiple frames from the request body into a `Stream`.
-/// Each frame follows the Connect protocol format: `[flags:1][length:4][payload]`
-///
-/// This extractor is designed for generated code and does not support
-/// additional Axum extractors like `ConnectRequest` does.
-pub struct ConnectStreamingRequest<T> {
-    /// Stream of decoded messages from the request body.
-    pub stream: Pin<Box<dyn Stream<Item = Result<T, ConnectError>> + Send>>,
-}
-
-impl<S, T> FromRequest<S> for ConnectStreamingRequest<T>
-where
-    S: Send + Sync,
-    T: Message + DeserializeOwned + Default + Send + 'static,
-{
-    type Rejection = ConnectError;
-
-    async fn from_request(req: Request, _state: &S) -> Result<Self, Self::Rejection> {
-        // Only POST is supported for streaming requests
-        if *req.method() != Method::POST {
-            return Err(ConnectError::new(
-                Code::Unimplemented,
-                "streaming requests only support POST method",
-            ));
-        }
-
-        // Get context (with fallback to default if layer is missing)
-        let ctx = get_context_or_default(&req);
-
-        let use_proto = ctx.protocol.is_proto();
-        let request_encoding = ctx.compression.request_encoding;
-        let body = req.into_body();
-
-        let stream = create_frame_stream::<T>(body, use_proto, ctx.limits, request_encoding);
-        Ok(ConnectStreamingRequest {
-            stream: Box::pin(stream),
-        })
-    }
-}
-
 /// `FromRequest` implementation for streaming requests using the unified `ConnectRequest<Streaming<T>>` pattern.
 ///
 /// This enables handlers to use the same `ConnectRequest` wrapper for both unary and streaming:

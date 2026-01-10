@@ -3,5 +3,5 @@
 mod request;
 mod response;
 
-pub use request::{ConnectRequest, ConnectStreamingRequest, Streaming};
+pub use request::{ConnectRequest, Streaming};
 pub use response::{ConnectResponse, StreamBody};
