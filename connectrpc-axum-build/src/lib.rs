@@ -1,63 +1,59 @@
 use r#gen::AxumConnectServiceGenerator;
 use std::io::Result;
+use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
 /// Code generation module for service builders.
 pub mod r#gen;
 
 // ============================================================================
-// Type-state marker types for handler mode
+// Type-state marker types for phantom data
 // ============================================================================
 
-/// Marker: Default mode - can call either `no_handlers()` or `with_tonic()`.
-pub struct DefaultMode;
+/// Marker indicating a feature is enabled.
+pub struct Yes;
 
-/// Marker: No handlers mode - `with_tonic()` is not available.
-pub struct NoHandlersMode;
+/// Marker indicating a feature is disabled.
+pub struct No;
 
-/// Marker: Tonic server mode - `no_handlers()` is not available.
-#[cfg(feature = "tonic")]
-pub struct WithTonicMode;
+/// Trait to convert type markers to runtime booleans.
+pub trait BoolMarker {
+    /// The boolean value this marker represents.
+    const VALUE: bool;
+}
+
+impl BoolMarker for Yes {
+    const VALUE: bool = true;
+}
+
+impl BoolMarker for No {
+    const VALUE: bool = false;
+}
 
 /// Builder for compiling proto files with optional configuration.
 ///
-/// The type parameter `H` tracks the handler generation mode:
-/// - `DefaultMode`: Starting state, can call `no_handlers()` or `with_tonic()`
-/// - `NoHandlersMode`: After `no_handlers()`, cannot call `with_tonic()`
-/// - `WithTonicMode`: After `with_tonic()`, cannot call `no_handlers()`
-pub struct CompileBuilder<H = DefaultMode> {
+/// Type parameters control code generation:
+/// - `Connect`: Whether to generate Connect service handlers
+/// - `Tonic`: Whether to generate Tonic gRPC server stubs (requires `tonic` feature)
+/// - `TonicClient`: Whether to generate Tonic gRPC client stubs (requires `tonic-client` feature)
+///
+/// Default state is `CompileBuilder<Yes, No, No>` (Connect handlers only).
+pub struct CompileBuilder<Connect = Yes, Tonic = No, TonicClient = No> {
     includes_dir: PathBuf,
     prost_config: Option<Box<dyn FnOnce(&mut prost_build::Config)>>,
-    grpc: bool,
-    generate_handlers: bool,
     #[cfg(feature = "tonic")]
     tonic_config: Option<Box<dyn FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder>>,
     #[cfg(feature = "tonic-client")]
-    grpc_client: bool,
-    #[cfg(feature = "tonic-client")]
     tonic_client_config:
         Option<Box<dyn FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder>>,
-    _marker: std::marker::PhantomData<H>,
+    _marker: PhantomData<(Connect, Tonic, TonicClient)>,
 }
 
-impl CompileBuilder<DefaultMode> {
-    /// Create a new builder for the given includes directory.
-    pub fn new(includes_dir: impl AsRef<Path>) -> Self {
-        Self {
-            includes_dir: includes_dir.as_ref().to_path_buf(),
-            prost_config: None,
-            grpc: false,
-            generate_handlers: true,
-            #[cfg(feature = "tonic")]
-            tonic_config: None,
-            #[cfg(feature = "tonic-client")]
-            grpc_client: false,
-            #[cfg(feature = "tonic-client")]
-            tonic_client_config: None,
-            _marker: std::marker::PhantomData,
-        }
-    }
+// ============================================================================
+// Methods available when Connect = Yes
+// ============================================================================
 
+impl<T, TC> CompileBuilder<Yes, T, TC> {
     /// Skip generating Connect service handlers.
     ///
     /// When called, only message types and serde implementations are generated.
@@ -78,46 +74,47 @@ impl CompileBuilder<DefaultMode> {
     ///     Ok(())
     /// }
     /// ```
-    pub fn no_handlers(self) -> CompileBuilder<NoHandlersMode> {
+    pub fn no_handlers(self) -> CompileBuilder<No, No, TC> {
         CompileBuilder {
             includes_dir: self.includes_dir,
             prost_config: self.prost_config,
-            grpc: false,
-            generate_handlers: false,
             #[cfg(feature = "tonic")]
             tonic_config: None,
             #[cfg(feature = "tonic-client")]
-            grpc_client: self.grpc_client,
-            #[cfg(feature = "tonic-client")]
             tonic_client_config: self.tonic_client_config,
-            _marker: std::marker::PhantomData,
-        }
-    }
-
-    /// Enable generating tonic gRPC server stubs (second pass) + tonic-compatible helpers in first pass.
-    ///
-    /// **Note:** After calling this, `no_handlers()` is no longer available since
-    /// tonic server stubs depend on handler builders.
-    #[cfg(feature = "tonic")]
-    pub fn with_tonic(self) -> CompileBuilder<WithTonicMode> {
-        CompileBuilder {
-            includes_dir: self.includes_dir,
-            prost_config: self.prost_config,
-            grpc: true,
-            generate_handlers: true,
-            tonic_config: self.tonic_config,
-            #[cfg(feature = "tonic-client")]
-            grpc_client: self.grpc_client,
-            #[cfg(feature = "tonic-client")]
-            tonic_client_config: self.tonic_client_config,
-            _marker: std::marker::PhantomData,
+            _marker: PhantomData,
         }
     }
 }
 
-// Methods available only in WithTonicMode
+// ============================================================================
+// Methods available when Connect = Yes AND Tonic = No (enable tonic)
+// ============================================================================
+
 #[cfg(feature = "tonic")]
-impl CompileBuilder<WithTonicMode> {
+impl<TC> CompileBuilder<Yes, No, TC> {
+    /// Enable generating tonic gRPC server stubs (second pass) + tonic-compatible helpers in first pass.
+    ///
+    /// **Note:** After calling this, `no_handlers()` is no longer available since
+    /// tonic server stubs depend on handler builders.
+    pub fn with_tonic(self) -> CompileBuilder<Yes, Yes, TC> {
+        CompileBuilder {
+            includes_dir: self.includes_dir,
+            prost_config: self.prost_config,
+            tonic_config: self.tonic_config,
+            #[cfg(feature = "tonic-client")]
+            tonic_client_config: self.tonic_client_config,
+            _marker: PhantomData,
+        }
+    }
+}
+
+// ============================================================================
+// Methods available when Tonic = Yes (configure tonic)
+// ============================================================================
+
+#[cfg(feature = "tonic")]
+impl<C, TC> CompileBuilder<C, Yes, TC> {
     /// Customize the tonic prost builder with a configuration closure.
     ///
     /// The closure is applied before the required internal configuration. Internal settings
@@ -157,8 +154,11 @@ impl CompileBuilder<WithTonicMode> {
     }
 }
 
-// Methods available on all handler modes
-impl<H> CompileBuilder<H> {
+// ============================================================================
+// Methods available on all builder states
+// ============================================================================
+
+impl<C, T, TC> CompileBuilder<C, T, TC> {
     /// Customize the prost builder with a configuration closure.
     ///
     /// The closure receives a mutable reference to `prost_build::Config` and is applied
@@ -186,7 +186,14 @@ impl<H> CompileBuilder<H> {
         self.prost_config = Some(Box::new(f));
         self
     }
+}
 
+// ============================================================================
+// Methods available when TonicClient = No (enable tonic client)
+// ============================================================================
+
+#[cfg(feature = "tonic-client")]
+impl<C, T> CompileBuilder<C, T, No> {
     /// Enable generating tonic gRPC client stubs.
     ///
     /// Generates client code using `tonic-prost-build`. The client code is appended
@@ -204,12 +211,24 @@ impl<H> CompileBuilder<H> {
     ///     Ok(())
     /// }
     /// ```
-    #[cfg(feature = "tonic-client")]
-    pub fn with_tonic_client(mut self) -> Self {
-        self.grpc_client = true;
-        self
+    pub fn with_tonic_client(self) -> CompileBuilder<C, T, Yes> {
+        CompileBuilder {
+            includes_dir: self.includes_dir,
+            prost_config: self.prost_config,
+            #[cfg(feature = "tonic")]
+            tonic_config: self.tonic_config,
+            tonic_client_config: self.tonic_client_config,
+            _marker: PhantomData,
+        }
     }
+}
 
+// ============================================================================
+// Methods available when TonicClient = Yes (configure tonic client)
+// ============================================================================
+
+#[cfg(feature = "tonic-client")]
+impl<C, T> CompileBuilder<C, T, Yes> {
     /// Customize the tonic prost builder for client generation.
     ///
     /// The closure is applied before internal configuration. Internal settings
@@ -229,7 +248,6 @@ impl<H> CompileBuilder<H> {
     ///     Ok(())
     /// }
     /// ```
-    #[cfg(feature = "tonic-client")]
     pub fn with_tonic_client_config<F>(mut self, f: F) -> Self
     where
         F: FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder + 'static,
@@ -237,9 +255,19 @@ impl<H> CompileBuilder<H> {
         self.tonic_client_config = Some(Box::new(f));
         self
     }
+}
 
+// ============================================================================
+// Compile method - available on all states with BoolMarker bounds
+// ============================================================================
+
+impl<C: BoolMarker, T: BoolMarker, TC: BoolMarker> CompileBuilder<C, T, TC> {
     /// Execute code generation.
     pub fn compile(self) -> Result<()> {
+        let generate_handlers = C::VALUE;
+        let grpc = T::VALUE;
+        #[cfg(feature = "tonic-client")]
+        let grpc_client = TC::VALUE;
         let out_dir = std::env::var("OUT_DIR")
             .map_err(|e| std::io::Error::other(format!("OUT_DIR not set: {e}")))?;
         let descriptor_path = format!("{}/descriptor.bin", out_dir);
@@ -268,8 +296,8 @@ impl<H> CompileBuilder<H> {
         }
 
         // Generate connect (and tonic-compatible wrapper builders if requested) in first pass
-        if self.generate_handlers {
-            let service_generator = AxumConnectServiceGenerator::with_tonic(self.grpc);
+        if generate_handlers {
+            let service_generator = AxumConnectServiceGenerator::with_tonic(grpc);
             config.service_generator(Box::new(service_generator));
         }
         config.compile_protos(&proto_files, &[&self.includes_dir])?;
@@ -313,7 +341,7 @@ impl<H> CompileBuilder<H> {
 
         // -------- Pass 2: tonic server-only (feature + user requested) --------
         #[cfg(feature = "tonic")]
-        if self.grpc {
+        if grpc {
             use prost::Message; // for descriptor decode
 
             let out_dir = std::env::var("OUT_DIR").unwrap();
@@ -390,7 +418,7 @@ impl<H> CompileBuilder<H> {
 
         // -------- Pass 3: tonic client (feature + user requested) --------
         #[cfg(feature = "tonic-client")]
-        if self.grpc_client {
+        if grpc_client {
             use prost::Message; // for descriptor decode
 
             let out_dir = std::env::var("OUT_DIR").unwrap();
@@ -643,7 +671,15 @@ fn recurse_enum(
 /// }
 /// ```
 pub fn compile_dir(includes_dir: impl AsRef<Path>) -> CompileBuilder {
-    CompileBuilder::new(includes_dir)
+    CompileBuilder {
+        includes_dir: includes_dir.as_ref().to_path_buf(),
+        prost_config: None,
+        #[cfg(feature = "tonic")]
+        tonic_config: None,
+        #[cfg(feature = "tonic-client")]
+        tonic_client_config: None,
+        _marker: PhantomData,
+    }
 }
 
 fn discover_proto_files(dir: &Path, proto_files: &mut Vec<std::path::PathBuf>) -> Result<()> {
