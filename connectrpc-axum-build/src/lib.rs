@@ -5,62 +5,119 @@ use std::path::{Path, PathBuf};
 /// Code generation module for service builders.
 pub mod r#gen;
 
+// ============================================================================
+// Type-state marker types for handler mode
+// ============================================================================
+
+/// Marker: Default mode - can call either `no_handlers()` or `with_tonic()`.
+pub struct DefaultMode;
+
+/// Marker: No handlers mode - `with_tonic()` is not available.
+pub struct NoHandlersMode;
+
+/// Marker: Tonic server mode - `no_handlers()` is not available.
+#[cfg(feature = "tonic")]
+pub struct WithTonicMode;
+
 /// Builder for compiling proto files with optional configuration.
-pub struct CompileBuilder {
+///
+/// The type parameter `H` tracks the handler generation mode:
+/// - `DefaultMode`: Starting state, can call `no_handlers()` or `with_tonic()`
+/// - `NoHandlersMode`: After `no_handlers()`, cannot call `with_tonic()`
+/// - `WithTonicMode`: After `with_tonic()`, cannot call `no_handlers()`
+pub struct CompileBuilder<H = DefaultMode> {
     includes_dir: PathBuf,
     prost_config: Option<Box<dyn FnOnce(&mut prost_build::Config)>>,
     grpc: bool,
+    generate_handlers: bool,
     #[cfg(feature = "tonic")]
     tonic_config: Option<Box<dyn FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder>>,
+    #[cfg(feature = "tonic-client")]
+    grpc_client: bool,
+    #[cfg(feature = "tonic-client")]
+    tonic_client_config:
+        Option<Box<dyn FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder>>,
+    _marker: std::marker::PhantomData<H>,
 }
 
-impl CompileBuilder {
+impl CompileBuilder<DefaultMode> {
     /// Create a new builder for the given includes directory.
     pub fn new(includes_dir: impl AsRef<Path>) -> Self {
         Self {
             includes_dir: includes_dir.as_ref().to_path_buf(),
             prost_config: None,
             grpc: false,
+            generate_handlers: true,
             #[cfg(feature = "tonic")]
             tonic_config: None,
+            #[cfg(feature = "tonic-client")]
+            grpc_client: false,
+            #[cfg(feature = "tonic-client")]
+            tonic_client_config: None,
+            _marker: std::marker::PhantomData,
         }
     }
 
-    /// Customize the prost builder with a configuration closure.
+    /// Skip generating Connect service handlers.
     ///
-    /// The closure receives a mutable reference to `prost_build::Config` and is applied
-    /// before the required internal configuration. Internal settings (like file descriptor
-    /// set path) will be applied after and take precedence.
+    /// When called, only message types and serde implementations are generated.
+    /// No Connect service builders (e.g., `HelloWorldServiceBuilder`) will be created.
     ///
-    /// Use this to add type attributes, extern paths, or other prost configuration.
+    /// **Note:** After calling this, `with_tonic()` is no longer available since
+    /// tonic server stubs depend on handler builders.
+    ///
+    /// Use this when you only need protobuf message types with JSON serialization support.
     ///
     /// # Example
     ///
     /// ```rust,ignore
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     connectrpc_axum_build::compile_dir("proto")
-    ///         .with_prost_config(|config| {
-    ///             config.extern_path(".google.protobuf", "::pbjson_types");
-    ///         })
+    ///         .no_handlers()  // Only generate message types + serde
     ///         .compile()?;
     ///     Ok(())
     /// }
     /// ```
-    pub fn with_prost_config<F>(mut self, f: F) -> Self
-    where
-        F: FnOnce(&mut prost_build::Config) + 'static,
-    {
-        self.prost_config = Some(Box::new(f));
-        self
+    pub fn no_handlers(self) -> CompileBuilder<NoHandlersMode> {
+        CompileBuilder {
+            includes_dir: self.includes_dir,
+            prost_config: self.prost_config,
+            grpc: false,
+            generate_handlers: false,
+            #[cfg(feature = "tonic")]
+            tonic_config: None,
+            #[cfg(feature = "tonic-client")]
+            grpc_client: self.grpc_client,
+            #[cfg(feature = "tonic-client")]
+            tonic_client_config: self.tonic_client_config,
+            _marker: std::marker::PhantomData,
+        }
     }
 
     /// Enable generating tonic gRPC server stubs (second pass) + tonic-compatible helpers in first pass.
+    ///
+    /// **Note:** After calling this, `no_handlers()` is no longer available since
+    /// tonic server stubs depend on handler builders.
     #[cfg(feature = "tonic")]
-    pub fn with_tonic(mut self) -> Self {
-        self.grpc = true;
-        self
+    pub fn with_tonic(self) -> CompileBuilder<WithTonicMode> {
+        CompileBuilder {
+            includes_dir: self.includes_dir,
+            prost_config: self.prost_config,
+            grpc: true,
+            generate_handlers: true,
+            tonic_config: self.tonic_config,
+            #[cfg(feature = "tonic-client")]
+            grpc_client: self.grpc_client,
+            #[cfg(feature = "tonic-client")]
+            tonic_client_config: self.tonic_client_config,
+            _marker: std::marker::PhantomData,
+        }
     }
+}
 
+// Methods available only in WithTonicMode
+#[cfg(feature = "tonic")]
+impl CompileBuilder<WithTonicMode> {
     /// Customize the tonic prost builder with a configuration closure.
     ///
     /// The closure is applied before the required internal configuration. Internal settings
@@ -91,12 +148,93 @@ impl CompileBuilder {
     ///     Ok(())
     /// }
     /// ```
-    #[cfg(feature = "tonic")]
     pub fn with_tonic_prost_config<F>(mut self, f: F) -> Self
     where
         F: FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder + 'static,
     {
         self.tonic_config = Some(Box::new(f));
+        self
+    }
+}
+
+// Methods available on all handler modes
+impl<H> CompileBuilder<H> {
+    /// Customize the prost builder with a configuration closure.
+    ///
+    /// The closure receives a mutable reference to `prost_build::Config` and is applied
+    /// before the required internal configuration. Internal settings (like file descriptor
+    /// set path) will be applied after and take precedence.
+    ///
+    /// Use this to add type attributes, extern paths, or other prost configuration.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     connectrpc_axum_build::compile_dir("proto")
+    ///         .with_prost_config(|config| {
+    ///             config.extern_path(".google.protobuf", "::pbjson_types");
+    ///         })
+    ///         .compile()?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn with_prost_config<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(&mut prost_build::Config) + 'static,
+    {
+        self.prost_config = Some(Box::new(f));
+        self
+    }
+
+    /// Enable generating tonic gRPC client stubs.
+    ///
+    /// Generates client code using `tonic-prost-build`. The client code is appended
+    /// to the same `{package}.rs` file alongside message types and other generated code.
+    ///
+    /// This can be used independently of `with_tonic()` (server stubs).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     connectrpc_axum_build::compile_dir("proto")
+    ///         .with_tonic_client()  // Generate gRPC clients
+    ///         .compile()?;
+    ///     Ok(())
+    /// }
+    /// ```
+    #[cfg(feature = "tonic-client")]
+    pub fn with_tonic_client(mut self) -> Self {
+        self.grpc_client = true;
+        self
+    }
+
+    /// Customize the tonic prost builder for client generation.
+    ///
+    /// The closure is applied before internal configuration. Internal settings
+    /// (like `build_client(true)`, `build_server(false)`, `compile_well_known_types(false)`,
+    /// `out_dir`, and `extern_path` mappings) will be applied after and take precedence.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     connectrpc_axum_build::compile_dir("proto")
+    ///         .with_tonic_client()
+    ///         .with_tonic_client_config(|builder| {
+    ///             builder.build_transport(false)  // Disable transport feature
+    ///         })
+    ///         .compile()?;
+    ///     Ok(())
+    /// }
+    /// ```
+    #[cfg(feature = "tonic-client")]
+    pub fn with_tonic_client_config<F>(mut self, f: F) -> Self
+    where
+        F: FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder + 'static,
+    {
+        self.tonic_client_config = Some(Box::new(f));
         self
     }
 
@@ -106,7 +244,7 @@ impl CompileBuilder {
             .map_err(|e| std::io::Error::other(format!("OUT_DIR not set: {e}")))?;
         let descriptor_path = format!("{}/descriptor.bin", out_dir);
 
-        // -------- Pass 1: prost + connect (always) --------
+        // -------- Pass 1: prost + connect (conditionally) --------
         let mut config = prost_build::Config::default();
 
         // Apply user's prost configuration first
@@ -130,8 +268,10 @@ impl CompileBuilder {
         }
 
         // Generate connect (and tonic-compatible wrapper builders if requested) in first pass
-        let service_generator = AxumConnectServiceGenerator::with_tonic(self.grpc);
-        config.service_generator(Box::new(service_generator));
+        if self.generate_handlers {
+            let service_generator = AxumConnectServiceGenerator::with_tonic(self.grpc);
+            config.service_generator(Box::new(service_generator));
+        }
         config.compile_protos(&proto_files, &[&self.includes_dir])?;
 
         // -------- Pass 1.5: pbjson serde implementations (always) --------
@@ -175,7 +315,6 @@ impl CompileBuilder {
         #[cfg(feature = "tonic")]
         if self.grpc {
             use prost::Message; // for descriptor decode
-            use std::fs;
 
             let out_dir = std::env::var("OUT_DIR").unwrap();
             let descriptor_path = format!("{}/descriptor.bin", out_dir);
@@ -225,19 +364,18 @@ impl CompileBuilder {
                     let filename = tonic_file.file_name().unwrap().to_str().unwrap();
                     let first_pass_file = format!("{}/{}", out_dir, filename);
 
+                    // Skip if no matching first-pass file (warn instead of error)
+                    if !std::path::Path::new(&first_pass_file).exists() {
+                        println!(
+                            "cargo:warning=Skipping tonic server file '{}': no matching first-pass file. \
+                             This may indicate mismatched package declarations between prost-build and tonic-build.",
+                            filename
+                        );
+                        continue;
+                    }
+
                     // Append tonic server code to first-pass file
-                    let mut content = fs::read_to_string(&first_pass_file).map_err(|e| {
-                        std::io::Error::new(
-                            e.kind(),
-                            format!(
-                                "First-pass file '{}' not found. This typically means \
-                                 prost-build and tonic-build generated different filenames \
-                                 for the same proto package. Check that your proto files \
-                                 have consistent package declarations. Original error: {}",
-                                first_pass_file, e
-                            ),
-                        )
-                    })?;
+                    let mut content = fs::read_to_string(&first_pass_file)?;
                     content.push_str(
                         "\n// --- Tonic gRPC server stubs (extern_path reused messages) ---\n",
                     );
@@ -250,20 +388,95 @@ impl CompileBuilder {
             let _ = fs::remove_dir_all(&temp_out_dir);
         }
 
+        // -------- Pass 3: tonic client (feature + user requested) --------
+        #[cfg(feature = "tonic-client")]
+        if self.grpc_client {
+            use prost::Message; // for descriptor decode
+
+            let out_dir = std::env::var("OUT_DIR").unwrap();
+            let descriptor_path = format!("{}/descriptor.bin", out_dir);
+            let bytes = fs::read(&descriptor_path)
+                .map_err(|e| std::io::Error::other(format!("read descriptor: {e}")))?;
+            let fds = prost_types::FileDescriptorSet::decode(bytes.as_slice())
+                .map_err(|e| std::io::Error::other(format!("decode descriptor: {e}")))?;
+
+            let type_refs = collect_type_refs(&fds);
+
+            // Generate tonic client stubs referencing existing types
+            let temp_out_dir = format!("{}/tonic_client", out_dir);
+            fs::create_dir_all(&temp_out_dir)?;
+            let mut builder = tonic_prost_build::configure();
+
+            // Apply user's tonic client configuration first
+            if let Some(config_fn) = self.tonic_client_config {
+                builder = config_fn(builder);
+            }
+
+            // Apply internal config (takes precedence)
+            builder = builder
+                .build_client(true)
+                .build_server(false)
+                .compile_well_known_types(false)
+                .out_dir(&temp_out_dir);
+
+            // Add extern_path mappings for generated types
+            for tr in &type_refs {
+                builder = builder.extern_path(&tr.full, &tr.rust);
+            }
+            let proto_paths: Vec<&str> = proto_files.iter().map(|p| p.to_str().unwrap()).collect();
+            builder.compile_protos(
+                &proto_paths,
+                &[self.includes_dir.as_path().to_str().unwrap()],
+            )?;
+
+            // Append client code to first-pass files
+            for entry in fs::read_dir(&temp_out_dir)? {
+                let entry = entry?;
+                let tonic_file = entry.path();
+
+                // Only process .rs files
+                if tonic_file.extension().and_then(|s| s.to_str()) == Some("rs") {
+                    let filename = tonic_file.file_name().unwrap().to_str().unwrap();
+                    let first_pass_file = format!("{}/{}", out_dir, filename);
+
+                    // Skip if no matching first-pass file (warn instead of error)
+                    if !std::path::Path::new(&first_pass_file).exists() {
+                        println!(
+                            "cargo:warning=Skipping tonic client file '{}': no matching first-pass file. \
+                             This may indicate mismatched package declarations between prost-build and tonic-build.",
+                            filename
+                        );
+                        continue;
+                    }
+
+                    // Append tonic client code to first-pass file
+                    let mut content = fs::read_to_string(&first_pass_file)?;
+                    content.push_str(
+                        "\n// --- Tonic gRPC client stubs (extern_path reused messages) ---\n",
+                    );
+                    content.push_str(&fs::read_to_string(&tonic_file)?);
+                    fs::write(&first_pass_file, content)?;
+                }
+            }
+
+            // Clean up temporary tonic client artifacts
+            let _ = fs::remove_dir_all(&temp_out_dir);
+        }
+
         // Clean up descriptor file after all passes complete
         let _ = std::fs::remove_file(&descriptor_path);
 
         Ok(())
     }
 }
-#[cfg(feature = "tonic")]
+#[cfg(any(feature = "tonic", feature = "tonic-client"))]
 #[derive(Debug)]
 struct TypeRef {
     full: String,
     rust: String,
 }
 
-#[cfg(feature = "tonic")]
+#[cfg(any(feature = "tonic", feature = "tonic-client"))]
 fn collect_type_refs(fds: &prost_types::FileDescriptorSet) -> Vec<TypeRef> {
     let mut out = Vec::new();
     for file in &fds.file {
@@ -279,7 +492,7 @@ fn collect_type_refs(fds: &prost_types::FileDescriptorSet) -> Vec<TypeRef> {
     out
 }
 
-#[cfg(feature = "tonic")]
+#[cfg(any(feature = "tonic", feature = "tonic-client"))]
 fn recurse_message(
     pkg: &str,
     msg: &prost_types::DescriptorProto,
@@ -340,7 +553,7 @@ fn recurse_message(
     }
 }
 
-#[cfg(feature = "tonic")]
+#[cfg(any(feature = "tonic", feature = "tonic-client"))]
 fn recurse_enum(
     pkg: &str,
     en: &prost_types::EnumDescriptorProto,

@@ -24,3 +24,4 @@ tonic-prost-build = { workspace = true, optional = true }
 [features]
 default = []
 tonic = ["dep:tonic-prost-build"]
+tonic-client = ["dep:tonic-prost-build"]
