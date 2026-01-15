@@ -135,33 +135,16 @@ Two functions create method routers from handlers:
 
 ### How Handler Wrappers Work
 
-`ConnectHandlerWrapper<F>` is a newtype that wraps a user function `F`. It has multiple `impl Handler<T, S>` blocks, each with different `where` bounds on `F`. The compiler selects the appropriate impl based on the handler signature:
+`ConnectHandlerWrapper<F>` is a newtype that wraps a user function `F`. It has multiple `impl Handler<T, S>` blocks, each with different `where` bounds on `F`. The compiler selects the appropriate impl based on the handler signature.
 
-**Unary handlers:**
-```rust
-// Basic: (ConnectRequest<Req>) -> ConnectResponse<Resp>
-// With extractors: (State<T>, ConnectRequest<Req>) -> ConnectResponse<Resp>
-```
+| Pattern | Request Type | Response Type |
+|---------|--------------|---------------|
+| Unary | `ConnectRequest<Req>` | `ConnectResponse<Resp>` |
+| Server streaming | `ConnectRequest<Req>` | `ConnectResponse<StreamBody<St>>` |
+| Client streaming | `ConnectRequest<Streaming<Req>>` | `ConnectResponse<Resp>` |
+| Bidi streaming | `ConnectRequest<Streaming<Req>>` | `ConnectResponse<StreamBody<St>>` |
 
-**Server streaming handlers:**
-```rust
-// Basic: (ConnectRequest<Req>) -> ConnectResponse<StreamBody<St>>
-// With extractors: (State<T>, ConnectRequest<Req>) -> ConnectResponse<StreamBody<St>>
-```
-
-**Client streaming handlers:**
-```rust
-// Basic: (ConnectRequest<Streaming<Req>>) -> ConnectResponse<Resp>
-// With extractors: (State<T>, ConnectRequest<Streaming<Req>>) -> ConnectResponse<Resp>
-```
-
-**Bidi streaming handlers:**
-```rust
-// Basic: (ConnectRequest<Streaming<Req>>) -> ConnectResponse<StreamBody<St>>
-// With extractors: (State<T>, ConnectRequest<Streaming<Req>>) -> ConnectResponse<StreamBody<St>>
-```
-
-The `T` parameter in `Handler<T, S>` acts as a discriminator tag for impl selection. Separate macro-generated implementations handle extractors for each streaming pattern.
+The `T` parameter in `Handler<T, S>` acts as a discriminator tag for impl selection. Macro-generated implementations handle additional extractors for each pattern.
 
 ## Builder Pattern
 
@@ -169,33 +152,11 @@ The library uses a two-tier builder pattern to separate per-service concerns fro
 
 ### Generated Builders (per-service)
 
-Generated at build time for each proto service. Handles handler registration and routing:
-
-```rust
-HelloWorldServiceBuilder::new()
-    .say_hello(handler)
-    .with_state(app_state)
-    .build()          // Returns bare Router
-    .build_connect()  // Returns Router with ConnectLayer
-```
+Generated at build time for each proto service. Handles handler registration, per-method routing, and state application.
 
 ### MakeServiceBuilder (library-level)
 
-Combines multiple services and applies cross-cutting infrastructure:
-
-```rust
-MakeServiceBuilder::new()
-    .add_router(hello_router)           // ConnectRPC routes (with ConnectLayer)
-    .add_router(user_router)
-    .add_axum_router(health_router)     // Plain HTTP routes (bypass ConnectLayer)
-    .message_limits(MessageLimits::new(16 * 1024 * 1024))
-    .require_protocol_header(true)
-    .timeout(Duration::from_secs(30))   // server-side timeout
-    .add_grpc_service(grpc_svc)         // optional gRPC service
-    .build()
-```
-
-**Route types:**
+Combines multiple services and applies cross-cutting infrastructure. Supports two route types:
 - `add_router()` - ConnectRPC routes that go through `ConnectLayer` for protocol handling
 - `add_axum_router()` - Plain axum routes that bypass `ConnectLayer` (health checks, metrics, static files)
 
@@ -313,21 +274,33 @@ Response compression negotiation follows RFC 7231: `negotiate_response_encoding(
 
 The build crate uses a multi-pass approach to generate all necessary code.
 
-### Pass 1: Prost + Connect (always)
+### Builder Options
+
+| Method | Feature | Effect |
+|--------|---------|--------|
+| (default) | - | Generate types + serde + Connect handlers |
+| `no_handlers()` | - | Generate types + serde only (no Connect handlers) |
+| `with_tonic()` | `tonic` | Add tonic server stubs |
+| `with_tonic_client()` | `tonic-client` | Add tonic client stubs |
+
+**Constraints:** `no_handlers()` and `with_tonic()` cannot be combined.
+
+### Pass 1: Prost + Connect
 
 ```
 prost_build::Config
     ↓
 ├── Message/Enum types (Rust structs)
-├── Connect service builders ({Service}ServiceBuilder)
-└── File descriptor set (for Pass 1.5)
+├── Connect service builders (if handlers enabled)
+└── File descriptor set (for subsequent passes)
 ```
 
 - User configuration via `with_prost_config()` is applied here
 - All type customization (attributes, extern paths) must be done in this pass
 - Generated builders use the unified `post_connect()` function which auto-detects RPC type from handler signature
+- With `no_handlers()`, only message types are generated (no service builders)
 
-### Pass 1.5: Serde Implementations (always)
+### Pass 1.5: Serde Implementations
 
 ```
 pbjson-build
@@ -338,7 +311,7 @@ pbjson-build
 - Uses the file descriptor set from Pass 1
 - Handles `oneof` fields correctly with proper JSON representation
 
-### Pass 2: Tonic Server Stubs (with `tonic` feature)
+### Pass 2: Tonic Server Stubs (with `tonic` feature + `with_tonic()`)
 
 ```
 tonic_prost_build::Builder
@@ -347,29 +320,17 @@ tonic_prost_build::Builder
 ```
 
 - **Types are NOT regenerated** - uses `extern_path` to reference Pass 1 types
-- User configuration via `with_tonic_prost_config()` only affects service generation
-- Internal overrides (cannot be changed by user):
-  - `build_client(false)` - no client code
-  - `build_server(true)` - generate server traits
-  - `compile_well_known_types(false)` - use extern paths
+- Generated code is appended to the Pass 1 output files
 
-### Configuration Separation
+### Pass 3: Tonic Client Stubs (with `tonic-client` feature + `with_tonic_client()`)
 
-| Method | Pass | Affects |
-|--------|------|---------|
-| `with_prost_config()` | 1 | Message types, enum types, extern paths |
-| `with_tonic_prost_config()` | 2 | Service trait generation only |
-
-**Example:**
-
-```rust
-connectrpc_axum_build::compile_dir("proto")
-    .with_prost_config(|config| {
-        // Configure types here (Pass 1)
-        config.type_attribute("MyMessage", "#[derive(Hash)]");
-        config.extern_path(".google.protobuf", "::pbjson_types");
-    })
-    .with_tonic()
-    .compile()?;
 ```
+tonic_prost_build::Builder
+    ↓
+└── Client types ({service_name}_client::{Service}Client)
+```
+
+- **Types are NOT regenerated** - uses `extern_path` to reference Pass 1 types
+- Can be used independently of `with_tonic()` (server stubs)
+- Generated code is appended to the Pass 1 output files
 
