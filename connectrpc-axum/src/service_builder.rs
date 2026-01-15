@@ -109,6 +109,8 @@ pub struct WithGrpc {
 /// ```
 pub struct MakeServiceBuilder<S = (), G = ConnectOnly> {
     connect_router: Router<S>,
+    /// Routes that bypass ConnectLayer (health checks, metrics, etc.)
+    axum_router: Router<S>,
     #[cfg(feature = "tonic")]
     grpc_state: G,
     #[cfg(not(feature = "tonic"))]
@@ -148,6 +150,7 @@ where
     pub fn new() -> Self {
         Self {
             connect_router: Router::new(),
+            axum_router: Router::new(),
             #[cfg(feature = "tonic")]
             grpc_state: ConnectOnly,
             #[cfg(not(feature = "tonic"))]
@@ -272,11 +275,67 @@ where
         self
     }
 
+    /// Adds an axum router that bypasses [`ConnectLayer`].
+    ///
+    /// Use this for routes that don't need Connect protocol handling:
+    /// - Health check endpoints
+    /// - Metrics endpoints
+    /// - Static file serving
+    /// - Plain REST APIs
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use connectrpc_axum::MakeServiceBuilder;
+    /// use axum::{Router, routing::get};
+    /// # let connect_router: Router<()> = Router::new();
+    ///
+    /// let health_router = Router::new()
+    ///     .route("/health", get(|| async { "ok" }));
+    ///
+    /// let app = MakeServiceBuilder::new()
+    ///     .add_router(connect_router)
+    ///     .add_axum_router(health_router)
+    ///     .build();
+    /// ```
+    pub fn add_axum_router(mut self, router: Router<S>) -> Self {
+        self.axum_router = self.axum_router.merge(router);
+        self
+    }
+
+    /// Adds multiple axum routers that bypass [`ConnectLayer`].
+    ///
+    /// All routers will be merged together and served without Connect protocol handling.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use connectrpc_axum::MakeServiceBuilder;
+    /// use axum::{Router, routing::get};
+    /// # let connect_router: Router<()> = Router::new();
+    ///
+    /// let health_router = Router::new()
+    ///     .route("/health", get(|| async { "ok" }));
+    /// let metrics_router = Router::new()
+    ///     .route("/metrics", get(|| async { "metrics" }));
+    ///
+    /// let app = MakeServiceBuilder::new()
+    ///     .add_router(connect_router)
+    ///     .add_axum_routers(vec![health_router, metrics_router])
+    ///     .build();
+    /// ```
+    pub fn add_axum_routers(mut self, routers: impl IntoIterator<Item = Router<S>>) -> Self {
+        for router in routers {
+            self.axum_router = self.axum_router.merge(router);
+        }
+        self
+    }
+
     fn build_connect_layer(&self) -> ConnectLayer {
         let mut layer = ConnectLayer::new()
-            .limits(self.limits.clone())
+            .limits(self.limits)
             .require_protocol_header(self.require_protocol_header)
-            .compression(self.compression.clone());
+            .compression(self.compression);
 
         if let Some(timeout) = self.timeout {
             layer = layer.timeout(timeout);
@@ -295,10 +354,12 @@ where
     ///
     /// This returns the combined Connect RPC router containing all the routers
     /// that were added via [`add_router`](Self::add_router) or
-    /// [`add_routers`](Self::add_routers).
+    /// [`add_routers`](Self::add_routers), plus any axum routers added via
+    /// [`add_axum_router`](Self::add_axum_router).
     ///
-    /// The router will have [`ConnectLayer`] applied with the configured
-    /// message limits and protocol header requirements.
+    /// The Connect routers will have [`ConnectLayer`] applied with the configured
+    /// message limits and protocol header requirements. Axum routers bypass the
+    /// Connect layer and are served as plain HTTP routes.
     ///
     /// # Examples
     ///
@@ -315,7 +376,7 @@ where
     /// ```
     pub fn build(self) -> Router<S> {
         let layer = self.build_connect_layer();
-        self.connect_router.layer(layer)
+        self.connect_router.layer(layer).merge(self.axum_router)
     }
 }
 
@@ -358,6 +419,7 @@ where
         let routes = tonic::service::Routes::default().add_service(service);
         MakeServiceBuilder {
             connect_router: self.connect_router,
+            axum_router: self.axum_router,
             grpc_state: WithGrpc {
                 routes,
                 capture_request_parts: true,
@@ -480,7 +542,8 @@ where
             .require_protocol_header(self.require_protocol_header)
             .compression(self.compression);
 
-        let connect_router = self.connect_router.layer(layer);
+        // Apply ConnectLayer to Connect routers, then merge axum routers (which bypass the layer)
+        let connect_router = self.connect_router.layer(layer).merge(self.axum_router);
 
         let grpc_routes = self.grpc_state.routes.prepare();
         let grpc_service = if self.grpc_state.capture_request_parts {
@@ -556,5 +619,50 @@ mod tests {
     #[test]
     fn test_default() {
         let _builder: MakeServiceBuilder = MakeServiceBuilder::default();
+    }
+
+    #[test]
+    fn test_axum_router() {
+        let connect_router: Router<()> = Router::new().route("/rpc", get(|| async { "rpc" }));
+        let axum_router: Router<()> = Router::new().route("/health", get(|| async { "ok" }));
+
+        let app = MakeServiceBuilder::new()
+            .add_router(connect_router)
+            .add_axum_router(axum_router)
+            .build();
+
+        assert!(format!("{:?}", app).contains("Router"));
+    }
+
+    #[test]
+    fn test_multiple_axum_routers() {
+        let connect_router: Router<()> = Router::new().route("/rpc", get(|| async { "rpc" }));
+        let health_router: Router<()> = Router::new().route("/health", get(|| async { "ok" }));
+        let metrics_router: Router<()> =
+            Router::new().route("/metrics", get(|| async { "metrics" }));
+
+        let app = MakeServiceBuilder::new()
+            .add_router(connect_router)
+            .add_axum_routers(vec![health_router, metrics_router])
+            .build();
+
+        assert!(format!("{:?}", app).contains("Router"));
+    }
+
+    #[test]
+    fn test_mixed_connect_and_axum_routers() {
+        let connect_router1: Router<()> = Router::new().route("/rpc1", get(|| async { "rpc1" }));
+        let connect_router2: Router<()> = Router::new().route("/rpc2", get(|| async { "rpc2" }));
+        let axum_router1: Router<()> = Router::new().route("/health", get(|| async { "ok" }));
+        let axum_router2: Router<()> = Router::new().route("/metrics", get(|| async { "metrics" }));
+
+        let app = MakeServiceBuilder::new()
+            .add_router(connect_router1)
+            .add_axum_router(axum_router1)
+            .add_router(connect_router2)
+            .add_axum_router(axum_router2)
+            .build();
+
+        assert!(format!("{:?}", app).contains("Router"));
     }
 }

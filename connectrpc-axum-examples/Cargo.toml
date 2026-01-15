@@ -82,6 +82,11 @@ path = "src/bin/unary-error-metadata.rs"
 name = "error-details"
 path = "src/bin/error-details.rs"
 
+# Axum router test (verifies add_axum_router bypasses ConnectLayer)
+[[bin]]
+name = "axum-router"
+path = "src/bin/axum-router.rs"
+
 [dependencies]
 # Application dependency for error handling
 anyhow = "1"

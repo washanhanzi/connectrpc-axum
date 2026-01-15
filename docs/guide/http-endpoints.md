@@ -10,57 +10,73 @@ Since connectrpc-axum is built on Axum, you can combine ConnectRPC services with
 - Supporting legacy HTTP APIs
 - Health checks and metrics endpoints
 
-## Sharing Handlers
+## Example
 
-A single handler can serve both HTTP and ConnectRPC endpoints using `post_connect`:
+Use `MakeServiceBuilder` to combine ConnectRPC services with plain HTTP routes:
+
+- `add_router()` - ConnectRPC routes (with `ConnectLayer` for protocol handling)
+- `add_axum_router()` - Plain HTTP routes (bypass `ConnectLayer`)
+
+You can also use `post_connect` to expose a ConnectRPC handler at a custom HTTP path.
 
 ```rust
-use axum::{Router, extract::State, routing::get};
+use axum::{Router, routing::{get, post}, Json};
 use connectrpc_axum::prelude::*;
+use connectrpc_axum::MakeServiceBuilder;
+use serde::Serialize;
 
-#[derive(Clone)]
-struct AppState;
-
-async fn health_check() -> &'static str {
-    "OK"
+#[derive(Serialize)]
+struct HealthResponse {
+    status: &'static str,
 }
 
-// Single handler works for both routes
+// Plain HTTP handler - returns JSON
+async fn health() -> Json<HealthResponse> {
+    Json(HealthResponse { status: "ok" })
+}
+
+// Plain HTTP handler - returns text
+async fn metrics() -> &'static str {
+    "requests_total 42\nrequest_errors 0"
+}
+
+// ConnectRPC handler - can be used for both RPC and custom HTTP routes
 async fn get_user(
-    State(_s): State<AppState>,
     ConnectRequest(req): ConnectRequest<user::v1::GetUserRequest>,
 ) -> Result<ConnectResponse<user::v1::GetUserResponse>, ConnectError> {
-    Ok(ConnectResponse(user::v1::GetUserResponse {
+    Ok(ConnectResponse::new(user::v1::GetUserResponse {
         name: format!("User {}", req.id),
     }))
 }
 
-// HTTP routes using post_connect
-let http_router = Router::new()
-    .route("/health", get(health_check))
-    .route("/api/user", post_connect(get_user))
-    .with_state(AppState);
-
-// ConnectRPC router with full protocol support
-let connect_router = connectrpc_axum::MakeServiceBuilder::new()
-    .add_router(
-        userservice::UserServiceBuilder::new()
-            .get_user(get_user)
-            .with_state(AppState)
-            .build()
-    )
+// ConnectRPC service router
+let connect_router = userservice::UserServiceBuilder::new()
+    .get_user(get_user)
     .build();
 
-// Merge both routers
-let app = http_router.merge(connect_router);
+// Plain HTTP routes (health, metrics, and a custom path for the RPC handler)
+let axum_router = Router::new()
+    .route("/health", get(health))
+    .route("/metrics", get(metrics))
+    .route("/api/user", post_connect(get_user));  // Same handler at custom path
+
+// Combine them
+let app = MakeServiceBuilder::new()
+    .add_router(connect_router)      // ConnectRPC routes get ConnectLayer
+    .add_axum_router(axum_router)    // Plain routes bypass ConnectLayer
+    .build();
+
+let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+axum::serve(listener, app).await?;
 ```
 
-This serves both paths:
-- `POST /api/user` - HTTP endpoint
-- `POST /user.v1.UserService/GetUser` - ConnectRPC endpoint
+This serves:
+- `POST /user.v1.UserService/GetUser` - ConnectRPC endpoint (with protocol handling)
+- `POST /api/user` - Same handler at custom HTTP path
+- `GET /health` - Plain JSON endpoint (no Connect headers required)
+- `GET /metrics` - Plain text endpoint
 
-
-### GET Support for Idempotent RPCs
+## GET Support for Idempotent RPCs
 
 Use `get_connect` to enable GET requests for idempotent unary RPCs. This allows browser caching:
 
