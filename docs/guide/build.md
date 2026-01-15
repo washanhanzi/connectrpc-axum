@@ -89,6 +89,20 @@ Requires the `tonic` feature in `Cargo.toml`:
 connectrpc-axum-build = { version = "*", features = ["tonic"] }
 ```
 
+Customize tonic server generation with `.with_tonic_prost_config()` (available after `.with_tonic()`):
+
+```rust
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    connectrpc_axum_build::compile_dir("proto")
+        .with_tonic()
+        .with_tonic_prost_config(|builder| {
+            builder.build_transport(false)
+        })
+        .compile()?;
+    Ok(())
+}
+```
+
 Enable gRPC client support with `.with_tonic_client()`:
 
 ```rust
@@ -107,7 +121,21 @@ Requires the `tonic-client` feature in `Cargo.toml`:
 connectrpc-axum-build = { version = "*", features = ["tonic-client"] }
 ```
 
-**Note:** `.no_handlers()` and `.with_tonic()` cannot be combined - use one or the other.
+Customize tonic client generation with `.with_tonic_client_config()` (available after `.with_tonic_client()`):
+
+```rust
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    connectrpc_axum_build::compile_dir("proto")
+        .with_tonic_client()
+        .with_tonic_client_config(|builder| {
+            builder.build_transport(false)
+        })
+        .compile()?;
+    Ok(())
+}
+```
+
+**Note:** `.no_handlers()` and `.with_tonic()` cannot be combined - the compiler enforces valid method chains at compile time.
 
 ## Generated Code
 

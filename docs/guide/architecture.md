@@ -274,16 +274,24 @@ Response compression negotiation follows RFC 7231: `negotiate_response_encoding(
 
 The build crate uses a multi-pass approach to generate all necessary code.
 
-### Builder Options
+### CompileBuilder Type-State Pattern
 
-| Method | Feature | Effect |
-|--------|---------|--------|
-| (default) | - | Generate types + serde + Connect handlers |
-| `no_handlers()` | - | Generate types + serde only (no Connect handlers) |
-| `with_tonic()` | `tonic` | Add tonic server stubs |
-| `with_tonic_client()` | `tonic-client` | Add tonic client stubs |
+`CompileBuilder<Connect, Tonic, TonicClient>` uses phantom type parameters to enforce valid configurations at compile time:
 
-**Constraints:** `no_handlers()` and `with_tonic()` cannot be combined.
+| Parameter | `Yes` | `No` |
+|-----------|-------|------|
+| `Connect` | Generate Connect handlers | Types + serde only |
+| `Tonic` | Generate tonic server stubs | No server stubs |
+| `TonicClient` | Generate tonic client stubs | No client stubs |
+
+Default state: `CompileBuilder<Yes, No, No>` (Connect handlers only).
+
+Method availability is enforced via trait bounds:
+- `no_handlers()` requires `Connect = Yes`, transitions to `Connect = No`
+- `with_tonic()` requires `Connect = Yes` and `Tonic = No`
+- `with_tonic_client()` requires `TonicClient = No`
+
+**Constraints:** `no_handlers()` and `with_tonic()` cannot be combined (enforced at compile time).
 
 ### Pass 1: Prost + Connect
 
