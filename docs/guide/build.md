@@ -32,17 +32,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Well-Known Types
 
-To use Google's well-known types (`Timestamp`, `Duration`, `Any`, etc.), configure extern paths:
+To use Google's well-known types (`Timestamp`, `Duration`, `Any`, etc.), configure prost to compile them and map to `pbjson_types`:
 
 ```rust
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     connectrpc_axum_build::compile_dir("proto")
         .with_prost_config(|config| {
-            // Use pbjson_types for well-known types (recommended for JSON support)
-            config.extern_path(".google.protobuf", "::pbjson_types");
-
-            // OR use prost_types if you don't need JSON serialization
-            // config.extern_path(".google.protobuf", "::prost_types");
+            config
+                .compile_well_known_types()
+                .extern_path(".google.protobuf", "::pbjson_types");
         })
         .compile()?;
     Ok(())
@@ -53,9 +51,7 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-pbjson-types = "0.8"  # For JSON-compatible well-known types
-# OR
-prost-types = "0.14"  # For binary-only well-known types
+pbjson-types = "0.8"
 ```
 
 ## Tonic Configuration
