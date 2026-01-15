@@ -185,14 +185,19 @@ Combines multiple services and applies cross-cutting infrastructure:
 
 ```rust
 MakeServiceBuilder::new()
-    .add_router(hello_router)
+    .add_router(hello_router)           // ConnectRPC routes (with ConnectLayer)
     .add_router(user_router)
+    .add_axum_router(health_router)     // Plain HTTP routes (bypass ConnectLayer)
     .message_limits(MessageLimits::new(16 * 1024 * 1024))
     .require_protocol_header(true)
-    .timeout(Duration::from_secs(30))  // server-side timeout
-    .add_grpc_service(grpc_svc)  // optional
+    .timeout(Duration::from_secs(30))   // server-side timeout
+    .add_grpc_service(grpc_svc)         // optional gRPC service
     .build()
 ```
+
+**Route types:**
+- `add_router()` - ConnectRPC routes that go through `ConnectLayer` for protocol handling
+- `add_axum_router()` - Plain axum routes that bypass `ConnectLayer` (health checks, metrics, static files)
 
 ### Separation of Concerns
 
@@ -203,6 +208,7 @@ MakeServiceBuilder::new()
 | State application | ✓ | |
 | Multi-service composition | | ✓ |
 | ConnectLayer application | | ✓ |
+| Plain HTTP routes | | ✓ |
 | Message limits | | ✓ |
 | Protocol header validation | | ✓ |
 | Server-side timeout | | ✓ |
