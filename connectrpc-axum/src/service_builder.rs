@@ -41,6 +41,8 @@
 //! The builder uses `tonic::service::Routes` internally to handle multiple services.
 
 use axum::Router;
+#[cfg(not(feature = "tonic"))]
+use std::marker::PhantomData;
 use std::time::Duration;
 
 use crate::context::{CompressionConfig, MessageLimits};
@@ -107,7 +109,10 @@ pub struct WithGrpc {
 /// ```
 pub struct MakeServiceBuilder<S = (), G = ConnectOnly> {
     connect_router: Router<S>,
+    #[cfg(feature = "tonic")]
     grpc_state: G,
+    #[cfg(not(feature = "tonic"))]
+    _grpc_state: PhantomData<G>,
     /// Message size limits for requests
     limits: MessageLimits,
     /// Whether to require the Connect-Protocol-Version header
@@ -143,7 +148,10 @@ where
     pub fn new() -> Self {
         Self {
             connect_router: Router::new(),
+            #[cfg(feature = "tonic")]
             grpc_state: ConnectOnly,
+            #[cfg(not(feature = "tonic"))]
+            _grpc_state: PhantomData,
             limits: MessageLimits::default(),
             require_protocol_header: false,
             compression: CompressionConfig::default(),
