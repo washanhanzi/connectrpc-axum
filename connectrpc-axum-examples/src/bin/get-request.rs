@@ -32,11 +32,11 @@ async fn say_hello(
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Build router with GET and POST support
-    // Users combine get_unary and post_unary as needed
+    // Users combine get_connect and post_connect as needed
     let router = Router::new()
         .route(
             "/hello.HelloWorldService/SayHello",
-            get_unary(say_hello).merge(post_unary(say_hello)),
+            get_connect(say_hello).merge(post_connect(say_hello)),
         )
         .layer(ConnectLayer::new());
 

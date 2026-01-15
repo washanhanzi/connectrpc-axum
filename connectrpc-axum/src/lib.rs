@@ -33,11 +33,7 @@ pub use context::{
 };
 // Re-export from pipeline module
 pub use pipeline::{RequestPipeline, ResponsePipeline};
-pub use handler::{
-    get_unary, post_bidi_stream, post_client_stream, post_connect, post_server_stream, post_unary,
-    ConnectBidiStreamHandler, ConnectBidiStreamHandlerWrapper, ConnectClientStreamHandler,
-    ConnectClientStreamHandlerWrapper, ConnectHandler, ConnectHandlerWrapper,
-};
+pub use handler::{get_connect, post_connect, ConnectHandler, ConnectHandlerWrapper};
 pub use layer::{ConnectLayer, ConnectService};
 pub use service_builder::MakeServiceBuilder;
 
@@ -73,12 +69,7 @@ pub mod prelude {
         ContentTypeSwitch, TonicCompatible,
         RequestContext, CapturedParts, FromRequestPartsLayer,
     };
-    pub use crate::handler::{
-        get_unary, post_bidi_stream, post_client_stream, post_connect, post_server_stream, post_unary,
-        ConnectBidiStreamHandler, ConnectBidiStreamHandlerWrapper, ConnectClientStreamHandler,
-        ConnectClientStreamHandlerWrapper, ConnectHandler, ConnectHandlerWrapper,
-        ConnectStreamHandlerWrapper,
-    };
+    pub use crate::handler::{get_connect, post_connect, ConnectHandler, ConnectHandlerWrapper};
     pub use crate::layer::{ConnectLayer, ConnectService};
     pub use crate::message::{ConnectRequest, ConnectResponse, StreamBody, Streaming};
     pub use crate::service_builder::MakeServiceBuilder;
