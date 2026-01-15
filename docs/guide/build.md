@@ -54,9 +54,24 @@ Add the dependency to your `Cargo.toml`:
 pbjson-types = "0.8"
 ```
 
+## Types Only (No Handlers)
+
+Use `.no_handlers()` to generate only message types with serde support, skipping Connect handler generation:
+
+```rust
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    connectrpc_axum_build::compile_dir("proto")
+        .no_handlers()
+        .compile()?;
+    Ok(())
+}
+```
+
+This is useful when you only need the protobuf types for serialization/deserialization without building a Connect server.
+
 ## Tonic Configuration
 
-Enable gRPC support with `.with_tonic()`:
+Enable gRPC server support with `.with_tonic()`:
 
 ```rust
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -67,7 +82,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-**Note:** Use `with_prost_config()` for all type customization (attributes, extern paths). The `with_tonic_prost_config()` method only affects service trait generation, not message types. See [Architecture - Code Generation](/guide/architecture#code-generation) for details.
+Requires the `tonic` feature in `Cargo.toml`:
+
+```toml
+[build-dependencies]
+connectrpc-axum-build = { version = "*", features = ["tonic"] }
+```
+
+Enable gRPC client support with `.with_tonic_client()`:
+
+```rust
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    connectrpc_axum_build::compile_dir("proto")
+        .with_tonic_client()
+        .compile()?;
+    Ok(())
+}
+```
+
+Requires the `tonic-client` feature in `Cargo.toml`:
+
+```toml
+[build-dependencies]
+connectrpc-axum-build = { version = "*", features = ["tonic-client"] }
+```
+
+**Note:** `.no_handlers()` and `.with_tonic()` cannot be combined - use one or the other.
 
 ## Generated Code
 
