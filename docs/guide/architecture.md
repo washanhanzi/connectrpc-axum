@@ -114,36 +114,54 @@ Error details follow the Connect protocol's structured error format, serialized 
 
 ## Handler Wrappers
 
-These implement `axum::handler::Handler` for each RPC pattern:
+The library uses a unified handler wrapper that supports all RPC patterns:
 
 | Wrapper | Use Case |
 |---------|----------|
-| `ConnectHandlerWrapper<F>` | Unified: unary, server/client/bidi streaming (auto-detected) |
-| `ConnectStreamHandlerWrapper<F>` | Server streaming (explicit) |
-| `ConnectClientStreamHandlerWrapper<F>` | Client streaming (explicit) |
-| `ConnectBidiStreamHandlerWrapper<F>` | Bidirectional streaming (explicit) |
+| `ConnectHandlerWrapper<F>` | Unified: unary, server/client/bidi streaming with optional extractors |
 | `TonicCompatibleHandlerWrapper<F>` | Tonic-style unary with axum extractors |
 | `TonicCompatibleStreamHandlerWrapper<F>` | Tonic-style server streaming with axum extractors |
 | `TonicCompatibleClientStreamHandlerWrapper<F>` | Tonic-style client streaming with axum extractors |
 | `TonicCompatibleBidiStreamHandlerWrapper<F>` | Tonic-style bidi streaming with axum extractors |
 
+### Handler Functions
+
+Two functions create method routers from handlers:
+
+| Function | HTTP Method | Use Case |
+|----------|-------------|----------|
+| `post_connect(f)` | POST | Unary and streaming RPCs |
+| `get_connect(f)` | GET | Idempotent unary RPCs (query param encoding) |
+
 ### How Handler Wrappers Work
 
-`ConnectHandlerWrapper<F>` is a newtype that wraps a user function `F`. It has multiple `impl Handler<T, S>` blocks, each with different `where` bounds on `F`:
+`ConnectHandlerWrapper<F>` is a newtype that wraps a user function `F`. It has multiple `impl Handler<T, S>` blocks, each with different `where` bounds on `F`. The compiler selects the appropriate impl based on the handler signature:
 
+**Unary handlers:**
 ```rust
-// When F returns ConnectResponse<Resp> (not StreamBody)
-impl<F, ...> Handler<(ConnectRequest<Req>,), ()> for ConnectHandlerWrapper<F>
-where F: Fn(ConnectRequest<Req>) -> Fut,
-      Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>>, ...
-
-// When F returns ConnectResponse<StreamBody<St>>
-impl<F, ...> Handler<(ConnectRequest<Req>, StreamBody<St>), ()> for ConnectHandlerWrapper<F>
-where F: Fn(ConnectRequest<Req>) -> Fut,
-      Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>>, ...
+// Basic: (ConnectRequest<Req>) -> ConnectResponse<Resp>
+// With extractors: (State<T>, ConnectRequest<Req>) -> ConnectResponse<Resp>
 ```
 
-The compiler inspects `F`'s signature (input types + return type) and selects the impl whose `where` bounds match. The `T` parameter in `Handler<T, S>` acts as a discriminator tag - it's not used at runtime, only for impl selection.
+**Server streaming handlers:**
+```rust
+// Basic: (ConnectRequest<Req>) -> ConnectResponse<StreamBody<St>>
+// With extractors: (State<T>, ConnectRequest<Req>) -> ConnectResponse<StreamBody<St>>
+```
+
+**Client streaming handlers:**
+```rust
+// Basic: (ConnectRequest<Streaming<Req>>) -> ConnectResponse<Resp>
+// With extractors: (State<T>, ConnectRequest<Streaming<Req>>) -> ConnectResponse<Resp>
+```
+
+**Bidi streaming handlers:**
+```rust
+// Basic: (ConnectRequest<Streaming<Req>>) -> ConnectResponse<StreamBody<St>>
+// With extractors: (State<T>, ConnectRequest<Streaming<Req>>) -> ConnectResponse<StreamBody<St>>
+```
+
+The `T` parameter in `Handler<T, S>` acts as a discriminator tag for impl selection. Separate macro-generated implementations handle extractors for each streaming pattern.
 
 ## Builder Pattern
 
