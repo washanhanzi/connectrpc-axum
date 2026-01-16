@@ -52,19 +52,45 @@ axum::serve(listener, tower::make::Shared::new(service)).await?;
 
 ### Message Limits
 
-Set maximum message size for requests and responses:
+Configure size limits for incoming requests and outgoing responses:
 
 ```rust
 use connectrpc_axum::MessageLimits;
 
-// Default is 4MB
+// Default is 4MB receive limit, no send limit
+let limits = MessageLimits::default();
+
+// Custom receive limit only
 let limits = MessageLimits::new(16 * 1024 * 1024);  // 16MB
+
+// Custom limits for both directions
+let limits = MessageLimits::default()
+    .receive_max_bytes(16 * 1024 * 1024)  // 16MB for requests
+    .send_max_bytes(8 * 1024 * 1024);     // 8MB for responses
 
 MakeServiceBuilder::new()
     .add_router(router)
     .message_limits(limits)
     .build()
 ```
+
+#### Receive Limit (`receive_max_bytes`)
+
+Limits the size of incoming request messages. Protects against clients sending oversized requests that could exhaust server memory.
+
+#### Send Limit (`send_max_bytes`)
+
+Limits the size of outgoing response messages. Prevents the server from accidentally sending oversized responses that could overwhelm clients. When exceeded, returns a `ResourceExhausted` error.
+
+```rust
+// Convenience method for setting send limit only
+MakeServiceBuilder::new()
+    .add_router(router)
+    .send_max_bytes(8 * 1024 * 1024)  // 8MB
+    .build()
+```
+
+Following connect-go's behavior, the send size is checked after encoding and after compression (if applied).
 
 ### Timeout
 

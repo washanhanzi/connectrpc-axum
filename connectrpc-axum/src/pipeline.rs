@@ -452,7 +452,7 @@ impl RequestPipeline {
         T: Message + DeserializeOwned + Default,
     {
         let ctx = get_context_or_default(&req);
-        let max_size = ctx.limits.max_message_size().unwrap_or(usize::MAX);
+        let max_size = ctx.limits.receive_max_bytes_or_max();
         let body = read_body(req.into_body(), max_size)
             .await
             .map_err(|e| ContextError::new(ctx.protocol, e))?;

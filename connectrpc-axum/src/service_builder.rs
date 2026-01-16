@@ -169,9 +169,49 @@ where
 {
     /// Set custom message size limits.
     ///
-    /// Default is 4 MB.
+    /// Default is 4 MB for receive, no limit for send.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use connectrpc_axum::{MakeServiceBuilder, MessageLimits};
+    ///
+    /// // Set both receive and send limits
+    /// let app = MakeServiceBuilder::new()
+    ///     .message_limits(
+    ///         MessageLimits::default()
+    ///             .receive_max_bytes(16 * 1024 * 1024)  // 16 MB for requests
+    ///             .send_max_bytes(8 * 1024 * 1024)      // 8 MB for responses
+    ///     )
+    ///     .add_router(router)
+    ///     .build();
+    /// ```
     pub fn message_limits(mut self, limits: MessageLimits) -> Self {
         self.limits = limits;
+        self
+    }
+
+    /// Set maximum size for outgoing response messages.
+    ///
+    /// This is a convenience method equivalent to calling
+    /// `message_limits(MessageLimits::default().send_max_bytes(max))`.
+    ///
+    /// When a response would exceed this limit, a `ResourceExhausted` error
+    /// is returned to the client, following connect-go's behavior.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use connectrpc_axum::MakeServiceBuilder;
+    ///
+    /// // Limit responses to 8 MB
+    /// let app = MakeServiceBuilder::new()
+    ///     .send_max_bytes(8 * 1024 * 1024)
+    ///     .add_router(router)
+    ///     .build();
+    /// ```
+    pub fn send_max_bytes(mut self, max: usize) -> Self {
+        self.limits = self.limits.send_max_bytes(max);
         self
     }
 

@@ -142,7 +142,7 @@ where
     T: Message + DeserializeOwned + Default,
 {
     // 1. Read body with size limit
-    let max_size = ctx.limits.max_message_size().unwrap_or(usize::MAX);
+    let max_size = ctx.limits.receive_max_bytes_or_max();
     let bytes = read_body(req.into_body(), max_size).await?;
 
     // 2. Decompress, check size, unwrap envelope, and decode
