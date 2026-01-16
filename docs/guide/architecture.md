@@ -274,24 +274,26 @@ Response compression negotiation follows RFC 7231: `negotiate_response_encoding(
 
 The build crate uses a multi-pass approach to generate all necessary code.
 
-### CompileBuilder Type-State Pattern
+### Type-State Configuration (Internal)
 
-`CompileBuilder<Connect, Tonic, TonicClient>` uses phantom type parameters to enforce valid configurations at compile time:
+Internally, the build crate uses a type-state pattern to enforce valid configurations at compile time. The builder uses phantom type parameters to track which code generation options are enabled:
 
-| Parameter | `Yes` | `No` |
-|-----------|-------|------|
-| `Connect` | Generate Connect handlers | Types + serde only |
-| `Tonic` | Generate tonic server stubs | No server stubs |
-| `TonicClient` | Generate tonic client stubs | No client stubs |
+| Option | Enabled | Disabled |
+|--------|---------|----------|
+| Connect handlers | Generate Connect handler builders | Types + serde only |
+| Tonic server | Generate tonic server stubs | No server stubs |
+| Tonic client | Generate tonic client stubs | No client stubs |
 
-Default state: `CompileBuilder<Yes, No, No>` (Connect handlers only).
+Default: Connect handlers only (no tonic stubs).
 
 Method availability is enforced via trait bounds:
-- `no_handlers()` requires `Connect = Yes`, transitions to `Connect = No`
-- `with_tonic()` requires `Connect = Yes` and `Tonic = No`
-- `with_tonic_client()` requires `TonicClient = No`
+- `no_handlers()` transitions to types-only mode
+- `with_tonic()` enables tonic server stubs (requires Connect handlers)
+- `with_tonic_client()` enables tonic client stubs
 
 **Constraints:** `no_handlers()` and `with_tonic()` cannot be combined (enforced at compile time).
+
+Users interact with this through the public `compile_protos()` function and builder methods; the internal type-state machinery is not exposed.
 
 ### Pass 1: Prost + Connect
 
