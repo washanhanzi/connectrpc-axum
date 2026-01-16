@@ -31,10 +31,14 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             .iter()
             .map(|method| {
                 let method_name = format_ident!("{}", method.name.to_case(Case::Snake));
-                let request_type: proc_macro2::TokenStream =
-                    method.input_type.parse().expect("invalid request type path");
-                let response_type: proc_macro2::TokenStream =
-                    method.output_type.parse().expect("invalid response type path");
+                let request_type: proc_macro2::TokenStream = method
+                    .input_type
+                    .parse()
+                    .expect("invalid request type path");
+                let response_type: proc_macro2::TokenStream = method
+                    .output_type
+                    .parse()
+                    .expect("invalid response type path");
                 let path = format!(
                     "/{}.{}/{}",
                     service.package, service.proto_name, method.proto_name
@@ -86,29 +90,28 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             .collect();
 
         // Generate Tonic-compatible code if tonic is enabled
-        let (tonic_module_bits, tonic_out_of_module) =
-            if self.include_tonic {
-                // Tonic-related identifiers (only needed when tonic is enabled)
-                let tonic_builder_name =
-                    format_ident!("{}ServiceTonicCompatibleBuilder", service_base_name);
-                let tonic_server_builder_name =
-                    format_ident!("{}ServiceTonicCompatibleServerBuilder", service_base_name);
-                let tonic_service_name = format_ident!("{}TonicService", service_base_name);
+        let (tonic_module_bits, tonic_out_of_module) = if self.include_tonic {
+            // Tonic-related identifiers (only needed when tonic is enabled)
+            let tonic_builder_name =
+                format_ident!("{}ServiceTonicCompatibleBuilder", service_base_name);
+            let tonic_server_builder_name =
+                format_ident!("{}ServiceTonicCompatibleServerBuilder", service_base_name);
+            let tonic_service_name = format_ident!("{}TonicService", service_base_name);
 
-                // Tonic server trait paths (e.g., hello_world_service_server::HelloWorldService)
-                let server_mod_name =
-                    format_ident!("{}_server", service.proto_name.to_case(Case::Snake));
-                let tonic_trait_ident = format_ident!("{}", service.proto_name);
-                let tonic_server_type_name = format_ident!("{}Server", service.proto_name);
+            // Tonic server trait paths (e.g., hello_world_service_server::HelloWorldService)
+            let server_mod_name =
+                format_ident!("{}_server", service.proto_name.to_case(Case::Snake));
+            let tonic_trait_ident = format_ident!("{}", service.proto_name);
+            let tonic_server_type_name = format_ident!("{}Server", service.proto_name);
 
-                // Generate field names for tonic builder field assignments
-                let field_names: Vec<_> = method_info
-                    .iter()
-                    .map(|(name, _, _, _, _, _, _)| name)
-                    .collect();
+            // Generate field names for tonic builder field assignments
+            let field_names: Vec<_> = method_info
+                .iter()
+                .map(|(name, _, _, _, _, _, _)| name)
+                .collect();
 
-                // Generate Tonic-compatible builder methods
-                let tonic_builder_methods: Vec<_> = method_info
+            // Generate Tonic-compatible builder methods
+            let tonic_builder_methods: Vec<_> = method_info
                     .iter()
                     .map(
                         |(method_name, request_type, response_type, path, _assoc, is_ss, is_cs)| {
@@ -249,8 +252,8 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                     )
                     .collect();
 
-                // Generate tonic service handler fields
-                let tonic_handler_fields: Vec<_> = method_info
+            // Generate tonic service handler fields
+            let tonic_handler_fields: Vec<_> = method_info
                     .iter()
                     .map(
                         |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs)| {
@@ -280,8 +283,8 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                     )
                     .collect();
 
-                // Generate tonic server handler fields
-                let tonic_server_handler_fields: Vec<_> = method_info
+            // Generate tonic server handler fields
+            let tonic_server_handler_fields: Vec<_> = method_info
                     .iter()
                     .map(
                         |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs)| {
@@ -303,8 +306,8 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                     )
                     .collect();
 
-                // Generate final tonic service handler fields
-                let tonic_service_handler_fields: Vec<_> = method_info
+            // Generate final tonic service handler fields
+            let tonic_service_handler_fields: Vec<_> = method_info
                     .iter()
                     .map(
                         |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs)| {
@@ -326,18 +329,18 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                     )
                     .collect();
 
-                // Generate field initializers for tonic builders
-                let tonic_field_init: Vec<_> = method_info
-                    .iter()
-                    .map(
-                        |(method_name, _request_type, _response_type, _path, _assoc, _ss, _is_cs)| {
-                            quote! { #method_name: None }
-                        },
-                    )
-                    .collect();
+            // Generate field initializers for tonic builders
+            let tonic_field_init: Vec<_> = method_info
+                .iter()
+                .map(
+                    |(method_name, _request_type, _response_type, _path, _assoc, _ss, _is_cs)| {
+                        quote! { #method_name: None }
+                    },
+                )
+                .collect();
 
-                // Generate handlers for build() with unimplemented fallbacks - no state version
-                let tonic_build_handlers_no_state: Vec<_> = method_info
+            // Generate handlers for build() with unimplemented fallbacks - no state version
+            let tonic_build_handlers_no_state: Vec<_> = method_info
                     .iter()
                     .map(
                         |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs)| {
@@ -371,8 +374,8 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                     )
                     .collect();
 
-                // Generate handlers for build() with unimplemented fallbacks - with state version
-                let tonic_build_handlers_with_state: Vec<_> = method_info
+            // Generate handlers for build() with unimplemented fallbacks - with state version
+            let tonic_build_handlers_with_state: Vec<_> = method_info
                     .iter()
                     .map(
                         |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs)| {
@@ -402,28 +405,28 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                     )
                     .collect();
 
-                // Generate field names for with_state mapping
-                let with_state_field_mapping: Vec<_> = method_info
-                    .iter()
-                    .map(
-                        |(method_name, _request_type, _response_type, _path, _assoc, _ss, _is_cs)| {
-                            quote! { #method_name: self.#method_name.map(|mk| mk(&state)) }
-                        },
-                    )
-                    .collect();
+            // Generate field names for with_state mapping
+            let with_state_field_mapping: Vec<_> = method_info
+                .iter()
+                .map(
+                    |(method_name, _request_type, _response_type, _path, _assoc, _ss, _is_cs)| {
+                        quote! { #method_name: self.#method_name.map(|mk| mk(&state)) }
+                    },
+                )
+                .collect();
 
-                // Generate field names for final service creation
-                let service_field_names: Vec<_> = method_info
-                    .iter()
-                    .map(
-                        |(method_name, _request_type, _response_type, _path, _assoc, _ss, _is_cs)| {
-                            quote! { #method_name }
-                        },
-                    )
-                    .collect();
+            // Generate field names for final service creation
+            let service_field_names: Vec<_> = method_info
+                .iter()
+                .map(
+                    |(method_name, _request_type, _response_type, _path, _assoc, _ss, _is_cs)| {
+                        quote! { #method_name }
+                    },
+                )
+                .collect();
 
-                // Generate tonic trait associated types for streaming response methods (server-streaming and bidi)
-                let tonic_assoc_types: Vec<_> = method_info
+            // Generate tonic trait associated types for streaming response methods (server-streaming and bidi)
+            let tonic_assoc_types: Vec<_> = method_info
                     .iter()
                     .filter_map(|(_method_name, _req, resp, _path, assoc, is_ss, _is_cs)| {
                         // Both server streaming and bidi streaming have response streams
@@ -437,9 +440,9 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                     })
                     .collect();
 
-                // Generate tonic trait method impls for all streaming types
-                // Each method builds a RequestContext from CapturedParts and tonic extensions
-                let tonic_trait_methods: Vec<_> = method_info
+            // Generate tonic trait method impls for all streaming types
+            // Each method builds a RequestContext from CapturedParts and tonic extensions
+            let tonic_trait_methods: Vec<_> = method_info
                     .iter()
                     .map(
                         |(method_name, request_type, response_type, _path, assoc, is_ss, is_cs)| {
@@ -609,156 +612,150 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                     )
                     .collect();
 
-                let tonic_builder_structs = quote! {
-                    /// TonicCompatibleBuilder has individual handler factories and progressive router
-                    pub struct #tonic_builder_name<S = ()> {
-                        #(#tonic_handler_fields,)*
-                        pub router: axum::Router<S>,
-                    }
+            let tonic_builder_structs = quote! {
+                /// TonicCompatibleBuilder has individual handler factories and progressive router
+                pub struct #tonic_builder_name<S = ()> {
+                    #(#tonic_handler_fields,)*
+                    pub router: axum::Router<S>,
+                }
 
-                    /// Server-side builder with concrete handlers (state captured)
-                    pub struct #tonic_server_builder_name<S = ()> {
-                        #(#tonic_server_handler_fields,)*
-                        pub router: axum::Router<S>,
-                    }
+                /// Server-side builder with concrete handlers (state captured)
+                pub struct #tonic_server_builder_name<S = ()> {
+                    #(#tonic_server_handler_fields,)*
+                    pub router: axum::Router<S>,
+                }
 
-                    impl<S> #tonic_builder_name<S>
-                    where
-                        S: Clone + Send + Sync + 'static,
-                    {
-                        pub fn new() -> Self {
-                            Self {
-                                #(#tonic_field_init,)*
-                                router: axum::Router::new(),
-                            }
-                        }
-
-                        #(#tonic_builder_methods)*
-
-                        /// Apply state to router and handlers, returning server builder with concrete handlers
-                        pub fn with_state<S2>(self, state: S) -> #tonic_server_builder_name<S2> {
-                            let router = self.router.with_state(state.clone());
-                            #tonic_server_builder_name {
-                                #(#with_state_field_mapping,)*
-                                router,
-                            }
+                impl<S> #tonic_builder_name<S>
+                where
+                    S: Clone + Send + Sync + 'static,
+                {
+                    pub fn new() -> Self {
+                        Self {
+                            #(#tonic_field_init,)*
+                            router: axum::Router::new(),
                         }
                     }
 
-                    impl #tonic_builder_name<()> {
-                        /// Build without state by converting factories with `()`
-                        ///
-                        /// Returns the router and a gRPC service. Use [`MakeServiceBuilder`] to
-                        /// apply [`ConnectLayer`] and combine with other services.
-                        ///
-                        /// [`MakeServiceBuilder`]: connectrpc_axum::MakeServiceBuilder
-                        /// [`ConnectLayer`]: connectrpc_axum::ConnectLayer
-                        pub fn build(self) -> (
-                            axum::Router,
-                            #server_mod_name::#tonic_server_type_name<#tonic_service_name>
-                        ) {
-                            let router = self.router;
-                            #(#tonic_build_handlers_no_state)*
+                    #(#tonic_builder_methods)*
 
-                            let tonic_service = #tonic_service_name {
-                                #(#service_field_names,)*
-                            };
-
-                            let grpc_server = #server_mod_name::#tonic_server_type_name::new(tonic_service);
-                            (router, grpc_server)
+                    /// Apply state to router and handlers, returning server builder with concrete handlers
+                    pub fn with_state<S2>(self, state: S) -> #tonic_server_builder_name<S2> {
+                        let router = self.router.with_state(state.clone());
+                        #tonic_server_builder_name {
+                            #(#with_state_field_mapping,)*
+                            router,
                         }
                     }
+                }
 
-                    impl #tonic_server_builder_name {
-                        /// Build with state already captured in handlers
-                        ///
-                        /// Returns the router and a gRPC service. Use [`MakeServiceBuilder`] to
-                        /// apply [`ConnectLayer`] and combine with other services.
-                        ///
-                        /// [`MakeServiceBuilder`]: connectrpc_axum::MakeServiceBuilder
-                        /// [`ConnectLayer`]: connectrpc_axum::ConnectLayer
-                        pub fn build(self) -> (
-                            axum::Router,
-                            #server_mod_name::#tonic_server_type_name<#tonic_service_name>
-                        ) {
-                            let router = self.router;
-                            #(#tonic_build_handlers_with_state)*
+                impl #tonic_builder_name<()> {
+                    /// Build without state by converting factories with `()`
+                    ///
+                    /// Returns the router and a gRPC service. Use [`MakeServiceBuilder`] to
+                    /// apply [`ConnectLayer`] and combine with other services.
+                    ///
+                    /// [`MakeServiceBuilder`]: connectrpc_axum::MakeServiceBuilder
+                    /// [`ConnectLayer`]: connectrpc_axum::ConnectLayer
+                    pub fn build(self) -> (
+                        axum::Router,
+                        #server_mod_name::#tonic_server_type_name<#tonic_service_name>
+                    ) {
+                        let router = self.router;
+                        #(#tonic_build_handlers_no_state)*
 
-                            let tonic_service = #tonic_service_name {
-                                #(#service_field_names,)*
-                            };
+                        let tonic_service = #tonic_service_name {
+                            #(#service_field_names,)*
+                        };
 
-                            let grpc_server = #server_mod_name::#tonic_server_type_name::new(tonic_service);
-                            (router, grpc_server)
-                        }
+                        let grpc_server = #server_mod_name::#tonic_server_type_name::new(tonic_service);
+                        (router, grpc_server)
+
                     }
-                };
+                }
 
-                let module_bits = quote! {
-                    // Local aliases to reduce fully-qualified verbosity in generated code
-                    type BoxedCall<Req, Resp> = connectrpc_axum::tonic::BoxedCall<Req, Resp>;
-                    type BoxedStreamCall<Req, Resp> = connectrpc_axum::tonic::BoxedStreamCall<Req, Resp>;
-                    type BoxedClientStreamCall<Req, Resp> = connectrpc_axum::tonic::BoxedClientStreamCall<Req, Resp>;
-                    type BoxedBidiStreamCall<Req, Resp> = connectrpc_axum::tonic::BoxedBidiStreamCall<Req, Resp>;
+                impl #tonic_server_builder_name {
+                    pub fn build(self) -> (
+                        axum::Router,
+                        #server_mod_name::#tonic_server_type_name<#tonic_service_name>
+                    ) {
+                        let router = self.router;
+                        #(#tonic_build_handlers_with_state)*
 
-                    fn unimplemented_boxed_call<Req, Resp>() -> BoxedCall<Req, Resp>
-                    where
-                        Req: Send + Sync + 'static,
-                        Resp: Send + Sync + 'static,
-                    {
-                        connectrpc_axum::tonic::unimplemented_boxed_call::<Req, Resp>()
+                        let tonic_service = #tonic_service_name {
+                            #(#service_field_names,)*
+                        };
+
+                        let grpc_server = #server_mod_name::#tonic_server_type_name::new(tonic_service);
+                        (router, grpc_server)
                     }
-
-                    fn unimplemented_boxed_stream_call<Req, Resp>() -> BoxedStreamCall<Req, Resp>
-                    where
-                        Req: Send + Sync + 'static,
-                        Resp: Send + Sync + 'static,
-                    {
-                        connectrpc_axum::tonic::unimplemented_boxed_stream_call::<Req, Resp>()
-                    }
-
-                    fn unimplemented_boxed_client_stream_call<Req, Resp>() -> BoxedClientStreamCall<Req, Resp>
-                    where
-                        Req: Send + Sync + 'static,
-                        Resp: Send + Sync + 'static,
-                    {
-                        connectrpc_axum::tonic::unimplemented_boxed_client_stream_call::<Req, Resp>()
-                    }
-
-                    fn unimplemented_boxed_bidi_stream_call<Req, Resp>() -> BoxedBidiStreamCall<Req, Resp>
-                    where
-                        Req: Send + Sync + 'static,
-                        Resp: Send + Sync + 'static,
-                    {
-                        connectrpc_axum::tonic::unimplemented_boxed_bidi_stream_call::<Req, Resp>()
-                    }
-
-                    #tonic_builder_structs
-                };
-
-                let out_of_module = quote! {
-                    /// Generated Tonic-compatible service that holds boxed calls.
-                    /// This struct directly implements the Tonic trait, following Tonic's idiomatic
-                    /// approach where the trait serves as the primary interface.
-                    pub struct #tonic_service_name {
-                        #(#tonic_service_handler_fields,)*
-                    }
-
-                    // Implement the tonic service trait for the generated boxed service.
-                    // The trait implementation directly calls the boxed handlers, avoiding
-                    // unnecessary intermediate wrapper methods.
-                    #[::tonic::async_trait]
-                    impl #server_mod_name::#tonic_trait_ident for #tonic_service_name {
-                        #(#tonic_assoc_types)*
-
-                        #(#tonic_trait_methods)*
-                    }
-                };
-
-                (module_bits, out_of_module)
-            } else {
-                (quote! {}, quote! {})
+                }
             };
+
+            let module_bits = quote! {
+                // Local aliases to reduce fully-qualified verbosity in generated code
+                type BoxedCall<Req, Resp> = connectrpc_axum::tonic::BoxedCall<Req, Resp>;
+                type BoxedStreamCall<Req, Resp> = connectrpc_axum::tonic::BoxedStreamCall<Req, Resp>;
+                type BoxedClientStreamCall<Req, Resp> = connectrpc_axum::tonic::BoxedClientStreamCall<Req, Resp>;
+                type BoxedBidiStreamCall<Req, Resp> = connectrpc_axum::tonic::BoxedBidiStreamCall<Req, Resp>;
+
+                fn unimplemented_boxed_call<Req, Resp>() -> BoxedCall<Req, Resp>
+                where
+                    Req: Send + Sync + 'static,
+                    Resp: Send + Sync + 'static,
+                {
+                    connectrpc_axum::tonic::unimplemented_boxed_call::<Req, Resp>()
+                }
+
+                fn unimplemented_boxed_stream_call<Req, Resp>() -> BoxedStreamCall<Req, Resp>
+                where
+                    Req: Send + Sync + 'static,
+                    Resp: Send + Sync + 'static,
+                {
+                    connectrpc_axum::tonic::unimplemented_boxed_stream_call::<Req, Resp>()
+                }
+
+                fn unimplemented_boxed_client_stream_call<Req, Resp>() -> BoxedClientStreamCall<Req, Resp>
+                where
+                    Req: Send + Sync + 'static,
+                    Resp: Send + Sync + 'static,
+                {
+                    connectrpc_axum::tonic::unimplemented_boxed_client_stream_call::<Req, Resp>()
+                }
+
+                fn unimplemented_boxed_bidi_stream_call<Req, Resp>() -> BoxedBidiStreamCall<Req, Resp>
+                where
+                    Req: Send + Sync + 'static,
+                    Resp: Send + Sync + 'static,
+                {
+                    connectrpc_axum::tonic::unimplemented_boxed_bidi_stream_call::<Req, Resp>()
+                }
+
+                #tonic_builder_structs
+            };
+
+            let out_of_module = quote! {
+                /// Generated Tonic-compatible service that holds boxed calls.
+                /// This struct directly implements the Tonic trait, following Tonic's idiomatic
+                /// approach where the trait serves as the primary interface.
+                pub struct #tonic_service_name {
+                    #(#tonic_service_handler_fields,)*
+                }
+
+                // Implement the tonic service trait for the generated boxed service.
+                // The trait implementation directly calls the boxed handlers, avoiding
+                // unnecessary intermediate wrapper methods.
+                #[::tonic::async_trait]
+                impl #server_mod_name::#tonic_trait_ident for #tonic_service_name {
+                    #(#tonic_assoc_types)*
+
+                    #(#tonic_trait_methods)*
+                }
+            };
+
+            (module_bits, out_of_module)
+        } else {
+            (quote! {}, quote! {})
+        };
 
         let routes_fn = quote! {
             pub mod #service_module_name {

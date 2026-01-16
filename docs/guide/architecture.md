@@ -32,6 +32,28 @@ For mixed Connect/gRPC deployments, `ContentTypeSwitch` routes by `Content-Type`
 - `application/grpc*` → Tonic gRPC server
 - Otherwise → Axum routes (Connect protocol)
 
+gRPC compression is configured on the tonic service before it is added to `MakeServiceBuilder`. For gzip, enable it on the generated gRPC server:
+
+```rust
+use tonic::codec::CompressionEncoding;
+
+let grpc_server = hello_world_service_server::HelloWorldServiceServer::new(tonic_service)
+    .accept_compressed(CompressionEncoding::Gzip)
+    .send_compressed(CompressionEncoding::Gzip);
+```
+
+You can also apply this via `MakeServiceBuilder::add_grpc_service_with`:
+
+```rust
+let app = MakeServiceBuilder::new()
+    .add_router(connect_router)
+    .add_grpc_service_with(grpc_server, |svc| {
+        svc.accept_compressed(CompressionEncoding::Gzip)
+            .send_compressed(CompressionEncoding::Gzip)
+    })
+    .build();
+```
+
 ### 2. Middleware Processing (ConnectLayer)
 
 Before your handler runs, `ConnectLayer` parses headers and builds a `ConnectContext`:

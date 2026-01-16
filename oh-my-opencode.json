@@ -1,0 +1,8 @@
+{
+  "lsp": {
+    "rust-analyzer": {
+      "command": ["rust-analyzer"],
+      "extensions": ["rs"]
+    }
+  }
+}

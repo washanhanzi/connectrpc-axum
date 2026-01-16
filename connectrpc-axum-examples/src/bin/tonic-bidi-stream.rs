@@ -8,16 +8,15 @@
 //! Run with: cargo run --bin tonic-bidi-stream
 //! Test with: go run ./cmd/client --protocol grpc bidi-stream
 
+use axum::extract::State;
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{
-    EchoRequest, EchoResponse, echo_service_server,
-    HelloRequest, HelloResponse, helloworldservice,
+    EchoRequest, EchoResponse, HelloRequest, HelloResponse, echo_service_server, helloworldservice,
 };
 use futures::{Stream, StreamExt};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, atomic::AtomicUsize};
-use axum::extract::State;
 use tonic::Status;
 
 #[derive(Clone, Default)]
@@ -41,7 +40,10 @@ impl echo_service_server::EchoService for EchoServiceImpl {
         request: tonic::Request<EchoRequest>,
     ) -> Result<tonic::Response<EchoResponse>, Status> {
         let req = request.into_inner();
-        let count = self.app_state.counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let count = self
+            .app_state
+            .counter
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(tonic::Response::new(EchoResponse {
             message: format!("Echo #{}: {}", count, req.message),
         }))
@@ -62,7 +64,10 @@ impl echo_service_server::EchoService for EchoServiceImpl {
             }
         }
 
-        let count = self.app_state.counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let count = self
+            .app_state
+            .counter
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(tonic::Response::new(EchoResponse {
             message: format!(
                 "Client Stream #{}: Received {} messages: [{}]",
@@ -126,7 +131,9 @@ async fn say_hello(
     State(state): State<AppState>,
     ConnectRequest(req): ConnectRequest<HelloRequest>,
 ) -> Result<ConnectResponse<HelloResponse>, ConnectError> {
-    let count = state.counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let count = state
+        .counter
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     Ok(ConnectResponse::new(HelloResponse {
         message: format!("Hello #{}, {}!", count, req.name.unwrap_or_default()),
         response_type: None,

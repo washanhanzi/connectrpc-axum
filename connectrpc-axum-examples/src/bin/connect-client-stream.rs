@@ -35,7 +35,10 @@ async fn echo_client_stream(
         }
     }
 
-    println!("Client stream complete. Received {} messages.", messages.len());
+    println!(
+        "Client stream complete. Received {} messages.",
+        messages.len()
+    );
 
     // Respond with aggregated result
     Ok(ConnectResponse::new(EchoResponse {

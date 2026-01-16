@@ -20,12 +20,20 @@ MakeServiceBuilder::new()
 | `gzip` | Gzip compression via flate2 |
 | `identity` | No compression (passthrough) |
 
+## Compression Architecture
+
+The server uses different compression mechanisms for unary vs streaming RPCs:
+
+- **Unary RPCs**: Standard HTTP body compression via Tower's `CompressionLayer`
+  - Uses `Accept-Encoding` / `Content-Encoding` headers
+  - Compression is automatic when client sends `Accept-Encoding: gzip`
+
+- **Streaming RPCs**: Per-envelope compression handled by connectrpc-axum
+  - Uses `Connect-Accept-Encoding` / `Connect-Content-Encoding` headers
+  - Compression only applied when client sends `Connect-Accept-Encoding` header
+  - Each message frame is individually compressed
+
 ## Accept-Encoding Negotiation
-
-The server negotiates response compression using standard HTTP headers:
-
-- **Unary RPCs**: `Accept-Encoding` header
-- **Streaming RPCs**: `Connect-Accept-Encoding` header
 
 ### How Negotiation Works
 
@@ -54,7 +62,7 @@ Unlike full HTTP content negotiation, Connect protocol doesn't weight by q-value
 
 ### Minimum Bytes Threshold
 
-Only compress responses larger than a threshold (default: 1024 bytes):
+Only compress responses larger than a threshold:
 
 ```rust
 use connectrpc_axum::CompressionConfig;
@@ -62,11 +70,11 @@ use connectrpc_axum::CompressionConfig;
 // Compress responses >= 512 bytes
 let config = CompressionConfig::new(512);
 
-// Default: 1024 bytes
+// Default: 0 bytes (compress everything, matching connect-go)
 let config = CompressionConfig::default();
 ```
 
-Small messages often don't benefit from compression due to overhead.
+Set a threshold if small messages don't benefit from compression due to overhead.
 
 ### Disabling Compression
 
@@ -94,13 +102,19 @@ Unsupported encodings return `Unimplemented` error:
 unsupported compression "br": supported encodings are gzip, identity
 ```
 
+### Streaming Detection
+
+Requests with `Content-Type: application/connect+*` are treated as streaming-style envelopes for header handling and compression behavior. This is intentional: Connect uses the envelope format for these content types even when the logical RPC is unary.
+
 ## Streaming Compression
 
 For streaming RPCs, compression is applied per-message using the envelope format:
 
+- Compression **only happens** when client sends `Connect-Accept-Encoding` header
+- If no header is present, responses are sent uncompressed (identity)
 - Each message frame has a compression flag (byte 0, bit 0x01)
 - Compressed frames are automatically decompressed on read
-- Response frames are compressed based on negotiated encoding and size threshold
+- The `min_bytes` threshold applies to each individual message
 
 ## Protocol Headers
 
@@ -115,6 +129,8 @@ For streaming RPCs, compression is applied per-message using the envelope format
 
 This implementation matches connect-go's compression behavior:
 
+- Default `min_bytes` is 0 (compress everything when compression is requested)
+- Streaming compression only when `Connect-Accept-Encoding` header is present
 - First-match-wins negotiation (no q-value weighting)
 - Respects `q=0` as "not acceptable"
 - Same header names for unary vs streaming

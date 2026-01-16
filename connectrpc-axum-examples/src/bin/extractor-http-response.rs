@@ -21,11 +21,11 @@
 
 use axum::{
     extract::FromRequestParts,
-    http::{request::Parts, StatusCode},
+    http::{StatusCode, request::Parts},
     response::{IntoResponse, Response},
 };
 use connectrpc_axum::prelude::*;
-use connectrpc_axum_examples::{helloworldservice, HelloRequest, HelloResponse};
+use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
 use std::net::SocketAddr;
 
 /// Custom rejection type that returns a plain HTTP 401 response.

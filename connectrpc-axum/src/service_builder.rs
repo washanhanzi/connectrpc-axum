@@ -44,9 +44,12 @@ use axum::Router;
 #[cfg(not(feature = "tonic"))]
 use std::marker::PhantomData;
 use std::time::Duration;
+use tower_http::compression::CompressionLayer;
+use tower_http::compression::predicate::SizeAbove;
+use tower_http::decompression::DecompressionLayer;
 
 use crate::context::{CompressionConfig, MessageLimits};
-use crate::layer::ConnectLayer;
+use crate::layer::{BridgeLayer, ConnectLayer};
 
 #[cfg(feature = "tonic")]
 use crate::tonic::ContentTypeSwitch;
@@ -191,13 +194,40 @@ where
         self
     }
 
+    /// Set maximum size for incoming request messages (compressed body size).
+    ///
+    /// This limits the compressed request body size checked via `Content-Length` header.
+    /// Requests exceeding this limit are rejected with `ResourceExhausted` error
+    /// before decompression occurs.
+    ///
+    /// Default is 4 MB. Use `MessageLimits::unlimited()` via `message_limits()` for no limit.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use connectrpc_axum::MakeServiceBuilder;
+    ///
+    /// // Limit requests to 16 MB
+    /// let app = MakeServiceBuilder::new()
+    ///     .receive_max_bytes(16 * 1024 * 1024)
+    ///     .add_router(router)
+    ///     .build();
+    /// ```
+    pub fn receive_max_bytes(mut self, max: usize) -> Self {
+        self.limits = self.limits.receive_max_bytes(max);
+        self
+    }
+
     /// Set maximum size for outgoing response messages.
     ///
-    /// This is a convenience method equivalent to calling
-    /// `message_limits(MessageLimits::default().send_max_bytes(max))`.
+    /// This limits the size of response messages. For unary RPCs, this checks the
+    /// uncompressed size (before Tower compression). For streaming RPCs, this checks
+    /// the compressed size of each message envelope.
     ///
     /// When a response would exceed this limit, a `ResourceExhausted` error
     /// is returned to the client, following connect-go's behavior.
+    ///
+    /// Default is unlimited (no limit).
     ///
     /// # Examples
     ///
@@ -229,7 +259,7 @@ where
     /// Set compression configuration.
     ///
     /// Controls response compression behavior:
-    /// - `min_bytes`: Minimum response size before compression is applied (default: 1024)
+    /// - `min_bytes`: Minimum response size before compression is applied (default: 0, matching connect-go)
     ///
     /// # Examples
     ///
@@ -415,8 +445,21 @@ where
     ///     .build();
     /// ```
     pub fn build(self) -> Router<S> {
-        let layer = self.build_connect_layer();
-        self.connect_router.layer(layer).merge(self.axum_router)
+        let connect_layer = self.build_connect_layer();
+
+        // Layer stack (request flow): BridgeLayer → DecompressionLayer → CompressionLayer → ConnectLayer → Handler
+        let min_bytes = self.compression.min_bytes.min(u16::MAX as usize) as u16;
+        let compression_layer = CompressionLayer::new().compress_when(SizeAbove::new(min_bytes));
+
+        // Build BridgeLayer with receive size limit
+        let bridge_layer = BridgeLayer::with_receive_limit(self.limits.get_receive_max_bytes());
+
+        self.connect_router
+            .layer(connect_layer)
+            .layer(compression_layer) // compresses responses >= min_bytes
+            .layer(DecompressionLayer::new()) // decompresses requests
+            .layer(bridge_layer) // size limit check, prevents compression for streaming
+            .merge(self.axum_router)
     }
 }
 
@@ -456,7 +499,26 @@ where
         G::Response: axum::response::IntoResponse,
         G::Future: Send + 'static,
     {
-        let routes = tonic::service::Routes::default().add_service(service);
+        Self::add_grpc_service_with(self, service, |svc| svc)
+    }
+
+    pub fn add_grpc_service_with<G, F>(
+        self,
+        service: G,
+        configure: F,
+    ) -> MakeServiceBuilder<S, WithGrpc>
+    where
+        G: tower::Service<http::Request<tonic::body::Body>, Error = std::convert::Infallible>
+            + tonic::server::NamedService
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+        G::Response: axum::response::IntoResponse,
+        G::Future: Send + 'static,
+        F: FnOnce(G) -> G,
+    {
+        let routes = tonic::service::Routes::default().add_service(configure(service));
         MakeServiceBuilder {
             connect_router: self.connect_router,
             axum_router: self.axum_router,
@@ -493,7 +555,7 @@ where
     ///     .add_grpc_service(hello_grpc)
     ///     .add_grpc_service(user_grpc);
     /// ```
-    pub fn add_grpc_service<G>(mut self, service: G) -> Self
+    pub fn add_grpc_service<G>(self, service: G) -> Self
     where
         G: tower::Service<http::Request<tonic::body::Body>, Error = std::convert::Infallible>
             + tonic::server::NamedService
@@ -504,7 +566,22 @@ where
         G::Response: axum::response::IntoResponse,
         G::Future: Send + 'static,
     {
-        self.grpc_state.routes = self.grpc_state.routes.add_service(service);
+        Self::add_grpc_service_with(self, service, |svc| svc)
+    }
+
+    pub fn add_grpc_service_with<G, F>(mut self, service: G, configure: F) -> Self
+    where
+        G: tower::Service<http::Request<tonic::body::Body>, Error = std::convert::Infallible>
+            + tonic::server::NamedService
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+        G::Response: axum::response::IntoResponse,
+        G::Future: Send + 'static,
+        F: FnOnce(G) -> G,
+    {
+        self.grpc_state.routes = self.grpc_state.routes.add_service(configure(service));
         self
     }
 
@@ -577,13 +654,22 @@ where
         use tower::ServiceBuilder;
         use tower::util::Either;
 
-        let layer = ConnectLayer::new()
-            .limits(self.limits)
-            .require_protocol_header(self.require_protocol_header)
-            .compression(self.compression);
+        let connect_layer = self.build_connect_layer();
 
-        // Apply ConnectLayer to Connect routers, then merge axum routers (which bypass the layer)
-        let connect_router = self.connect_router.layer(layer).merge(self.axum_router);
+        // Layer stack (request flow): BridgeLayer → DecompressionLayer → CompressionLayer → ConnectLayer → Handler
+        let min_bytes = self.compression.min_bytes.min(u16::MAX as usize) as u16;
+        let compression_layer = CompressionLayer::new().compress_when(SizeAbove::new(min_bytes));
+
+        // Build BridgeLayer with receive size limit
+        let bridge_layer = BridgeLayer::with_receive_limit(self.limits.get_receive_max_bytes());
+
+        let connect_router = self
+            .connect_router
+            .layer(connect_layer)
+            .layer(compression_layer) // compresses responses >= min_bytes
+            .layer(DecompressionLayer::new()) // decompresses requests
+            .layer(bridge_layer) // size limit check, prevents compression for streaming
+            .merge(self.axum_router);
 
         let grpc_routes = self.grpc_state.routes.prepare();
         let grpc_service = if self.grpc_state.capture_request_parts {

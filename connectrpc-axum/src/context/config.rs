@@ -20,4 +20,3 @@ pub(crate) struct ServerConfig {
     /// Whether to require Connect-Protocol-Version header
     pub require_protocol_header: bool,
 }
-

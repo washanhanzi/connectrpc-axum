@@ -10,10 +10,10 @@
 //! Run with: cargo run --bin axum-router
 //! Test with Go client: go test -v -run TestAxumRouter
 
-use axum::{routing::get, Json, Router};
-use connectrpc_axum::prelude::*;
+use axum::{Json, Router, routing::get};
 use connectrpc_axum::MakeServiceBuilder;
-use connectrpc_axum_examples::{helloworldservice, HelloRequest, HelloResponse};
+use connectrpc_axum::prelude::*;
+use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
 use serde::Serialize;
 use std::net::SocketAddr;
 

@@ -38,8 +38,10 @@ async fn say_hello(
 /// Streaming handler that generates messages of varying sizes
 async fn say_hello_stream(
     ConnectRequest(req): ConnectRequest<HelloRequest>,
-) -> Result<ConnectResponse<StreamBody<impl futures::Stream<Item = Result<HelloResponse, ConnectError>>>>, ConnectError>
-{
+) -> Result<
+    ConnectResponse<StreamBody<impl futures::Stream<Item = Result<HelloResponse, ConnectError>>>>,
+    ConnectError,
+> {
     let name = req.name.unwrap_or_else(|| "World".to_string());
 
     let stream = async_stream::stream! {
@@ -95,8 +97,7 @@ async fn main() -> anyhow::Result<()> {
     let service = MakeServiceBuilder::new()
         .add_router(router)
         .message_limits(
-            MessageLimits::default()
-                .send_max_bytes(100) // 100 byte limit for responses
+            MessageLimits::default().send_max_bytes(100), // 100 byte limit for responses
         )
         .build();
 

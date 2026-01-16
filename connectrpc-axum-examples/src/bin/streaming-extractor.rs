@@ -6,15 +6,15 @@
 //! Run with: cargo run --bin streaming-extractor
 //! Test with: go test -v -run TestStreamingExtractor
 
+use axum::Router;
 use axum::extract::State;
 use axum::http::HeaderMap;
-use axum::Router;
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{EchoRequest, EchoResponse, HelloRequest, HelloResponse};
 use futures::{Stream, StreamExt};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Shared application state
 #[derive(Clone)]
@@ -29,9 +29,7 @@ fn extract_user_id(headers: &HeaderMap) -> Result<String, ConnectError> {
         .get("x-user-id")
         .and_then(|v| v.to_str().ok())
         .map(String::from)
-        .ok_or_else(|| {
-            ConnectError::new(Code::Unauthenticated, "Missing x-user-id header")
-        })
+        .ok_or_else(|| ConnectError::new(Code::Unauthenticated, "Missing x-user-id header"))
 }
 
 /// Server streaming handler with State and HeaderMap extractors
