@@ -11,6 +11,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Automatic protoc Download
+
+Use `.fetch_protoc()` to automatically download the protoc compiler. This is useful when you don't want to require protoc to be installed on the build machine.
+
+```rust
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    connectrpc_axum_build::compile_dir("proto")
+        .fetch_protoc(None, None)?  // Downloads protoc 31.1 to OUT_DIR
+        .compile()?;
+    Ok(())
+}
+```
+
+You can specify a custom version or download path:
+
+```rust
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    connectrpc_axum_build::compile_dir("proto")
+        .fetch_protoc(Some("30.0"), Some(Path::new("/tmp/protoc")))?
+        .compile()?;
+    Ok(())
+}
+```
+
+The downloaded binary is cached, so subsequent builds reuse it. The `PROTOC` environment variable is set automatically so prost-build uses the downloaded binary.
+
 ## Prost Configuration
 
 Use `.with_prost_config()` to customize `prost_build::Config`:

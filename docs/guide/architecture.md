@@ -278,20 +278,24 @@ The build crate uses a multi-pass approach to generate all necessary code.
 
 `CompileBuilder<Connect, Tonic, TonicClient>` uses phantom type parameters to enforce valid configurations at compile time:
 
-| Parameter | `Yes` | `No` |
-|-----------|-------|------|
+| Parameter | `Enabled` | `Disabled` |
+|-----------|-----------|------------|
 | `Connect` | Generate Connect handlers | Types + serde only |
 | `Tonic` | Generate tonic server stubs | No server stubs |
 | `TonicClient` | Generate tonic client stubs | No client stubs |
 
-Default state: `CompileBuilder<Yes, No, No>` (Connect handlers only).
+The marker types (`Enabled`/`Disabled`) implement the `BuildMarker` trait, enabling compile-time configuration validation.
+
+Default state: `CompileBuilder<Enabled, Disabled, Disabled>` (Connect handlers only).
 
 Method availability is enforced via trait bounds:
-- `no_handlers()` requires `Connect = Yes`, transitions to `Connect = No`
-- `with_tonic()` requires `Connect = Yes` and `Tonic = No`
-- `with_tonic_client()` requires `TonicClient = No`
+- `no_handlers()` requires `Connect = Enabled`, transitions to `Connect = Disabled`
+- `with_tonic()` requires `Connect = Enabled` and `Tonic = Disabled`
+- `with_tonic_client()` requires `TonicClient = Disabled`
 
 **Constraints:** `no_handlers()` and `with_tonic()` cannot be combined (enforced at compile time).
+
+**Protoc Fetching:** The `fetch_protoc(version, path)` method downloads a protoc binary to the specified path using the protoc-fetcher crate. This is useful for CI environments or when a system protoc is unavailable.
 
 ### Pass 1: Prost + Connect
 
