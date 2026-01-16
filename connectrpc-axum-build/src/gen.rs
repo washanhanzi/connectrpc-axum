@@ -823,3 +823,6 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
         buf.push_str(&routes_fn.to_string());
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -1,4 +1,4 @@
-use connectrpc_axum_build::r#gen::AxumConnectServiceGenerator;
+use super::AxumConnectServiceGenerator;
 use prost_build::{Method, Service, ServiceGenerator};
 
 #[test]

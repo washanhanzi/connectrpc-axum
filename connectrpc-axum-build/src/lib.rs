@@ -4,17 +4,17 @@ use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
 /// Code generation module for service builders.
-pub mod r#gen;
+mod r#gen;
 
 // ============================================================================
 // Type-state marker types for phantom data
 // ============================================================================
 
 /// Marker indicating a feature is enabled.
-pub struct Yes;
+pub struct Enabled;
 
 /// Marker indicating a feature is disabled.
-pub struct No;
+pub struct Disabled;
 
 /// Trait to convert type markers to runtime booleans.
 pub trait BoolMarker {
@@ -22,11 +22,11 @@ pub trait BoolMarker {
     const VALUE: bool;
 }
 
-impl BoolMarker for Yes {
+impl BoolMarker for Enabled {
     const VALUE: bool = true;
 }
 
-impl BoolMarker for No {
+impl BoolMarker for Disabled {
     const VALUE: bool = false;
 }
 
@@ -37,8 +37,8 @@ impl BoolMarker for No {
 /// - `Tonic`: Whether to generate Tonic gRPC server stubs (requires `tonic` feature)
 /// - `TonicClient`: Whether to generate Tonic gRPC client stubs (requires `tonic-client` feature)
 ///
-/// Default state is `CompileBuilder<Yes, No, No>` (Connect handlers only).
-pub struct CompileBuilder<Connect = Yes, Tonic = No, TonicClient = No> {
+/// Default state is `CompileBuilder<Enabled, Disabled, Disabled>` (Connect handlers only).
+pub struct CompileBuilder<Connect = Enabled, Tonic = Disabled, TonicClient = Disabled> {
     includes_dir: PathBuf,
     prost_config: Option<Box<dyn FnOnce(&mut prost_build::Config)>>,
     #[cfg(feature = "tonic")]
@@ -50,10 +50,10 @@ pub struct CompileBuilder<Connect = Yes, Tonic = No, TonicClient = No> {
 }
 
 // ============================================================================
-// Methods available when Connect = Yes
+// Methods available when Connect = Enabled
 // ============================================================================
 
-impl<T, TC> CompileBuilder<Yes, T, TC> {
+impl<T, TC> CompileBuilder<Enabled, T, TC> {
     /// Skip generating Connect service handlers.
     ///
     /// When called, only message types and serde implementations are generated.
@@ -74,7 +74,7 @@ impl<T, TC> CompileBuilder<Yes, T, TC> {
     ///     Ok(())
     /// }
     /// ```
-    pub fn no_handlers(self) -> CompileBuilder<No, No, TC> {
+    pub fn no_handlers(self) -> CompileBuilder<Disabled, Disabled, TC> {
         CompileBuilder {
             includes_dir: self.includes_dir,
             prost_config: self.prost_config,
@@ -88,16 +88,16 @@ impl<T, TC> CompileBuilder<Yes, T, TC> {
 }
 
 // ============================================================================
-// Methods available when Connect = Yes AND Tonic = No (enable tonic)
+// Methods available when Connect = Enabled AND Tonic = Disabled (enable tonic)
 // ============================================================================
 
 #[cfg(feature = "tonic")]
-impl<TC> CompileBuilder<Yes, No, TC> {
+impl<TC> CompileBuilder<Enabled, Disabled, TC> {
     /// Enable generating tonic gRPC server stubs (second pass) + tonic-compatible helpers in first pass.
     ///
     /// **Note:** After calling this, `no_handlers()` is no longer available since
     /// tonic server stubs depend on handler builders.
-    pub fn with_tonic(self) -> CompileBuilder<Yes, Yes, TC> {
+    pub fn with_tonic(self) -> CompileBuilder<Enabled, Enabled, TC> {
         CompileBuilder {
             includes_dir: self.includes_dir,
             prost_config: self.prost_config,
@@ -110,11 +110,11 @@ impl<TC> CompileBuilder<Yes, No, TC> {
 }
 
 // ============================================================================
-// Methods available when Tonic = Yes (configure tonic)
+// Methods available when Tonic = Enabled (configure tonic)
 // ============================================================================
 
 #[cfg(feature = "tonic")]
-impl<C, TC> CompileBuilder<C, Yes, TC> {
+impl<C, TC> CompileBuilder<C, Enabled, TC> {
     /// Customize the tonic prost builder with a configuration closure.
     ///
     /// The closure is applied before the required internal configuration. Internal settings
@@ -189,11 +189,11 @@ impl<C, T, TC> CompileBuilder<C, T, TC> {
 }
 
 // ============================================================================
-// Methods available when TonicClient = No (enable tonic client)
+// Methods available when TonicClient = Disabled (enable tonic client)
 // ============================================================================
 
 #[cfg(feature = "tonic-client")]
-impl<C, T> CompileBuilder<C, T, No> {
+impl<C, T> CompileBuilder<C, T, Disabled> {
     /// Enable generating tonic gRPC client stubs.
     ///
     /// Generates client code using `tonic-prost-build`. The client code is appended
@@ -211,7 +211,7 @@ impl<C, T> CompileBuilder<C, T, No> {
     ///     Ok(())
     /// }
     /// ```
-    pub fn with_tonic_client(self) -> CompileBuilder<C, T, Yes> {
+    pub fn with_tonic_client(self) -> CompileBuilder<C, T, Enabled> {
         CompileBuilder {
             includes_dir: self.includes_dir,
             prost_config: self.prost_config,
@@ -224,11 +224,11 @@ impl<C, T> CompileBuilder<C, T, No> {
 }
 
 // ============================================================================
-// Methods available when TonicClient = Yes (configure tonic client)
+// Methods available when TonicClient = Enabled (configure tonic client)
 // ============================================================================
 
 #[cfg(feature = "tonic-client")]
-impl<C, T> CompileBuilder<C, T, Yes> {
+impl<C, T> CompileBuilder<C, T, Enabled> {
     /// Customize the tonic prost builder for client generation.
     ///
     /// The closure is applied before internal configuration. Internal settings
