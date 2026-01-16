@@ -7,7 +7,7 @@
 //! Test with Go client: go test -v -run TestUnaryErrorMetadata
 
 use connectrpc_axum::prelude::*;
-use connectrpc_axum_examples::{helloworldservice, HelloRequest, HelloResponse};
+use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
 use std::net::SocketAddr;
 
 /// Handler that returns errors with custom metadata based on input
@@ -25,16 +25,21 @@ async fn say_hello(
 
         // Return error with protocol headers that should appear (they're in error metadata)
         "error-with-protocol-headers" => {
-            Err(ConnectError::new(Code::InvalidArgument, "error with protocol headers")
-                .with_meta("x-custom", "should-appear")
-                .with_meta("content-type", "should-appear-too") // Not filtered for unary
-                .with_meta("grpc-status", "should-appear-too")) // Not filtered for unary
+            Err(
+                ConnectError::new(Code::InvalidArgument, "error with protocol headers")
+                    .with_meta("x-custom", "should-appear")
+                    .with_meta("content-type", "should-appear-too") // Not filtered for unary
+                    .with_meta("grpc-status", "should-appear-too"),
+            ) // Not filtered for unary
         }
 
         // Return error with multiple values for same header
-        "error-multi-value" => Err(ConnectError::new(Code::FailedPrecondition, "multi-value error")
-            .with_meta("x-multi", "value1")
-            .with_meta("x-multi", "value2")),
+        "error-multi-value" => Err(ConnectError::new(
+            Code::FailedPrecondition,
+            "multi-value error",
+        )
+        .with_meta("x-multi", "value1")
+        .with_meta("x-multi", "value2")),
 
         // Return error without metadata
         "error-no-meta" => Err(ConnectError::new(Code::NotFound, "resource not found")),

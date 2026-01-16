@@ -1,16 +1,16 @@
 //! Response types for Connect.
 use crate::context::{CompressionEncoding, ConnectContext};
 use crate::error::{
-    internal_error_end_stream_frame, internal_error_response, internal_error_streaming_response,
-    ConnectError,
+    ConnectError, internal_error_end_stream_frame, internal_error_response,
+    internal_error_streaming_response,
 };
 use crate::pipeline::{
-    build_end_stream_frame, compress_bytes, encode_json, encode_proto, set_connect_content_encoding,
-    wrap_envelope,
+    build_end_stream_frame, compress_bytes, encode_json, encode_proto,
+    set_connect_content_encoding, wrap_envelope,
 };
 use axum::{
     body::{Body, Bytes},
-    http::{header, HeaderValue, StatusCode},
+    http::{HeaderValue, StatusCode, header},
     response::Response,
 };
 use futures::Stream;
@@ -53,43 +53,24 @@ where
             }
         };
 
-        // 2. Compress if beneficial
-        let (body, was_compressed) = match compress_bytes(
-            body,
-            ctx.compression.response_encoding,
-            ctx.compression.min_compress_bytes,
-        ) {
-            Ok(result) => result,
-            Err(_) => return internal_error_response(ctx.protocol.error_content_type()),
-        };
-
-        // 3. Check send size limit (following connect-go behavior)
+        // 2. Check send size limit (following connect-go behavior)
+        // Note: For unary RPCs, Tower's CompressionLayer handles HTTP body compression,
+        // so we check the uncompressed size here. Tower will compress the response body.
         if let Some(max) = ctx.limits.get_send_max_bytes() {
             if body.len() > max {
-                let msg = if was_compressed {
-                    format!("compressed message size {} exceeds sendMaxBytes {}", body.len(), max)
-                } else {
-                    format!("message size {} exceeds sendMaxBytes {}", body.len(), max)
-                };
+                let msg = format!("message size {} exceeds sendMaxBytes {}", body.len(), max);
                 let err = ConnectError::new(crate::error::Code::ResourceExhausted, msg);
                 return err.into_response_with_protocol(ctx.protocol);
             }
         }
 
-        // 4. Build HTTP response
-        let mut builder = Response::builder()
-            .status(StatusCode::OK)
-            .header(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static(ctx.protocol.response_content_type()),
-            );
-
-        if was_compressed {
-            builder = builder.header(
-                header::CONTENT_ENCODING,
-                HeaderValue::from_static(ctx.compression.response_encoding.as_str()),
-            );
-        }
+        // 3. Build HTTP response
+        // Note: Compression is handled by Tower's CompressionLayer for unary RPCs.
+        // We don't set Content-Encoding here; Tower will add it based on Accept-Encoding.
+        let builder = Response::builder().status(StatusCode::OK).header(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static(ctx.protocol.response_content_type()),
+        );
 
         builder
             .body(Body::from(body))
@@ -103,6 +84,13 @@ where
     pub(crate) fn into_streaming_response_with_context(self, ctx: &ConnectContext) -> Response {
         let content_type = ctx.protocol.streaming_response_content_type();
 
+        // Get envelope compression settings (for streaming, this should be Some)
+        let response_encoding = ctx
+            .compression
+            .envelope
+            .map(|e| e.response)
+            .unwrap_or(CompressionEncoding::Identity);
+
         // 1. Encode the message
         let payload: Bytes = if ctx.protocol.is_proto() {
             Bytes::from(encode_proto(&self.0))
@@ -113,10 +101,10 @@ where
             }
         };
 
-        // 2. Compress if beneficial
+        // 2. Compress if beneficial (per-envelope compression for streaming)
         let (data, compressed) = match compress_bytes(
             payload,
-            ctx.compression.response_encoding,
+            response_encoding,
             ctx.compression.min_compress_bytes,
         ) {
             Ok(result) => result,
@@ -127,7 +115,11 @@ where
         if let Some(max) = ctx.limits.get_send_max_bytes() {
             if data.len() > max {
                 let msg = if compressed {
-                    format!("compressed message size {} exceeds sendMaxBytes {}", data.len(), max)
+                    format!(
+                        "compressed message size {} exceeds sendMaxBytes {}",
+                        data.len(),
+                        max
+                    )
                 } else {
                     format!("message size {} exceeds sendMaxBytes {}", data.len(), max)
                 };
@@ -150,7 +142,7 @@ where
         let builder = Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
-        let builder = set_connect_content_encoding(builder, ctx.compression.response_encoding);
+        let builder = set_connect_content_encoding(builder, response_encoding);
 
         builder
             .body(Body::from(body))
@@ -197,10 +189,22 @@ where
     /// Encode the streaming response using pipeline context.
     /// This is called by handler wrappers for streaming responses with compression support.
     pub(crate) fn into_response_with_context(self, ctx: &ConnectContext) -> Response {
+        // Get envelope compression settings (for streaming, this should be Some)
+        let response_encoding = ctx
+            .compression
+            .envelope
+            .map(|e| e.response)
+            .unwrap_or(CompressionEncoding::Identity);
+
+        eprintln!(
+            "[DEBUG] StreamBody::into_response_with_context: send_max_bytes={:?}",
+            ctx.limits.get_send_max_bytes()
+        );
+
         self.into_response_with_context_inner(
             ctx.protocol.is_proto(),
             ctx.protocol.streaming_response_content_type(),
-            ctx.compression.response_encoding,
+            response_encoding,
             ctx.compression.min_compress_bytes,
             ctx.limits.get_send_max_bytes(),
         )
@@ -216,8 +220,8 @@ where
     ) -> Response {
         use crate::error::Code;
         use futures::StreamExt;
-        use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
 
         // Track if an error was sent (for EndStream handling)
         let error_sent = Arc::new(AtomicBool::new(false));
@@ -235,28 +239,34 @@ where
                         match encode_json(&msg) {
                             Ok(bytes) => Bytes::from(bytes),
                             Err(_) => {
-                                return (Bytes::from(internal_error_end_stream_frame()), true)
+                                return (Bytes::from(internal_error_end_stream_frame()), true);
                             }
                         }
                     };
 
                     // 2. Compress if beneficial (per-message compression)
-                    let (data, compressed) = match compress_bytes(
-                        payload,
-                        response_encoding,
-                        min_compress_bytes,
-                    ) {
-                        Ok(result) => result,
-                        Err(_) => {
-                            return (Bytes::from(internal_error_end_stream_frame()), true)
-                        }
-                    };
+                    let (data, compressed) =
+                        match compress_bytes(payload, response_encoding, min_compress_bytes) {
+                            Ok(result) => result,
+                            Err(_) => {
+                                return (Bytes::from(internal_error_end_stream_frame()), true);
+                            }
+                        };
 
                     // 3. Check send size limit (following connect-go behavior)
+                    eprintln!(
+                        "[DEBUG] Streaming message: size={}, send_max_bytes={:?}",
+                        data.len(),
+                        send_max_bytes
+                    );
                     if let Some(max) = send_max_bytes {
                         if data.len() > max {
                             let msg = if compressed {
-                                format!("compressed message size {} exceeds sendMaxBytes {}", data.len(), max)
+                                format!(
+                                    "compressed message size {} exceeds sendMaxBytes {}",
+                                    data.len(),
+                                    max
+                                )
                             } else {
                                 format!("message size {} exceeds sendMaxBytes {}", data.len(), max)
                             };

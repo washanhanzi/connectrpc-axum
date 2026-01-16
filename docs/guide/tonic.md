@@ -111,3 +111,27 @@ Requests are routed by `Content-Type` header:
 
 - `application/grpc*` → Tonic gRPC server (includes gRPC-Web)
 - Otherwise → Axum (Connect protocol)
+
+## gRPC Compression
+
+Tonic does not enable gzip compression by default. To enable it on the server, configure the generated gRPC server before adding it to `MakeServiceBuilder`:
+
+```rust
+use tonic::codec::CompressionEncoding;
+
+let grpc_server = hello_world_service_server::HelloWorldServiceServer::new(tonic_service)
+    .accept_compressed(CompressionEncoding::Gzip)
+    .send_compressed(CompressionEncoding::Gzip);
+```
+
+If you want `MakeServiceBuilder` to apply a transformation, use `add_grpc_service_with`:
+
+```rust
+let app = MakeServiceBuilder::new()
+    .add_router(connect_router)
+    .add_grpc_service_with(grpc_server, |svc| {
+        svc.accept_compressed(CompressionEncoding::Gzip)
+            .send_compressed(CompressionEncoding::Gzip)
+    })
+    .build();
+```

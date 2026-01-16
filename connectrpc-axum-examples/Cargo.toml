@@ -13,6 +13,9 @@ tonic = [
   "dep:tonic-prost",
 ]
 
+# Enable all compression algorithms for testing
+compression-full = ["connectrpc-axum/compression-full"]
+
 # Example 1: Pure ConnectRPC unary
 [[bin]]
 name = "connect-unary"
@@ -86,6 +89,24 @@ path = "src/bin/error-details.rs"
 [[bin]]
 name = "axum-router"
 path = "src/bin/axum-router.rs"
+
+# Streaming compression with all algorithms (deflate, br, zstd)
+[[bin]]
+name = "streaming-compression-algos"
+path = "src/bin/streaming-compression-algos.rs"
+required-features = ["compression-full"]
+
+# Client streaming decompression with all algorithms (deflate, br, zstd)
+[[bin]]
+name = "client-streaming-compression-algos"
+path = "src/bin/client-streaming-compression-algos.rs"
+required-features = ["compression-full"]
+
+# Unary compression with all algorithms (deflate, br, zstd)
+[[bin]]
+name = "unary-compression-algos"
+path = "src/bin/unary-compression-algos.rs"
+required-features = ["compression-full"]
 
 [dependencies]
 # Application dependency for error handling

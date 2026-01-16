@@ -7,10 +7,11 @@ This page provides a technical overview of the connectrpc-axum library internals
 connectrpc-axum bridges the Connect protocol with Axum's handler model. The core design principle is **separation of concerns**: protocol parsing happens in middleware, message encoding/decoding happens in extractors and response types, and your handlers stay focused on business logic.
 
 ```
-HTTP Request → ConnectLayer → Handler(ConnectRequest<T>) → ConnectResponse<T> → HTTP Response
-                    ↓                     ↓
-              Parse headers,        Decode body,
-              detect protocol       encode response
+HTTP Request → BridgeLayer → CompressionLayer → ConnectLayer → Handler → HTTP Response
+                   ↓               ↓                 ↓
+             Size limits,    HTTP body          Parse headers,
+             streaming       compression        detect protocol
+             detection       (unary only)
 ```
 
 ## Request Lifecycle
@@ -32,15 +33,64 @@ For mixed Connect/gRPC deployments, `ContentTypeSwitch` routes by `Content-Type`
 - `application/grpc*` → Tonic gRPC server
 - Otherwise → Axum routes (Connect protocol)
 
-### 2. Middleware Processing (ConnectLayer)
+gRPC compression is configured on the tonic service before it is added to `MakeServiceBuilder`. For gzip, enable it on the generated gRPC server:
 
-Before your handler runs, `ConnectLayer` parses headers and builds a `ConnectContext`:
+```rust
+use tonic::codec::CompressionEncoding;
 
+let grpc_server = hello_world_service_server::HelloWorldServiceServer::new(tonic_service)
+    .accept_compressed(CompressionEncoding::Gzip)
+    .send_compressed(CompressionEncoding::Gzip);
+```
+
+You can also apply this via `MakeServiceBuilder::add_grpc_service_with`:
+
+```rust
+let app = MakeServiceBuilder::new()
+    .add_router(connect_router)
+    .add_grpc_service_with(grpc_server, |svc| {
+        svc.accept_compressed(CompressionEncoding::Gzip)
+            .send_compressed(CompressionEncoding::Gzip)
+    })
+    .build();
+```
+
+### 2. Layer Stack Processing
+
+The library uses a three-layer middleware stack when compression is enabled:
+
+```
+┌─────────────────────────────────────────────┐
+│              BridgeLayer                    │  ← Size limit check, streaming detection
+│  ┌───────────────────────────────────────┐  │
+│  │     Tower CompressionLayer            │  │  ← HTTP body compression (unary only)
+│  │  ┌─────────────────────────────────┐  │  │
+│  │  │         ConnectLayer            │  │  │  ← Protocol detection, context
+│  │  │  ┌───────────────────────────┐  │  │  │
+│  │  │  │          Handler          │  │  │  │  ← Your RPC handlers
+│  │  │  └───────────────────────────┘  │  │  │
+│  │  └─────────────────────────────────┘  │  │
+│  └───────────────────────────────────────┘  │
+└─────────────────────────────────────────────┘
+```
+
+**BridgeLayer** (outermost):
+- Checks `Content-Length` against receive size limits (on compressed body)
+- Detects Connect streaming requests (`application/connect+*`)
+- For streaming: sets `Accept-Encoding: identity` to prevent Tower from compressing responses
+- For streaming: removes `Content-Encoding` to prevent Tower from decompressing request body
+
+**Tower CompressionLayer** (middle):
+- Standard HTTP body compression for unary RPCs
+- Uses `Accept-Encoding`/`Content-Encoding` headers
+- Skipped for streaming (BridgeLayer sets identity encoding)
+
+**ConnectLayer** (innermost):
 - Parses `Content-Type` to determine encoding (JSON/Protobuf)
 - Parses `?encoding=` query param for GET requests
 - Validates `Connect-Protocol-Version` header when required
-- Extracts compression encoding from headers
-- Stores the `ConnectContext` in request extensions
+- Parses timeout from `Connect-Timeout-Ms` header
+- Builds `ConnectContext` and stores it in request extensions
 
 ### 3. Handler Execution
 
@@ -80,16 +130,25 @@ The `pipeline.rs` module provides the low-level functions used by extractors and
 
 These are the types you interact with when building services:
 
+### Layer Types
+
+| Type | Purpose |
+|------|---------|
+| `BridgeLayer` | Bridges Tower compression with Connect streaming; enforces size limits |
+| `BridgeService` | Service wrapper created by `BridgeLayer` |
+| `ConnectLayer` | Protocol detection, context building, timeout handling |
+| `ConnectService` | Service wrapper created by `ConnectLayer` |
+
 ### Context Types
 
 | Type | Purpose |
 |------|---------|
 | `ConnectContext` | Protocol, compression, timeout, limits - set by layer, read by handlers |
-| `RequestProtocol` | Enum identifying Connect variant (Unary/Stream × Json/Proto) |
+| `RequestProtocol` | Enum identifying Connect variant (Unary/Stream x Json/Proto) |
 | `MessageLimits` | Receive/send size limits (default: 4MB receive, unlimited send) |
-| `Codec` | Trait for compression/decompression (implement for custom algorithms) |
-| `GzipCodec` | Built-in gzip compression codec |
-| `IdentityCodec` | Built-in no-op codec (zero-copy passthrough) |
+| `CompressionConfig` | Compression settings (default: min_bytes=0, matching connect-go) |
+| `CompressionEncoding` | Supported encodings: `Gzip`, `Deflate`, `Brotli`, `Zstd`, or `Identity` |
+| `EnvelopeCompression` | Per-envelope compression settings for streaming RPCs |
 
 ### Request/Response Types
 
@@ -202,11 +261,18 @@ connectrpc-axum-examples/ # Examples and test clients
 | Module | Purpose |
 |--------|---------|
 | `handler.rs` | Handler wrappers implementing `axum::handler::Handler` |
-| `layer.rs` | `ConnectLayer` middleware |
+| `layer/` | Middleware layers (see below) |
 | `error.rs` | `ConnectError`, `ErrorDetail`, and `Code` types |
 | `pipeline.rs` | Request/response primitives (decode, encode, compress) |
 | `service_builder.rs` | Multi-service router composition |
 | `tonic/` | Optional gRPC/Tonic interop module |
+
+### layer/ module
+
+| Module | Purpose |
+|--------|---------|
+| `bridge.rs` | `BridgeLayer`/`BridgeService` - bridges Tower compression with Connect streaming |
+| `connect.rs` | `ConnectLayer`/`ConnectService` - protocol detection, context building, timeouts |
 
 ### tonic/ module (with `tonic` feature)
 
@@ -239,29 +305,37 @@ Each has corresponding factory traits (`IntoFactory`, `IntoStreamFactory`, `Into
 | Module | Purpose |
 |--------|---------|
 | `protocol.rs` | `RequestProtocol` enum and detection |
-| `compression.rs` | `Codec` trait, `GzipCodec`, `IdentityCodec`, compression functions |
+| `envelope_compression.rs` | `Codec` trait and per-envelope compression for streaming RPCs |
 | `limit.rs` | Receive and send message size limits |
 | `timeout.rs` | Request timeout handling |
 
 #### Compression Architecture
 
-The `compression.rs` module provides a `Codec` trait for compression/decompression:
+The Connect protocol uses two different compression mechanisms depending on the RPC type:
 
-```rust
-pub trait Codec: Send + Sync + 'static {
-    fn name(&self) -> &'static str;
-    fn compress(&self, data: Bytes) -> io::Result<Bytes>;
-    fn decompress(&self, data: Bytes) -> io::Result<Bytes>;
-}
-```
+**Unary RPCs** - HTTP Body Compression (Tower middleware):
+- Uses standard `Accept-Encoding` / `Content-Encoding` headers
+- Handled by Tower's `CompressionLayer` (gzip, br, deflate, zstd)
+- `BridgeLayer` checks compressed body size before decompression
+- No Connect-specific code needed
 
-Built-in implementations:
-- `IdentityCodec`: Zero-copy passthrough (no compression)
-- `GzipCodec`: Gzip compression via flate2
+**Streaming RPCs** - Per-Envelope Compression (connectrpc-axum):
+- Uses `Connect-Accept-Encoding` / `Connect-Content-Encoding` headers
+- Each message envelope is individually compressed
+- `BridgeLayer` prevents Tower from compressing/decompressing streaming bodies
+- `envelope_compression.rs` provides `Codec` trait and built-in codecs
 
-The `default_codec()` function returns the appropriate codec for a `CompressionEncoding`. Custom codecs (zstd, brotli, etc.) can implement the `Codec` trait.
+**Built-in Codecs** (for envelope compression):
+- `GzipCodec` - always available
+- `DeflateCodec` - requires `compression-deflate` feature
+- `BrotliCodec` - requires `compression-br` feature
+- `ZstdCodec` - requires `compression-zstd` feature
 
-Response compression negotiation follows RFC 7231: `negotiate_response_encoding()` parses `Accept-Encoding` headers respecting client preference order and `q=0` (not acceptable) values.
+**Configuration** (matching connect-go):
+- Default `min_bytes` is 0 (compress everything when compression is requested)
+- `CompressionConfig::disabled()` sets threshold to `usize::MAX`
+
+Response compression negotiation follows connect-go's approach: `negotiate_response_encoding()` uses first-match-wins (client preference order) and respects `q=0` (not acceptable) values.
 
 ### message/ module
 

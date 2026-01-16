@@ -28,8 +28,21 @@ tokio-stream = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }
 tonic-prost = { workspace = true, optional = true }
 tower = { workspace = true, features = ["full"] }
+tower-http = { workspace = true, features = ["compression-gzip", "decompression-gzip", "timeout", "limit"] }
 tracing = { workspace = true }
 flate2 = { workspace = true }
+brotli = { workspace = true, optional = true }
+zstd = { workspace = true, optional = true }
 
 [features]
+default = []
 tonic = ["dep:tokio-stream", "dep:tonic", "dep:tonic-prost"]
+
+# Compression algorithm features
+# Each feature enables both tower-http layer compression and envelope streaming compression
+compression-deflate = ["tower-http/compression-deflate", "tower-http/decompression-deflate"]
+compression-br = ["tower-http/compression-br", "tower-http/decompression-br", "dep:brotli"]
+compression-zstd = ["tower-http/compression-zstd", "tower-http/decompression-zstd", "dep:zstd"]
+
+# Enable all compression algorithms
+compression-full = ["compression-deflate", "compression-br", "compression-zstd"]

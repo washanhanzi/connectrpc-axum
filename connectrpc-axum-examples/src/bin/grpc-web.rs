@@ -10,10 +10,10 @@
 
 use axum::extract::State;
 use connectrpc_axum::prelude::*;
-use connectrpc_axum_examples::{helloworldservice, HelloRequest, HelloResponse};
+use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
 use futures::Stream;
 use std::net::SocketAddr;
-use std::sync::{atomic::AtomicUsize, Arc};
+use std::sync::{Arc, atomic::AtomicUsize};
 
 #[derive(Clone, Default)]
 struct AppState {

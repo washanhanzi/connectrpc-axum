@@ -56,10 +56,7 @@ fn test_no_tonic_codegen() {
         buf.contains("HelloWorldServiceBuilder"),
         "Should contain HelloWorldServiceBuilder"
     );
-    assert!(
-        buf.contains("say_hello"),
-        "Should contain say_hello method"
-    );
+    assert!(buf.contains("say_hello"), "Should contain say_hello method");
     assert!(
         buf.contains("ConnectHandlerWrapper"),
         "Should contain ConnectHandlerWrapper for unary methods"

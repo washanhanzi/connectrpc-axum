@@ -50,7 +50,9 @@ async fn say_hello(
     State(state): State<AppState>,
     ConnectRequest(req): ConnectRequest<HelloRequest>,
 ) -> Result<ConnectResponse<HelloResponse>, ConnectError> {
-    let count = state.counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let count = state
+        .counter
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let name = req.name.unwrap_or_else(|| "World".to_string());
 
     Ok(ConnectResponse::new(HelloResponse {

@@ -183,14 +183,8 @@ mod tests {
 
     #[test]
     fn test_parse_timeout_ms_valid() {
-        assert_eq!(
-            parse_timeout_ms("1000"),
-            Some(Duration::from_millis(1000))
-        );
-        assert_eq!(
-            parse_timeout_ms("5000"),
-            Some(Duration::from_millis(5000))
-        );
+        assert_eq!(parse_timeout_ms("1000"), Some(Duration::from_millis(1000)));
+        assert_eq!(parse_timeout_ms("5000"), Some(Duration::from_millis(5000)));
     }
 
     #[test]

@@ -49,7 +49,7 @@ export default defineConfig({
                 { text: 'Compression', link: '/guide/compression' }
               ]
             },
-            { text: 'HTTP Endpoints', link: '/guide/http-endpoints' },
+            { text: 'Axum Router', link: '/guide/axum-router' },
             {
               text: 'Tonic gRPC',
               link: '/guide/tonic',

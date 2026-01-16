@@ -50,6 +50,14 @@ axum::serve(listener, tower::make::Shared::new(service)).await?;
 
 ## Configuration Options
 
+Configuration options apply to:
+- `add_router()` — Connect routers
+- `add_axum_router()` — Axum routers with shared config
+
+Configuration options do **not** apply to:
+- `add_axum_router_raw()` — Axum routers without any layers
+- `add_grpc_service()` — gRPC services (configure compression via Tonic directly)
+
 ### Message Limits
 
 See [Message Limits](./limits.md) for configuring receive and send size limits.
@@ -75,35 +83,8 @@ MakeServiceBuilder::new()
 
 ## Adding gRPC Support
 
-With the `tonic` feature, serve both Connect and gRPC on the same port:
+See [Tonic gRPC Integration](./tonic.md) for serving both Connect and gRPC on the same port.
 
-```rust
-// Use TonicCompatibleBuilder for dual-protocol support
-let (connect_router, grpc_service) =
-    helloworldservice::HelloWorldServiceTonicCompatibleBuilder::new()
-        .say_hello(say_hello)
-        .with_state(AppState::default())
-        .build();
+## Adding Axum Routers
 
-let service = MakeServiceBuilder::new()
-    .add_router(connect_router)
-    .add_grpc_service(grpc_service)  // Routes application/grpc* to Tonic
-    .timeout(Duration::from_secs(30))
-    .build();
-```
-
-Requests are routed by `Content-Type`:
-- `application/grpc*` → Tonic gRPC server
-- Otherwise → Axum routes (Connect protocol)
-
-### Disabling FromRequestParts Extraction
-
-By default, `FromRequestPartsLayer` is applied to gRPC services to enable axum's `FromRequestParts` extractors in handlers. If your handlers don't use extractors, disable this to avoid the overhead:
-
-```rust
-let service = MakeServiceBuilder::new()
-    .add_router(connect_router)
-    .add_grpc_service(grpc_service)
-    .without_from_request_parts()  // Disable extractor support
-    .build();
-```
+See [Axum Router Integration](./axum-router.md) for combining plain HTTP routes with ConnectRPC services.

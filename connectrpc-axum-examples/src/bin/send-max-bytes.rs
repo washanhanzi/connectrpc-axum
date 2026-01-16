@@ -11,6 +11,9 @@ use connectrpc_axum::{MakeServiceBuilder, MessageLimits};
 use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
 use std::net::SocketAddr;
 
+// Base64 string with high entropy to avoid compression dropping below send_max_bytes.
+const LARGE_MESSAGE: &str = "wE+paSZYML1xNsjnrVQYAMjU/Wa4dp9wbyn76pKj1/rsl+4n8aivMK4X0tjJN9ViHf+m6YxLLQ5VstvHcgoXI3YV2VrgasLpZ8OliVkHREsl8D6Kwnr+1OAT5J1oKm/t2AJBfuHls/+JhJ6FlZFosMtF66H70yqdqSYPmkrAebksl9G/uY+bRLSIUPT0Sx8XbtLhtGUs";
+
 /// Handler that generates a response based on the request name:
 /// - "small": Returns a small response (< 100 bytes)
 /// - "large": Returns a large response (> 100 bytes) - should trigger ResourceExhausted
@@ -23,8 +26,8 @@ async fn say_hello(
     let message = match name.as_str() {
         "small" => "Hi".to_string(),
         "large" => {
-            // Generate a response larger than 100 bytes
-            "X".repeat(200)
+            // High-entropy payload so compression won't drop below the 100-byte limit.
+            LARGE_MESSAGE.to_string()
         }
         _ => format!("Hello, {}!", name),
     };
@@ -38,8 +41,10 @@ async fn say_hello(
 /// Streaming handler that generates messages of varying sizes
 async fn say_hello_stream(
     ConnectRequest(req): ConnectRequest<HelloRequest>,
-) -> Result<ConnectResponse<StreamBody<impl futures::Stream<Item = Result<HelloResponse, ConnectError>>>>, ConnectError>
-{
+) -> Result<
+    ConnectResponse<StreamBody<impl futures::Stream<Item = Result<HelloResponse, ConnectError>>>>,
+    ConnectError,
+> {
     let name = req.name.unwrap_or_else(|| "World".to_string());
 
     let stream = async_stream::stream! {
@@ -52,7 +57,7 @@ async fn say_hello_stream(
                 });
                 // Second message is large (should trigger ResourceExhausted)
                 yield Ok(HelloResponse {
-                    message: "X".repeat(200),
+                    message: LARGE_MESSAGE.to_string(),
                     response_type: None,
                 });
                 // This should not be sent
@@ -95,8 +100,7 @@ async fn main() -> anyhow::Result<()> {
     let service = MakeServiceBuilder::new()
         .add_router(router)
         .message_limits(
-            MessageLimits::default()
-                .send_max_bytes(100) // 100 byte limit for responses
+            MessageLimits::default().send_max_bytes(100), // 100 byte limit for responses
         )
         .build();
 

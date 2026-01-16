@@ -11,30 +11,84 @@ pub mod tonic;
 // Re-export key types at the crate root for convenience
 #[cfg(feature = "tonic")]
 pub use crate::tonic::{
-    ContentTypeSwitch, TonicCompatible,
-    // Handler types from tonic module
-    post_tonic_unary, post_tonic_stream, post_tonic_client_stream, post_tonic_bidi_stream,
-    unimplemented_boxed_call, unimplemented_boxed_stream_call,
-    unimplemented_boxed_client_stream_call, unimplemented_boxed_bidi_stream_call,
-    BoxedCall, BoxedStreamCall, BoxedClientStreamCall, BoxedBidiStreamCall, BoxedStream,
-    IntoFactory, IntoStreamFactory, IntoClientStreamFactory, IntoBidiStreamFactory,
-    TonicCompatibleHandlerWrapper, TonicCompatibleStreamHandlerWrapper,
-    TonicCompatibleClientStreamHandlerWrapper, TonicCompatibleBidiStreamHandlerWrapper,
+    BoxedBidiStreamCall,
+    BoxedCall,
+    BoxedClientStreamCall,
+    BoxedStream,
+    BoxedStreamCall,
+    CapturedParts,
+    ContentTypeSwitch,
+    FromRequestPartsLayer,
+    IntoBidiStreamFactory,
+    IntoClientStreamFactory,
+    IntoFactory,
+    IntoStreamFactory,
     // Parts types
-    RequestContext, CapturedParts, FromRequestPartsLayer,
+    RequestContext,
+    TonicCompatible,
+    TonicCompatibleBidiStreamHandlerWrapper,
+    TonicCompatibleClientStreamHandlerWrapper,
+    TonicCompatibleHandlerWrapper,
+    TonicCompatibleStreamHandlerWrapper,
+    post_tonic_bidi_stream,
+    post_tonic_client_stream,
+    post_tonic_stream,
+    // Handler types from tonic module
+    post_tonic_unary,
+    unimplemented_boxed_bidi_stream_call,
+    unimplemented_boxed_call,
+    unimplemented_boxed_client_stream_call,
+    unimplemented_boxed_stream_call,
 };
 // Re-export from context module
 pub use context::{
-    compress, compute_effective_timeout, decompress, default_codec, detect_protocol,
-    negotiate_response_encoding, parse_timeout, Codec, Compression, CompressionConfig,
-    CompressionContext, CompressionEncoding, ConnectTimeout, ConnectContext, GzipCodec, IdentityCodec,
-    MessageLimits, RequestProtocol, ContextError, CONNECT_TIMEOUT_MS_HEADER,
+    BoxedCodec,
+    // Compression header constants
+    CONNECT_ACCEPT_ENCODING,
+    CONNECT_CONTENT_ENCODING,
+    CONNECT_TIMEOUT_MS_HEADER,
+    // Codec trait and boxed type
+    Codec,
+    // Compression types
+    CompressionConfig,
+    CompressionContext,
+    CompressionEncoding,
+    CompressionLevel,
+    ConnectContext,
+    ConnectTimeout,
+    // Errors
+    ContextError,
     DEFAULT_MAX_MESSAGE_SIZE,
+    // Envelope compression for streaming
+    EnvelopeCompression,
+    // Built-in codecs
+    GzipCodec,
+    // Limits
+    MessageLimits,
+    RequestProtocol,
+    // Compression functions
+    compress_bytes,
+    // Timeout
+    compute_effective_timeout,
+    decompress_bytes,
+    // Protocol and context
+    detect_protocol,
+    negotiate_response_encoding,
+    parse_envelope_compression,
+    parse_timeout,
+    resolve_codec,
 };
+// Feature-gated codec exports
+#[cfg(feature = "compression-br")]
+pub use context::BrotliCodec;
+#[cfg(feature = "compression-deflate")]
+pub use context::DeflateCodec;
+#[cfg(feature = "compression-zstd")]
+pub use context::ZstdCodec;
 // Re-export from pipeline module
+pub use handler::{ConnectHandler, ConnectHandlerWrapper, get_connect, post_connect};
+pub use layer::{BridgeLayer, BridgeService, ConnectLayer, ConnectService};
 pub use pipeline::{RequestPipeline, ResponsePipeline};
-pub use handler::{get_connect, post_connect, ConnectHandler, ConnectHandlerWrapper};
-pub use layer::{ConnectLayer, ConnectService};
 pub use service_builder::MakeServiceBuilder;
 
 // Re-export several crates
@@ -49,28 +103,63 @@ pub use prelude::*;
 pub mod prelude {
     //! A prelude for `axum-connect` providing the most common types.
     pub use crate::context::{
-        compress, compute_effective_timeout, decompress, default_codec, detect_protocol,
-        negotiate_response_encoding, parse_timeout, Codec, Compression, CompressionConfig,
-        CompressionContext, CompressionEncoding, ConnectTimeout, ConnectContext, GzipCodec,
-        IdentityCodec, MessageLimits, RequestProtocol, ContextError,
-        CONNECT_TIMEOUT_MS_HEADER, DEFAULT_MAX_MESSAGE_SIZE,
+        BoxedCodec,
+        // Compression header constants
+        CONNECT_ACCEPT_ENCODING,
+        CONNECT_CONTENT_ENCODING,
+        CONNECT_TIMEOUT_MS_HEADER,
+        // Codec trait and boxed type
+        Codec,
+        CompressionConfig,
+        CompressionContext,
+        CompressionEncoding,
+        CompressionLevel,
+        ConnectContext,
+        ConnectTimeout,
+        // Errors
+        ContextError,
+        DEFAULT_MAX_MESSAGE_SIZE,
+        // Compression types
+        EnvelopeCompression,
+        // Built-in codecs
+        GzipCodec,
+        // Limits
+        MessageLimits,
+        RequestProtocol,
+        // Compression functions
+        compress_bytes,
+        // Timeout
+        compute_effective_timeout,
+        decompress_bytes,
+        // Protocol and context
+        detect_protocol,
+        negotiate_response_encoding,
+        parse_timeout,
+        resolve_codec,
     };
-    pub use crate::pipeline::{RequestPipeline, ResponsePipeline};
+    // Feature-gated codec exports for prelude
+    #[cfg(feature = "compression-br")]
+    pub use crate::context::BrotliCodec;
+    #[cfg(feature = "compression-deflate")]
+    pub use crate::context::DeflateCodec;
+    #[cfg(feature = "compression-zstd")]
+    pub use crate::context::ZstdCodec;
+
     pub use crate::error::{Code, ConnectError, ErrorDetail};
+    pub use crate::handler::{ConnectHandler, ConnectHandlerWrapper, get_connect, post_connect};
+    pub use crate::layer::{BridgeLayer, BridgeService, ConnectLayer, ConnectService};
+    pub use crate::message::{ConnectRequest, ConnectResponse, StreamBody, Streaming};
+    pub use crate::pipeline::{RequestPipeline, ResponsePipeline};
+    pub use crate::service_builder::MakeServiceBuilder;
     #[cfg(feature = "tonic")]
     pub use crate::tonic::{
-        post_tonic_unary, post_tonic_stream, post_tonic_client_stream, post_tonic_bidi_stream,
-        unimplemented_boxed_call, unimplemented_boxed_stream_call,
-        unimplemented_boxed_client_stream_call, unimplemented_boxed_bidi_stream_call,
-        BoxedCall, BoxedStreamCall, BoxedClientStreamCall, BoxedBidiStreamCall, BoxedStream,
-        IntoFactory, IntoStreamFactory, IntoClientStreamFactory, IntoBidiStreamFactory,
-        TonicCompatibleHandlerWrapper, TonicCompatibleStreamHandlerWrapper,
-        TonicCompatibleClientStreamHandlerWrapper, TonicCompatibleBidiStreamHandlerWrapper,
-        ContentTypeSwitch, TonicCompatible,
-        RequestContext, CapturedParts, FromRequestPartsLayer,
+        BoxedBidiStreamCall, BoxedCall, BoxedClientStreamCall, BoxedStream, BoxedStreamCall,
+        CapturedParts, ContentTypeSwitch, FromRequestPartsLayer, IntoBidiStreamFactory,
+        IntoClientStreamFactory, IntoFactory, IntoStreamFactory, RequestContext, TonicCompatible,
+        TonicCompatibleBidiStreamHandlerWrapper, TonicCompatibleClientStreamHandlerWrapper,
+        TonicCompatibleHandlerWrapper, TonicCompatibleStreamHandlerWrapper, post_tonic_bidi_stream,
+        post_tonic_client_stream, post_tonic_stream, post_tonic_unary,
+        unimplemented_boxed_bidi_stream_call, unimplemented_boxed_call,
+        unimplemented_boxed_client_stream_call, unimplemented_boxed_stream_call,
     };
-    pub use crate::handler::{get_connect, post_connect, ConnectHandler, ConnectHandlerWrapper};
-    pub use crate::layer::{ConnectLayer, ConnectService};
-    pub use crate::message::{ConnectRequest, ConnectResponse, StreamBody, Streaming};
-    pub use crate::service_builder::MakeServiceBuilder;
 }

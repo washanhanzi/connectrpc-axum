@@ -34,6 +34,19 @@ MakeServiceBuilder::new()
 
 When exceeded, the server returns a `ResourceExhausted` error before processing the request.
 
+### Axum Router Behavior
+
+When you add plain HTTP routes via `add_axum_router()`, the receive limit is applied using Tower's `RequestBodyLimitLayer`. This provides consistent size limiting across your entire service.
+
+| Route Type | Error Response |
+|------------|----------------|
+| Connect routes | `ResourceExhausted` (JSON error) |
+| Axum routes | `413 Payload Too Large` (HTTP status) |
+
+::: tip
+Both route types respect the same `receive_max_bytes` configuration, but return errors appropriate to their protocol.
+:::
+
 ## Send Limit
 
 `send_max_bytes` limits the size of outgoing response messages. This prevents the server from accidentally sending oversized responses that could overwhelm clients.

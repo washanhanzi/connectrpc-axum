@@ -6,8 +6,8 @@
 //!
 //! [`ConnectLayer`]: crate::layer::ConnectLayer
 
-pub mod compression;
 pub mod config;
+pub mod envelope_compression;
 pub mod error;
 pub mod limit;
 pub mod protocol;
@@ -16,11 +16,37 @@ pub mod timeout;
 use axum::http::{Method, Request};
 use std::time::Duration;
 
-// Re-export compression types and functions
-pub use compression::{
-    Codec, Compression, CompressionConfig, CompressionEncoding, GzipCodec, IdentityCodec, compress,
-    decompress, default_codec, negotiate_response_encoding, parse_compression,
+// Re-export compression types and functions from envelope_compression
+pub use envelope_compression::{
+    // Boxed codec
+    BoxedCodec,
+    // Header constants
+    CONNECT_ACCEPT_ENCODING,
+    CONNECT_CONTENT_ENCODING,
+    // Trait
+    Codec,
+    // Context types
+    CompressionConfig,
+    CompressionEncoding,
+    CompressionLevel,
+    EnvelopeCompression,
+    // Built-in codecs
+    GzipCodec,
+    // Functions
+    compress_bytes,
+    decompress_bytes,
+    negotiate_response_encoding,
+    parse_envelope_compression,
+    resolve_codec,
 };
+
+// Feature-gated codec exports
+#[cfg(feature = "compression-br")]
+pub use envelope_compression::BrotliCodec;
+#[cfg(feature = "compression-deflate")]
+pub use envelope_compression::DeflateCodec;
+#[cfg(feature = "compression-zstd")]
+pub use envelope_compression::ZstdCodec;
 
 // Re-export config types (crate-internal)
 pub(crate) use config::ServerConfig;
@@ -67,29 +93,15 @@ pub struct ConnectContext {
 }
 
 /// Compression context for a single request.
+///
+/// For streaming RPCs, contains per-envelope compression settings.
+/// For unary RPCs, envelope compression is `None` (Tower handles HTTP body compression).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CompressionContext {
-    /// Encoding of incoming request body (from Content-Encoding header)
-    pub request_encoding: CompressionEncoding,
-    /// Negotiated encoding for response (from Accept-Encoding header)
-    pub response_encoding: CompressionEncoding,
-    /// Minimum bytes before compression is applied
+    /// Per-envelope compression for streaming RPCs (None for unary).
+    pub envelope: Option<EnvelopeCompression>,
+    /// Minimum bytes before envelope compression is applied (streaming only).
     pub min_compress_bytes: usize,
-}
-
-impl CompressionContext {
-    /// Create a new compression context.
-    pub fn new(
-        request_encoding: CompressionEncoding,
-        response_encoding: CompressionEncoding,
-        min_compress_bytes: usize,
-    ) -> Self {
-        Self {
-            request_encoding,
-            response_encoding,
-            min_compress_bytes,
-        }
-    }
 }
 
 impl ConnectContext {
@@ -99,14 +111,20 @@ impl ConnectContext {
     /// Returns error only for malformed headers (e.g., unsupported compression).
     ///
     /// Call [`validate`] after building to check protocol requirements.
-    pub(crate) fn from_request<B>(req: &Request<B>, config: &ServerConfig) -> Result<Self, ContextError> {
+    pub(crate) fn from_request<B>(
+        req: &Request<B>,
+        config: &ServerConfig,
+    ) -> Result<Self, ContextError> {
         let protocol = detect_protocol(req);
 
-        // Parse compression for POST requests (unary and streaming)
+        // Parse envelope compression for POST requests (streaming only, unary returns None)
         let compression = if *req.method() == Method::POST {
-            let c = parse_compression(req, protocol.is_streaming())
+            let envelope = parse_envelope_compression(req, protocol.is_streaming())
                 .map_err(|err| ContextError::new(protocol, err))?;
-            CompressionContext::new(c.request, c.response, config.compression.min_bytes)
+            CompressionContext {
+                envelope,
+                min_compress_bytes: config.compression.min_bytes,
+            }
         } else {
             CompressionContext::default()
         };

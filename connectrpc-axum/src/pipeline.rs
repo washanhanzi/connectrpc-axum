@@ -24,10 +24,7 @@
 //! - [`wrap_envelope`]: Wrap payload in a Connect streaming frame
 //! - [`build_end_stream_frame`]: Build an EndStream frame for streaming responses
 
-use crate::context::{
-    CompressionEncoding, ConnectContext, compress, decompress, detect_protocol,
-    error::ContextError,
-};
+use crate::context::{CompressionEncoding, ConnectContext, detect_protocol, error::ContextError};
 use crate::error::{Code, ConnectError};
 use axum::body::Body;
 use axum::http::{HeaderMap, Request, Response, StatusCode, header};
@@ -61,8 +58,27 @@ pub fn decompress_bytes(
     bytes: Bytes,
     encoding: CompressionEncoding,
 ) -> Result<Bytes, ConnectError> {
-    decompress(bytes, encoding)
+    let Some(codec) = encoding.codec() else {
+        return Ok(bytes); // identity: zero-copy passthrough
+    };
+
+    codec
+        .decompress(bytes)
         .map_err(|e| ConnectError::new(Code::InvalidArgument, format!("decompression failed: {e}")))
+}
+
+pub fn read_frame_bytes(bytes: Bytes, max_size: usize) -> Result<Bytes, ConnectError> {
+    if bytes.len() > max_size {
+        return Err(ConnectError::new(
+            Code::ResourceExhausted,
+            format!(
+                "message size {} bytes exceeds maximum allowed size of {} bytes",
+                bytes.len(),
+                max_size
+            ),
+        ));
+    }
+    Ok(bytes)
 }
 
 /// Decode a protobuf message from bytes.
@@ -173,7 +189,10 @@ where
     T: Serialize,
 {
     serde_json::to_vec(message).map_err(|e| {
-        ConnectError::new(Code::Internal, format!("failed to encode JSON message: {e}"))
+        ConnectError::new(
+            Code::Internal,
+            format!("failed to encode JSON message: {e}"),
+        )
     })
 }
 
@@ -190,11 +209,15 @@ pub fn compress_bytes(
     encoding: CompressionEncoding,
     min_bytes: usize,
 ) -> Result<(Bytes, bool), ConnectError> {
-    if encoding == CompressionEncoding::Identity || data.len() < min_bytes {
+    let Some(codec) = encoding.codec() else {
+        return Ok((data, false));
+    };
+
+    if data.len() < min_bytes {
         return Ok((data, false));
     }
 
-    match compress(data, encoding) {
+    match codec.compress(data) {
         Ok(compressed) => Ok((compressed, true)),
         Err(e) => Err(ConnectError::new(Code::Internal, format!("compress: {e}"))),
     }
@@ -351,7 +374,10 @@ impl Serialize for Metadata {
 /// - Protocol headers (Content-Type, Connect-*, gRPC-*, etc.) are filtered
 /// - Binary headers (keys ending in `-bin`) have values base64-encoded (unpadded)
 /// - Error metadata is merged into trailers (following connect-go behavior)
-pub fn build_end_stream_frame(error: Option<&ConnectError>, trailers: Option<&HeaderMap>) -> Vec<u8> {
+pub fn build_end_stream_frame(
+    error: Option<&ConnectError>,
+    trailers: Option<&HeaderMap>,
+) -> Vec<u8> {
     // Helper struct for JSON serialization
     #[derive(Serialize)]
     struct EndStreamMessage<'a> {
@@ -462,12 +488,12 @@ impl RequestPipeline {
 
     /// Decode from raw bytes (for use when body is already read).
     ///
-    /// Composes: decompress -> check_size -> decode
+    /// Note: For unary RPCs, decompression and size checking are handled by
+    /// Tower's DecompressionLayer and BridgeLayer respectively.
     pub fn decode_bytes<T>(ctx: &ConnectContext, body: Bytes) -> Result<T, ContextError>
     where
         T: Message + DeserializeOwned + Default,
     {
-        let body = Self::decompress_and_check(ctx, body)?;
         Self::decode_message(ctx, &body)
     }
 
@@ -476,29 +502,14 @@ impl RequestPipeline {
     /// Used when Content-Type is `application/connect+json` or `application/connect+proto`.
     /// These use envelope framing even for unary requests.
     ///
-    /// Composes: decompress -> check_size -> unwrap_envelope -> decode
+    /// Note: For unary RPCs, decompression and size checking are handled by
+    /// Tower's DecompressionLayer and BridgeLayer respectively.
     pub fn decode_enveloped_bytes<T>(ctx: &ConnectContext, body: Bytes) -> Result<T, ContextError>
     where
         T: Message + DeserializeOwned + Default,
     {
-        let body = Self::decompress_and_check(ctx, body)?;
         let payload = unwrap_envelope(&body).map_err(|e| ContextError::new(ctx.protocol, e))?;
         Self::decode_message(ctx, &payload)
-    }
-
-    /// Helper: decompress and check size limits.
-    fn decompress_and_check(ctx: &ConnectContext, body: Bytes) -> Result<Bytes, ContextError> {
-        let body = decompress_bytes(body, ctx.compression.request_encoding)
-            .map_err(|e| ContextError::new(ctx.protocol, e))?;
-
-        ctx.limits.check_size(body.len()).map_err(|msg| {
-            ContextError::new(
-                ctx.protocol,
-                ConnectError::new(Code::ResourceExhausted, msg),
-            )
-        })?;
-
-        Ok(body)
     }
 
     /// Helper: decode message based on protocol.
@@ -538,6 +549,9 @@ impl ResponsePipeline {
     }
 
     /// Encode with explicit context (when request not available).
+    ///
+    /// Note: For unary RPCs, compression is handled by Tower's CompressionLayer.
+    /// This function only encodes the message, not compresses it.
     pub fn encode_with_context<T>(
         ctx: &ConnectContext,
         message: &T,
@@ -552,28 +566,10 @@ impl ResponsePipeline {
             Bytes::from(encode_json(message).map_err(|e| ContextError::new(ctx.protocol, e))?)
         };
 
-        // 2. Compress if beneficial
-        let compression = &ctx.compression;
-        let (body, was_compressed) = compress_bytes(
-            body,
-            compression.response_encoding,
-            compression.min_compress_bytes,
-        )
-        .map_err(|e| ContextError::new(ctx.protocol, e))?;
-
-        // 3. Build HTTP response
-        let mut builder = Response::builder()
+        // 2. Build HTTP response (compression handled by Tower's CompressionLayer)
+        Response::builder()
             .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, ctx.protocol.response_content_type());
-
-        if was_compressed {
-            builder = builder.header(
-                header::CONTENT_ENCODING,
-                compression.response_encoding.as_str(),
-            );
-        }
-
-        builder
+            .header(header::CONTENT_TYPE, ctx.protocol.response_content_type())
             .body(Body::from(body))
             .map_err(|e| ContextError::internal(ctx.protocol, e.to_string()))
     }

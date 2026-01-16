@@ -180,10 +180,7 @@ impl MessageLimits {
         {
             return Err(ConnectError::new(
                 Code::ResourceExhausted,
-                format!(
-                    "message size {} exceeds sendMaxBytes {}",
-                    size, max
-                ),
+                format!("message size {} exceeds sendMaxBytes {}", size, max),
             ));
         }
         Ok(())
@@ -197,7 +194,10 @@ mod tests {
     #[test]
     fn test_default_limits() {
         let limits = MessageLimits::default();
-        assert_eq!(limits.get_receive_max_bytes(), Some(DEFAULT_MAX_MESSAGE_SIZE));
+        assert_eq!(
+            limits.get_receive_max_bytes(),
+            Some(DEFAULT_MAX_MESSAGE_SIZE)
+        );
         assert_eq!(limits.get_send_max_bytes(), None); // No send limit by default
     }
 

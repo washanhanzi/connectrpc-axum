@@ -723,15 +723,19 @@ mod tests {
         let mut err = ConnectError::new(Code::Internal, "error");
 
         // First call initializes the map
-        err.meta_mut()
-            .insert(HeaderName::from_static("x-custom"), HeaderValue::from_static("value"));
+        err.meta_mut().insert(
+            HeaderName::from_static("x-custom"),
+            HeaderValue::from_static("value"),
+        );
 
         assert!(err.meta().is_some());
         assert_eq!(err.meta().unwrap().get("x-custom").unwrap(), "value");
 
         // Second call returns the same map
-        err.meta_mut()
-            .insert(HeaderName::from_static("x-another"), HeaderValue::from_static("value2"));
+        err.meta_mut().insert(
+            HeaderName::from_static("x-another"),
+            HeaderValue::from_static("value2"),
+        );
 
         assert_eq!(err.meta().unwrap().len(), 2);
     }
@@ -791,8 +795,8 @@ mod tests {
     #[test]
     fn test_add_error_detail() {
         let detail = ErrorDetail::new("google.rpc.RetryInfo", vec![10, 2, 8, 5]);
-        let err = ConnectError::new(Code::ResourceExhausted, "rate limited")
-            .add_error_detail(detail);
+        let err =
+            ConnectError::new(Code::ResourceExhausted, "rate limited").add_error_detail(detail);
 
         assert_eq!(err.details().len(), 1);
         assert_eq!(err.details()[0].type_url(), "google.rpc.RetryInfo");
@@ -839,15 +843,39 @@ mod tests {
     #[test]
     fn test_status_code_to_code_conversion() {
         assert!(matches!(Code::from(StatusCode::OK), Code::Ok));
-        assert!(matches!(Code::from(StatusCode::BAD_REQUEST), Code::InvalidArgument));
-        assert!(matches!(Code::from(StatusCode::UNAUTHORIZED), Code::Unauthenticated));
-        assert!(matches!(Code::from(StatusCode::FORBIDDEN), Code::PermissionDenied));
+        assert!(matches!(
+            Code::from(StatusCode::BAD_REQUEST),
+            Code::InvalidArgument
+        ));
+        assert!(matches!(
+            Code::from(StatusCode::UNAUTHORIZED),
+            Code::Unauthenticated
+        ));
+        assert!(matches!(
+            Code::from(StatusCode::FORBIDDEN),
+            Code::PermissionDenied
+        ));
         assert!(matches!(Code::from(StatusCode::NOT_FOUND), Code::NotFound));
-        assert!(matches!(Code::from(StatusCode::CONFLICT), Code::AlreadyExists));
-        assert!(matches!(Code::from(StatusCode::REQUEST_TIMEOUT), Code::DeadlineExceeded));
-        assert!(matches!(Code::from(StatusCode::TOO_MANY_REQUESTS), Code::ResourceExhausted));
-        assert!(matches!(Code::from(StatusCode::NOT_IMPLEMENTED), Code::Unimplemented));
-        assert!(matches!(Code::from(StatusCode::SERVICE_UNAVAILABLE), Code::Unavailable));
+        assert!(matches!(
+            Code::from(StatusCode::CONFLICT),
+            Code::AlreadyExists
+        ));
+        assert!(matches!(
+            Code::from(StatusCode::REQUEST_TIMEOUT),
+            Code::DeadlineExceeded
+        ));
+        assert!(matches!(
+            Code::from(StatusCode::TOO_MANY_REQUESTS),
+            Code::ResourceExhausted
+        ));
+        assert!(matches!(
+            Code::from(StatusCode::NOT_IMPLEMENTED),
+            Code::Unimplemented
+        ));
+        assert!(matches!(
+            Code::from(StatusCode::SERVICE_UNAVAILABLE),
+            Code::Unavailable
+        ));
         assert!(matches!(
             Code::from(StatusCode::INTERNAL_SERVER_ERROR),
             Code::Internal
@@ -1043,7 +1071,10 @@ mod tests {
         #[test]
         fn test_tonic_code_to_connect_code() {
             assert!(matches!(Code::from(::tonic::Code::Ok), Code::Ok));
-            assert!(matches!(Code::from(::tonic::Code::Cancelled), Code::Canceled));
+            assert!(matches!(
+                Code::from(::tonic::Code::Cancelled),
+                Code::Canceled
+            ));
             assert!(matches!(Code::from(::tonic::Code::Unknown), Code::Unknown));
             assert!(matches!(
                 Code::from(::tonic::Code::InvalidArgument),
@@ -1053,7 +1084,10 @@ mod tests {
                 Code::from(::tonic::Code::DeadlineExceeded),
                 Code::DeadlineExceeded
             ));
-            assert!(matches!(Code::from(::tonic::Code::NotFound), Code::NotFound));
+            assert!(matches!(
+                Code::from(::tonic::Code::NotFound),
+                Code::NotFound
+            ));
             assert!(matches!(
                 Code::from(::tonic::Code::AlreadyExists),
                 Code::AlreadyExists
@@ -1071,17 +1105,26 @@ mod tests {
                 Code::FailedPrecondition
             ));
             assert!(matches!(Code::from(::tonic::Code::Aborted), Code::Aborted));
-            assert!(matches!(Code::from(::tonic::Code::OutOfRange), Code::OutOfRange));
+            assert!(matches!(
+                Code::from(::tonic::Code::OutOfRange),
+                Code::OutOfRange
+            ));
             assert!(matches!(
                 Code::from(::tonic::Code::Unimplemented),
                 Code::Unimplemented
             ));
-            assert!(matches!(Code::from(::tonic::Code::Internal), Code::Internal));
+            assert!(matches!(
+                Code::from(::tonic::Code::Internal),
+                Code::Internal
+            ));
             assert!(matches!(
                 Code::from(::tonic::Code::Unavailable),
                 Code::Unavailable
             ));
-            assert!(matches!(Code::from(::tonic::Code::DataLoss), Code::DataLoss));
+            assert!(matches!(
+                Code::from(::tonic::Code::DataLoss),
+                Code::DataLoss
+            ));
             assert!(matches!(
                 Code::from(::tonic::Code::Unauthenticated),
                 Code::Unauthenticated
@@ -1091,7 +1134,10 @@ mod tests {
         #[test]
         fn test_connect_code_to_tonic_code() {
             assert_eq!(::tonic::Code::from(Code::Ok), ::tonic::Code::Ok);
-            assert_eq!(::tonic::Code::from(Code::Canceled), ::tonic::Code::Cancelled);
+            assert_eq!(
+                ::tonic::Code::from(Code::Canceled),
+                ::tonic::Code::Cancelled
+            );
             assert_eq!(::tonic::Code::from(Code::Unknown), ::tonic::Code::Unknown);
             assert_eq!(
                 ::tonic::Code::from(Code::InvalidArgument),

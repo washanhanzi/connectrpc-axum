@@ -6,7 +6,7 @@
 //! - Validation functions for protocol version and content-type
 
 use crate::error::{Code, ConnectError};
-use axum::http::{header, Method, Request};
+use axum::http::{Method, Request, header};
 
 // ============================================================================
 // Constants
@@ -192,7 +192,10 @@ pub fn detect_protocol<B>(req: &Request<B>) -> RequestProtocol {
 ///
 /// When `require_header` is false (default), the header is optional but if present must be "1".
 /// When `require_header` is true, the header is required and must be "1".
-pub fn validate_protocol_version<B>(req: &Request<B>, require_header: bool) -> Option<ConnectError> {
+pub fn validate_protocol_version<B>(
+    req: &Request<B>,
+    require_header: bool,
+) -> Option<ConnectError> {
     let version = req
         .headers()
         .get(CONNECT_PROTOCOL_VERSION_HEADER)
@@ -295,7 +298,10 @@ pub fn validate_streaming_content_type(protocol: RequestProtocol) -> Option<Conn
 /// - `compression` parameter if present, is a supported algorithm ("gzip" or "identity")
 ///
 /// Returns `Some(ConnectError)` if validation fails, `None` if valid.
-pub fn validate_get_query_params<B>(req: &Request<B>, require_connect: bool) -> Option<ConnectError> {
+pub fn validate_get_query_params<B>(
+    req: &Request<B>,
+    require_connect: bool,
+) -> Option<ConnectError> {
     let query = req.uri().query().unwrap_or("");
 
     // Parse query parameters manually for efficiency
@@ -629,10 +635,11 @@ mod tests {
         assert!(err.is_some());
         let err = err.unwrap();
         assert!(matches!(err.code(), Code::InvalidArgument));
-        assert!(err
-            .message()
-            .unwrap()
-            .contains("connect-protocol-version must be"));
+        assert!(
+            err.message()
+                .unwrap()
+                .contains("connect-protocol-version must be")
+        );
     }
 
     // --- validate_content_type tests ---
@@ -666,10 +673,11 @@ mod tests {
         assert!(err.is_some());
         let err = err.unwrap();
         assert!(matches!(err.code(), Code::Unknown));
-        assert!(err
-            .message()
-            .unwrap()
-            .contains("streaming content-type not allowed for unary"));
+        assert!(
+            err.message()
+                .unwrap()
+                .contains("streaming content-type not allowed for unary")
+        );
 
         let err = validate_unary_content_type(RequestProtocol::ConnectStreamProto);
         assert!(err.is_some());
@@ -695,10 +703,11 @@ mod tests {
         assert!(err.is_some());
         let err = err.unwrap();
         assert!(matches!(err.code(), Code::Unknown));
-        assert!(err
-            .message()
-            .unwrap()
-            .contains("unary content-type not allowed for streaming"));
+        assert!(
+            err.message()
+                .unwrap()
+                .contains("unary content-type not allowed for streaming")
+        );
 
         let err = validate_streaming_content_type(RequestProtocol::ConnectUnaryProto);
         assert!(err.is_some());
@@ -746,7 +755,11 @@ mod tests {
         assert!(err.is_some());
         let err = err.unwrap();
         assert!(matches!(err.code(), Code::InvalidArgument));
-        assert!(err.message().unwrap().contains("missing encoding parameter"));
+        assert!(
+            err.message()
+                .unwrap()
+                .contains("missing encoding parameter")
+        );
     }
 
     #[test]
@@ -799,10 +812,11 @@ mod tests {
         assert!(err.is_some());
         let err = err.unwrap();
         assert!(matches!(err.code(), Code::InvalidArgument));
-        assert!(err
-            .message()
-            .unwrap()
-            .contains("missing required query parameter"));
+        assert!(
+            err.message()
+                .unwrap()
+                .contains("missing required query parameter")
+        );
     }
 
     #[test]

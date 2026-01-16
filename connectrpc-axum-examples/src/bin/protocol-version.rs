@@ -8,7 +8,7 @@
 //! Test with Go client: go run ./cmd/client protocol-version
 
 use connectrpc_axum::prelude::*;
-use connectrpc_axum_examples::{helloworldservice, HelloRequest, HelloResponse};
+use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
 use std::net::SocketAddr;
 
 /// Simple handler for testing protocol version validation

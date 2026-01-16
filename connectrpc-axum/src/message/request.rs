@@ -3,7 +3,7 @@ use crate::context::{CompressionEncoding, MessageLimits};
 use crate::error::{Code, ConnectError};
 use crate::pipeline::{
     RequestPipeline, decode_json, decode_proto, decompress_bytes, envelope_flags,
-    get_context_or_default, read_body,
+    get_context_or_default, read_body, read_frame_bytes,
 };
 use axum::{
     body::Body,
@@ -208,15 +208,13 @@ where
     // 1. Decode base64 if specified (handle both padded and unpadded)
     let bytes = if params.base64.as_deref() == Some("1") {
         use base64::{
-            Engine as _,
-            alphabet,
+            Engine as _, alphabet,
             engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
         };
         // URL-safe base64 decoder that accepts both padded and unpadded input
         const URL_SAFE_INDIFFERENT: GeneralPurpose = GeneralPurpose::new(
             &alphabet::URL_SAFE,
-            GeneralPurposeConfig::new()
-                .with_decode_padding_mode(DecodePaddingMode::Indifferent),
+            GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent),
         );
         URL_SAFE_INDIFFERENT
             .decode(&message_str)
@@ -242,9 +240,7 @@ where
     };
 
     // 3. Check size after decompression
-    ctx.limits
-        .check_size(bytes.len())
-        .map_err(|e| ConnectError::new(Code::ResourceExhausted, e))?;
+    let bytes = read_frame_bytes(bytes, ctx.limits.receive_max_bytes_or_max())?;
 
     // 4. Decode based on protocol encoding
     let message = if ctx.protocol.is_proto() {
@@ -281,7 +277,12 @@ where
         let ctx = get_context_or_default(&req);
 
         let use_proto = ctx.protocol.is_proto();
-        let request_encoding = ctx.compression.request_encoding;
+        // Get envelope compression settings (for streaming, this should be Some)
+        let request_encoding = ctx
+            .compression
+            .envelope
+            .map(|e| e.request)
+            .unwrap_or(CompressionEncoding::Identity);
         let body = req.into_body();
 
         let stream = create_frame_stream::<T>(body, use_proto, ctx.limits, request_encoding);
@@ -344,24 +345,17 @@ where
                 // Extract payload
                 let payload = buffer.split_to(5 + length).split_off(5);
 
-                // Decompress if needed
+                // Decompress if needed (size already checked above on compressed envelope)
                 let payload = if is_compressed {
                     match decompress_bytes(payload.freeze(), request_encoding) {
-                        Ok(decompressed) => {
-                            // Check size after decompression
-                            if let Err(err) = limits.check_size(decompressed.len()) {
-                                yield Err(ConnectError::new(Code::ResourceExhausted, err));
-                                return;
-                            }
-                            decompressed.into()
-                        }
+                        Ok(decompressed) => decompressed,
                         Err(err) => {
                             yield Err(err);
                             return;
                         }
                     }
                 } else {
-                    payload
+                    payload.freeze()
                 };
 
                 // Decode the message using pipeline primitives
