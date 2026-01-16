@@ -159,6 +159,49 @@ impl<C, TC> CompileBuilder<C, Enabled, TC> {
 // ============================================================================
 
 impl<C, T, TC> CompileBuilder<C, T, TC> {
+    /// Fetch and configure the protoc compiler.
+    ///
+    /// Downloads the specified version of protoc and sets the `PROTOC` environment
+    /// variable so that prost-build uses the downloaded binary.
+    ///
+    /// # Arguments
+    ///
+    /// * `version` - The protoc version to download. Defaults to "31.1" if `None`.
+    /// * `path` - The directory to download protoc into. Defaults to `OUT_DIR` if `None`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     connectrpc_axum_build::compile_dir("proto")
+    ///         .fetch_protoc(None, None)?  // Use defaults
+    ///         .compile()?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn fetch_protoc(self, version: Option<&str>, path: Option<&Path>) -> Result<Self> {
+        let version = version.unwrap_or("31.1");
+        let out_dir = match path {
+            Some(p) => p.to_path_buf(),
+            None => {
+                let dir = std::env::var("OUT_DIR")
+                    .map_err(|e| std::io::Error::other(format!("OUT_DIR not set: {e}")))?;
+                PathBuf::from(dir)
+            }
+        };
+
+        let protoc_path = protoc_fetcher::protoc(version, &out_dir)
+            .map_err(|e| std::io::Error::other(format!("failed to fetch protoc: {e}")))?;
+
+        // SAFETY: This is called from build.rs which runs single-threaded before compilation.
+        // No other threads exist that could be reading environment variables concurrently.
+        unsafe {
+            std::env::set_var("PROTOC", protoc_path);
+        }
+
+        Ok(self)
+    }
+
     /// Customize the prost builder with a configuration closure.
     ///
     /// The closure receives a mutable reference to `prost_build::Config` and is applied
