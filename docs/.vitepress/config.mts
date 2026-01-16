@@ -44,6 +44,7 @@ export default defineConfig({
               text: 'MakeServiceBuilder',
               link: '/guide/configuration',
               items: [
+                { text: 'Message Limits', link: '/guide/limits' },
                 { text: 'Timeout', link: '/guide/timeout' },
                 { text: 'Compression', link: '/guide/compression' }
               ]

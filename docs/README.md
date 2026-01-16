@@ -15,6 +15,7 @@ docs/
 ├── guide/
 │   ├── index.md        # Getting Started
 │   ├── configuration.md
+│   ├── limits.md
 │   ├── timeout.md
 │   ├── compression.md
 │   ├── http-endpoints.md
@@ -39,6 +40,7 @@ docs/
 | `index.md` | `/` | Home page with hero section |
 | `guide/index.md` | `/guide/` | Getting started, installation, basic usage |
 | `guide/configuration.md` | `/guide/configuration` | MakeServiceBuilder API, service composition |
+| `guide/limits.md` | `/guide/limits` | Receive and send message size limits |
 | `guide/timeout.md` | `/guide/timeout` | Server-side timeout configuration |
 | `guide/compression.md` | `/guide/compression` | Response compression (gzip) |
 | `guide/http-endpoints.md` | `/guide/http-endpoints` | Plain HTTP routes alongside Connect |
