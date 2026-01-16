@@ -86,7 +86,7 @@ These are the types you interact with when building services:
 |------|---------|
 | `ConnectContext` | Protocol, compression, timeout, limits - set by layer, read by handlers |
 | `RequestProtocol` | Enum identifying Connect variant (Unary/Stream × Json/Proto) |
-| `MessageLimits` | Max message size configuration (default 4MB) |
+| `MessageLimits` | Receive/send size limits (default: 4MB receive, unlimited send) |
 | `Codec` | Trait for compression/decompression (implement for custom algorithms) |
 | `GzipCodec` | Built-in gzip compression codec |
 | `IdentityCodec` | Built-in no-op codec (zero-copy passthrough) |
@@ -170,7 +170,7 @@ Combines multiple services and applies cross-cutting infrastructure. Supports tw
 | Multi-service composition | | ✓ |
 | ConnectLayer application | | ✓ |
 | Plain HTTP routes | | ✓ |
-| Message limits | | ✓ |
+| Message limits (receive/send) | | ✓ |
 | Protocol header validation | | ✓ |
 | Server-side timeout | | ✓ |
 | gRPC service integration | | ✓ |
@@ -240,7 +240,7 @@ Each has corresponding factory traits (`IntoFactory`, `IntoStreamFactory`, `Into
 |--------|---------|
 | `protocol.rs` | `RequestProtocol` enum and detection |
 | `compression.rs` | `Codec` trait, `GzipCodec`, `IdentityCodec`, compression functions |
-| `limit.rs` | Message size limits |
+| `limit.rs` | Receive and send message size limits |
 | `timeout.rs` | Request timeout handling |
 
 #### Compression Architecture
