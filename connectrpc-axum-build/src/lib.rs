@@ -4,20 +4,20 @@ use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
 /// Code generation module for service builders.
-pub mod r#gen;
+mod r#gen;
 
 // ============================================================================
 // Type-state marker types for phantom data
 // ============================================================================
 
 /// Marker indicating a feature is enabled.
-pub struct Yes;
+struct Yes;
 
 /// Marker indicating a feature is disabled.
-pub struct No;
+struct No;
 
 /// Trait to convert type markers to runtime booleans.
-pub trait BoolMarker {
+trait BoolMarker {
     /// The boolean value this marker represents.
     const VALUE: bool;
 }
@@ -38,7 +38,7 @@ impl BoolMarker for No {
 /// - `TonicClient`: Whether to generate Tonic gRPC client stubs (requires `tonic-client` feature)
 ///
 /// Default state is `CompileBuilder<Yes, No, No>` (Connect handlers only).
-pub struct CompileBuilder<Connect = Yes, Tonic = No, TonicClient = No> {
+struct CompileBuilder<Connect = Yes, Tonic = No, TonicClient = No> {
     includes_dir: PathBuf,
     prost_config: Option<Box<dyn FnOnce(&mut prost_build::Config)>>,
     #[cfg(feature = "tonic")]
