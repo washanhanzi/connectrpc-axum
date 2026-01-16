@@ -94,20 +94,19 @@ anyhow = "1"
 async-stream = "0.3.5"
 # Required: Used by generated service builders
 axum = "0.8.0"
-# Application dependency for byte buffer handling
-bytes = "1"
 # Required: Core ConnectRPC runtime
 connectrpc-axum = { path = "../connectrpc-axum" }
 # Required: Used by generated code for async streams
 futures = "0.3.31"
-# Required: Used by generated code for HTTP body handling
-http-body = "1"
-# Application dependency for HTTP body utilities
-http-body-util = "0.1"
 # Application dependency for HTTP server
 hyper = { version = "1.8", features = ["server", "http2"] }
 # Application dependency for HTTP/2 h2c support
-hyper-util = { version = "0.1", features = ["tokio", "server", "server-auto", "http2"] }
+hyper-util = { version = "0.1", features = [
+  "tokio",
+  "server",
+  "server-auto",
+  "http2",
+] }
 # Required: Used by generated code for JSON serialization
 pbjson = { workspace = true }
 # Required: Used by generated code for well-known types JSON serialization
@@ -134,8 +133,6 @@ tonic-web = { version = "0.14" }
 tower = { workspace = true }
 # Application dependency for logging (used in extractor examples)
 tracing-subscriber = "0.3"
-# Application dependency for HTTP middleware
-tower-http = { version = "0.6", features = ["cors"] }
 
 [build-dependencies]
 connectrpc-axum-build = { path = "../connectrpc-axum-build" }

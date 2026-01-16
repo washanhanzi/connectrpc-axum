@@ -10,8 +10,6 @@ license = "MIT"
 [dependencies]
 async-stream = { workspace = true }
 axum = { workspace = true, features = ["multipart"] }
-axum-core = { workspace = true }
-axum-extra = { workspace = true, optional = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
@@ -21,18 +19,15 @@ http-body-util = { workspace = true }
 hyper = { workspace = true }
 pbjson = { workspace = true }
 pbjson-types = { workspace = true }
-pin-project-lite = { workspace = true }
 prost = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_qs = { workspace = true }
 tokio = { workspace = true, features = ["time"] }
 tokio-stream = { workspace = true, optional = true }
-tokio-util = { workspace = true, features = ["io"] }
 tonic = { workspace = true, optional = true }
 tonic-prost = { workspace = true, optional = true }
 tower = { workspace = true, features = ["full"] }
-tower-http = { workspace = true, features = ["cors"] }
 tracing = { workspace = true }
 flate2 = { workspace = true }
 

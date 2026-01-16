@@ -17,16 +17,16 @@ pub struct Enabled;
 pub struct Disabled;
 
 /// Trait to convert type markers to runtime booleans.
-pub trait BoolMarker {
+pub trait BuildMarker {
     /// The boolean value this marker represents.
     const VALUE: bool;
 }
 
-impl BoolMarker for Enabled {
+impl BuildMarker for Enabled {
     const VALUE: bool = true;
 }
 
-impl BoolMarker for Disabled {
+impl BuildMarker for Disabled {
     const VALUE: bool = false;
 }
 
@@ -261,7 +261,7 @@ impl<C, T> CompileBuilder<C, T, Enabled> {
 // Compile method - available on all states with BoolMarker bounds
 // ============================================================================
 
-impl<C: BoolMarker, T: BoolMarker, TC: BoolMarker> CompileBuilder<C, T, TC> {
+impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker> CompileBuilder<C, T, TC> {
     /// Execute code generation.
     pub fn compile(self) -> Result<()> {
         let generate_handlers = C::VALUE;
