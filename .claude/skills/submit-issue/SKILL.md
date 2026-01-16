@@ -20,10 +20,11 @@ Determine the request type:
 
 Before suggesting an issue submission, attempt to answer using project documentation:
 
-1. Read `references/README.md` for usage patterns and API
-2. Read `references/architecture.md` for internal design
-3. Reference the connect-go-reference skill for protocol details
-4. Search the codebase for implementation specifics
+1. Read `docs/guide/index.md` for getting started and features overview
+2. Read `docs/guide/architecture.md` for internal design and module structure
+3. Check other guides in `docs/guide/` for specific topics (configuration, compression, timeouts, etc.)
+4. Reference the connect-go-reference skill for protocol details
+5. Search the codebase for implementation specifics
 
 If the question can be answered from documentation, provide the answer and ask if more clarification is needed.
 
@@ -109,8 +110,11 @@ gh issue edit <number> --add-label "bug"
 
 ## Documentation References
 
-When answering questions, check these files in order:
+When answering questions, check these docs in order:
 
-1. `references/README.md` - Quick start, features, examples
-2. `references/architecture.md` - Internal design and module structure
-3. Codebase search for implementation details
+1. `docs/guide/index.md` - Getting started, features, quick start
+2. `docs/guide/architecture.md` - Internal design, module structure, request flow
+3. `docs/guide/configuration.md` - Service and handler configuration
+4. `docs/guide/examples.md` - Code examples and usage patterns
+5. Other topic-specific guides in `docs/guide/` (compression, timeouts, tonic integration, etc.)
+6. Codebase search for implementation details
