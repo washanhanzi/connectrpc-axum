@@ -77,6 +77,13 @@ pub use context::{
     parse_timeout,
     resolve_codec,
 };
+// Feature-gated codec exports
+#[cfg(feature = "compression-br")]
+pub use context::BrotliCodec;
+#[cfg(feature = "compression-deflate")]
+pub use context::DeflateCodec;
+#[cfg(feature = "compression-zstd")]
+pub use context::ZstdCodec;
 // Re-export from pipeline module
 pub use handler::{ConnectHandler, ConnectHandlerWrapper, get_connect, post_connect};
 pub use layer::{BridgeLayer, BridgeService, ConnectLayer, ConnectService};
@@ -128,6 +135,14 @@ pub mod prelude {
         parse_timeout,
         resolve_codec,
     };
+    // Feature-gated codec exports for prelude
+    #[cfg(feature = "compression-br")]
+    pub use crate::context::BrotliCodec;
+    #[cfg(feature = "compression-deflate")]
+    pub use crate::context::DeflateCodec;
+    #[cfg(feature = "compression-zstd")]
+    pub use crate::context::ZstdCodec;
+
     pub use crate::error::{Code, ConnectError, ErrorDetail};
     pub use crate::handler::{ConnectHandler, ConnectHandlerWrapper, get_connect, post_connect};
     pub use crate::layer::{BridgeLayer, BridgeService, ConnectLayer, ConnectService};

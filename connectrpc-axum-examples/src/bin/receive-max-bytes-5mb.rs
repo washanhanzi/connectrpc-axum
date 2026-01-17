@@ -3,8 +3,8 @@
 //! Run with: cargo run --bin receive-max-bytes-5mb
 //! Test with Go client: go test -v -run TestReceiveMaxBytes5MB
 
-use connectrpc_axum::prelude::*;
 use connectrpc_axum::MakeServiceBuilder;
+use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{EchoRequest, EchoResponse, echoservice};
 use futures::StreamExt;
 use std::net::SocketAddr;
@@ -35,7 +35,10 @@ async fn echo_client_stream(
     }
 
     Ok(ConnectResponse::new(EchoResponse {
-        message: format!("Received {} messages, {} total bytes", msg_count, total_bytes),
+        message: format!(
+            "Received {} messages, {} total bytes",
+            msg_count, total_bytes
+        ),
     }))
 }
 

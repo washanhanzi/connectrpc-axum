@@ -6,8 +6,8 @@
 //! Run with: cargo run --bin receive-max-bytes
 //! Test with Go client: go test -v -run TestReceiveMaxBytes
 
-use connectrpc_axum::prelude::*;
 use connectrpc_axum::MakeServiceBuilder;
+use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{EchoRequest, EchoResponse, echoservice};
 use futures::StreamExt;
 use std::net::SocketAddr;
@@ -17,7 +17,11 @@ async fn echo(
     ConnectRequest(req): ConnectRequest<EchoRequest>,
 ) -> Result<ConnectResponse<EchoResponse>, ConnectError> {
     Ok(ConnectResponse::new(EchoResponse {
-        message: format!("Echo: {} ({} bytes)", req.message.chars().take(50).collect::<String>(), req.message.len()),
+        message: format!(
+            "Echo: {} ({} bytes)",
+            req.message.chars().take(50).collect::<String>(),
+            req.message.len()
+        ),
     }))
 }
 
@@ -34,7 +38,11 @@ async fn echo_client_stream(
             Ok(msg) => {
                 total_bytes += msg.message.len();
                 msg_count += 1;
-                println!("Received message {}: {} bytes", msg_count, msg.message.len());
+                println!(
+                    "Received message {}: {} bytes",
+                    msg_count,
+                    msg.message.len()
+                );
             }
             Err(e) => {
                 println!("Stream error: {:?}", e);
@@ -44,7 +52,10 @@ async fn echo_client_stream(
     }
 
     Ok(ConnectResponse::new(EchoResponse {
-        message: format!("Received {} messages, {} total bytes", msg_count, total_bytes),
+        message: format!(
+            "Received {} messages, {} total bytes",
+            msg_count, total_bytes
+        ),
     }))
 }
 

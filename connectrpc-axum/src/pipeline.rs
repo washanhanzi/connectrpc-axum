@@ -62,9 +62,9 @@ pub fn decompress_bytes(
         return Ok(bytes); // identity: zero-copy passthrough
     };
 
-    codec.decompress(bytes).map_err(|e| {
-        ConnectError::new(Code::InvalidArgument, format!("decompression failed: {e}"))
-    })
+    codec
+        .decompress(bytes)
+        .map_err(|e| ConnectError::new(Code::InvalidArgument, format!("decompression failed: {e}")))
 }
 
 pub fn read_frame_bytes(bytes: Bytes, max_size: usize) -> Result<Bytes, ConnectError> {

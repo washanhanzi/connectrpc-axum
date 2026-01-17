@@ -54,6 +54,18 @@ Following connect-go's approach:
 | `gzip;q=0.5` | gzip (non-zero q accepted) |
 | `deflate, br` | identity (none supported) |
 
+When optional compression features are enabled, the same rules apply, but additional encodings may be selected:
+
+| Accept-Encoding | Result | Requirements |
+|-----------------|--------|--------------|
+| `deflate, gzip` | deflate | `compression-deflate` enabled |
+| `br, gzip` | br | `compression-br` enabled |
+| `zstd, gzip` | zstd | `compression-zstd` enabled |
+| `br, zstd, gzip` | br | `compression-br` enabled |
+| `br, zstd, gzip` | zstd | `compression-zstd` enabled and `compression-br` disabled |
+| `deflate, br` | deflate | `compression-deflate` enabled |
+| `deflate, br` | br | `compression-br` enabled and `compression-deflate` disabled |
+
 ::: tip
 Unlike full HTTP content negotiation, Connect protocol doesn't weight by q-value—it uses client order. This matches connect-go's behavior.
 :::

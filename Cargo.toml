@@ -45,3 +45,5 @@ tower = "0.5"
 tower-http = { version = "0.6", default-features = false }
 tracing = "0.1"
 flate2 = "1.0"
+brotli = "8"
+zstd = "0.13"

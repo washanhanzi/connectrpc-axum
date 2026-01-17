@@ -46,7 +46,7 @@ use std::marker::PhantomData;
 use std::time::Duration;
 use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::SizeAbove;
-use tower_http::decompression::DecompressionLayer;
+use tower_http::decompression::RequestDecompressionLayer;
 
 use crate::context::{CompressionConfig, MessageLimits};
 use crate::layer::{BridgeLayer, ConnectLayer};
@@ -413,6 +413,23 @@ where
 
         layer
     }
+
+    /// Builds a request decompression layer with feature-gated compression algorithms.
+    ///
+    /// By default, gzip is always enabled. Additional algorithms (deflate, br, zstd)
+    /// are enabled based on cargo features.
+    fn build_request_decompression_layer(&self) -> RequestDecompressionLayer {
+        let layer = RequestDecompressionLayer::new();
+
+        #[cfg(feature = "compression-deflate")]
+        let layer = layer.deflate(true);
+        #[cfg(feature = "compression-br")]
+        let layer = layer.br(true);
+        #[cfg(feature = "compression-zstd")]
+        let layer = layer.zstd(true);
+
+        layer
+    }
 }
 
 // Connect-only build method (no gRPC services added)
@@ -446,8 +463,9 @@ where
     /// ```
     pub fn build(self) -> Router<S> {
         let connect_layer = self.build_connect_layer();
+        let request_decompression_layer = self.build_request_decompression_layer();
 
-        // Layer stack (request flow): BridgeLayer → DecompressionLayer → CompressionLayer → ConnectLayer → Handler
+        // Layer stack (request flow): BridgeLayer → RequestDecompressionLayer → CompressionLayer → ConnectLayer → Handler
         let min_bytes = self.compression.min_bytes.min(u16::MAX as usize) as u16;
         let compression_layer = CompressionLayer::new().compress_when(SizeAbove::new(min_bytes));
 
@@ -456,9 +474,9 @@ where
 
         self.connect_router
             .layer(connect_layer)
-            .layer(compression_layer) // compresses responses >= min_bytes
-            .layer(DecompressionLayer::new()) // decompresses requests
-            .layer(bridge_layer) // size limit check, prevents compression for streaming
+            .layer(compression_layer)
+            .layer(request_decompression_layer)
+            .layer(bridge_layer)
             .merge(self.axum_router)
     }
 }
@@ -699,8 +717,9 @@ where
         use tower::util::Either;
 
         let connect_layer = self.build_connect_layer();
+        let request_decompression_layer = self.build_request_decompression_layer();
 
-        // Layer stack (request flow): BridgeLayer → DecompressionLayer → CompressionLayer → ConnectLayer → Handler
+        // Layer stack (request flow): BridgeLayer → RequestDecompressionLayer → CompressionLayer → ConnectLayer → Handler
         let min_bytes = self.compression.min_bytes.min(u16::MAX as usize) as u16;
         let compression_layer = CompressionLayer::new().compress_when(SizeAbove::new(min_bytes));
 
@@ -710,9 +729,9 @@ where
         let connect_router = self
             .connect_router
             .layer(connect_layer)
-            .layer(compression_layer) // compresses responses >= min_bytes
-            .layer(DecompressionLayer::new()) // decompresses requests
-            .layer(bridge_layer) // size limit check, prevents compression for streaming
+            .layer(compression_layer)
+            .layer(request_decompression_layer)
+            .layer(bridge_layer)
             .merge(self.axum_router);
 
         let grpc_routes = self.grpc_state.routes.prepare();

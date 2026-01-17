@@ -35,7 +35,10 @@ async fn echo_client_stream(
     }
 
     Ok(ConnectResponse::new(EchoResponse {
-        message: format!("Received {} messages, {} total bytes", msg_count, total_bytes),
+        message: format!(
+            "Received {} messages, {} total bytes",
+            msg_count, total_bytes
+        ),
     }))
 }
 

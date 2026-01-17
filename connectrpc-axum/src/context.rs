@@ -39,6 +39,14 @@ pub use envelope_compression::{
     resolve_codec,
 };
 
+// Feature-gated codec exports
+#[cfg(feature = "compression-br")]
+pub use envelope_compression::BrotliCodec;
+#[cfg(feature = "compression-deflate")]
+pub use envelope_compression::DeflateCodec;
+#[cfg(feature = "compression-zstd")]
+pub use envelope_compression::ZstdCodec;
+
 // Re-export config types (crate-internal)
 pub(crate) use config::ServerConfig;
 
