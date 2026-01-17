@@ -123,6 +123,16 @@ For streaming RPCs, compression is applied per-message using the envelope format
 | Unary | `Content-Encoding` | `Accept-Encoding` |
 | Streaming | `Connect-Content-Encoding` | `Connect-Accept-Encoding` |
 
+## gRPC Compression (Tonic)
+
+gRPC compression is configured separately from Connect compression using Tonic's built-in compression methods.
+
+See [Tonic Integration → gRPC Compression](./tonic.md#grpc-compression) for configuration details.
+
+::: tip
+The `MakeServiceBuilder::compression()` setting only affects Connect RPCs. gRPC compression is handled entirely by Tonic.
+:::
+
 ## Implementation Notes
 
 ### Conformance with connect-go
@@ -135,31 +145,3 @@ This implementation matches connect-go's compression behavior:
 - Respects `q=0` as "not acceptable"
 - Same header names for unary vs streaming
 - Same error messages for unsupported encodings
-
-### Custom Codecs
-
-For custom compression algorithms (zstd, brotli), implement the `Codec` trait:
-
-```rust
-use connectrpc_axum::compression::Codec;
-use bytes::Bytes;
-use std::io;
-
-struct ZstdCodec { level: i32 }
-
-impl Codec for ZstdCodec {
-    fn name(&self) -> &'static str { "zstd" }
-
-    fn compress(&self, data: Bytes) -> io::Result<Bytes> {
-        // ... zstd compression
-    }
-
-    fn decompress(&self, data: Bytes) -> io::Result<Bytes> {
-        // ... zstd decompression
-    }
-}
-```
-
-::: warning
-Custom codecs require additional wiring to integrate with the negotiation logic. This API is subject to change.
-:::

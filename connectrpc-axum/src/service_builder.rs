@@ -502,6 +502,31 @@ where
         Self::add_grpc_service_with(self, service, |svc| svc)
     }
 
+    /// Adds the first gRPC service with custom configuration.
+    ///
+    /// Use this to configure Tonic-specific options like compression on the gRPC service.
+    /// The `configure` function receives the service and can apply Tonic's compression methods.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use connectrpc_axum::MakeServiceBuilder;
+    /// use tonic::codec::CompressionEncoding;
+    ///
+    /// let app = MakeServiceBuilder::new()
+    ///     .add_router(connect_router)
+    ///     .add_grpc_service_with(grpc_service, |svc| {
+    ///         svc.accept_compressed(CompressionEncoding::Gzip)
+    ///            .send_compressed(CompressionEncoding::Gzip)
+    ///     })
+    ///     .build();
+    /// ```
+    ///
+    /// # Compression Note
+    ///
+    /// gRPC compression is separate from Connect compression:
+    /// - **gRPC**: Configure via `accept_compressed`/`send_compressed` on the Tonic service
+    /// - **Connect**: Configure via `MakeServiceBuilder::compression()` (uses Tower middleware)
     pub fn add_grpc_service_with<G, F>(
         self,
         service: G,
@@ -569,6 +594,25 @@ where
         Self::add_grpc_service_with(self, service, |svc| svc)
     }
 
+    /// Adds additional gRPC services with custom configuration.
+    ///
+    /// Use this to configure Tonic-specific options like compression on the gRPC service.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use connectrpc_axum::MakeServiceBuilder;
+    /// use tonic::codec::CompressionEncoding;
+    ///
+    /// let app = MakeServiceBuilder::new()
+    ///     .add_router(connect_router)
+    ///     .add_grpc_service(first_grpc)
+    ///     .add_grpc_service_with(second_grpc, |svc| {
+    ///         svc.accept_compressed(CompressionEncoding::Gzip)
+    ///            .send_compressed(CompressionEncoding::Gzip)
+    ///     })
+    ///     .build();
+    /// ```
     pub fn add_grpc_service_with<G, F>(mut self, service: G, configure: F) -> Self
     where
         G: tower::Service<http::Request<tonic::body::Body>, Error = std::convert::Infallible>
