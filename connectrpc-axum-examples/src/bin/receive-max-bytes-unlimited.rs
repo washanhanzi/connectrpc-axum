@@ -4,7 +4,7 @@
 //! Test with Go client: go test -v -run TestReceiveMaxBytesUnlimited
 
 use connectrpc_axum::prelude::*;
-use connectrpc_axum::{MakeServiceBuilder, MessageLimits};
+use connectrpc_axum::MakeServiceBuilder;
 use connectrpc_axum_examples::{EchoRequest, EchoResponse, echoservice};
 use futures::StreamExt;
 use std::net::SocketAddr;
@@ -49,10 +49,9 @@ async fn main() -> anyhow::Result<()> {
         .echo_client_stream(echo_client_stream)
         .build();
 
-    // Configure with unlimited receive_max_bytes
+    // Configure with no receive_max_bytes limit (default behavior)
     let service = MakeServiceBuilder::new()
         .add_router(router)
-        .message_limits(MessageLimits::unlimited())
         .build();
 
     let addr: SocketAddr = "0.0.0.0:3000".parse()?;

@@ -58,7 +58,6 @@ pub use context::{
     ConnectTimeout,
     // Errors
     ContextError,
-    DEFAULT_MAX_MESSAGE_SIZE,
     // Envelope compression for streaming
     EnvelopeCompression,
     // Built-in codecs
@@ -118,7 +117,6 @@ pub mod prelude {
         ConnectTimeout,
         // Errors
         ContextError,
-        DEFAULT_MAX_MESSAGE_SIZE,
         // Compression types
         EnvelopeCompression,
         // Built-in codecs

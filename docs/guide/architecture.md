@@ -149,7 +149,7 @@ These are the types you interact with when building services:
 |------|---------|
 | `ConnectContext` | Protocol, compression, timeout, limits - set by layer, read by handlers |
 | `RequestProtocol` | Enum identifying Connect variant (Unary/Stream x Json/Proto) |
-| `MessageLimits` | Receive/send size limits (default: 4MB receive, unlimited send) |
+| `MessageLimits` | Receive/send size limits (default: no limits) |
 | `CompressionConfig` | Compression settings (default: min_bytes=0, matching connect-go) |
 | `CompressionContext` | Per-request compression context with envelope settings and min_bytes threshold |
 | `CompressionEncoding` | Supported encodings: `Gzip`, `Deflate`, `Brotli`, `Zstd`, or `Identity` |

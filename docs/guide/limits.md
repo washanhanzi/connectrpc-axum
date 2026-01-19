@@ -7,14 +7,15 @@ Configure size limits for incoming requests and outgoing responses to protect ag
 ```rust
 use connectrpc_axum::{MakeServiceBuilder, MessageLimits};
 
-// Default: 4MB receive limit, no send limit
-let limits = MessageLimits::default();
+// Default: no limits
+let limits = MessageLimits::new();
 
-// Custom receive limit only
-let limits = MessageLimits::new(16 * 1024 * 1024);  // 16MB
+// Set receive limit only
+let limits = MessageLimits::new()
+    .receive_max_bytes(16 * 1024 * 1024);  // 16MB
 
-// Custom limits for both directions
-let limits = MessageLimits::default()
+// Set both receive and send limits
+let limits = MessageLimits::new()
     .receive_max_bytes(16 * 1024 * 1024)  // 16MB for requests
     .send_max_bytes(8 * 1024 * 1024);     // 8MB for responses
 
@@ -30,7 +31,7 @@ MakeServiceBuilder::new()
 
 | Setting | Default | Error |
 |---------|---------|-------|
-| `receive_max_bytes` | 4 MB | `ResourceExhausted` |
+| `receive_max_bytes` | No limit | `ResourceExhausted` |
 
 When exceeded, the server returns a `ResourceExhausted` error before processing the request.
 
@@ -53,7 +54,7 @@ Both route types respect the same `receive_max_bytes` configuration, but return 
 
 | Setting | Default | Error |
 |---------|---------|-------|
-| `send_max_bytes` | Unlimited | `ResourceExhausted` |
+| `send_max_bytes` | No limit | `ResourceExhausted` |
 
 ```rust
 // Convenience method for setting send limit only
@@ -79,14 +80,6 @@ For streaming responses, each message is checked individually. If a message exce
 2. The oversized message triggers a `ResourceExhausted` error
 3. The stream terminates with the error
 
-## Unlimited Mode
-
-For trusted environments where size limits are not needed:
-
-```rust
-let limits = MessageLimits::unlimited();
-```
-
 ::: warning
-Using unlimited message sizes can allow memory exhaustion attacks. Only use this in trusted environments.
+By default, no limits are applied. For production environments, consider setting appropriate limits to protect against memory exhaustion attacks.
 :::

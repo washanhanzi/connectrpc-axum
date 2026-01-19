@@ -1,7 +1,7 @@
 //! Message size limits for Connect RPC requests and responses.
 //!
 //! This module provides configuration for limiting message sizes to prevent
-//! memory exhaustion attacks. The default limit of 4 MB matches gRPC's default.
+//! memory exhaustion attacks.
 //!
 //! # Receive vs Send Limits
 //!
@@ -14,72 +14,40 @@
 
 use crate::error::{Code, ConnectError};
 
-/// Default maximum message size (4 MB), matching gRPC's default receive limit.
-pub const DEFAULT_MAX_MESSAGE_SIZE: usize = 4 * 1024 * 1024;
-
 /// Configuration for message size limits.
 ///
 /// These limits are enforced on both incoming requests and outgoing responses
 /// to prevent memory exhaustion and protect clients from oversized messages.
+///
+/// By default, no limits are applied. Use the builder methods to set limits.
 ///
 /// # Example
 ///
 /// ```rust
 /// use connectrpc_axum::MessageLimits;
 ///
-/// // Use default 4 MB receive limit (no send limit)
-/// let limits = MessageLimits::default();
+/// // Set receive limit only
+/// let limits = MessageLimits::new().receive_max_bytes(4 * 1024 * 1024);
 ///
-/// // Custom limits for both directions
-/// let limits = MessageLimits::default()
+/// // Set both receive and send limits
+/// let limits = MessageLimits::new()
 ///     .receive_max_bytes(16 * 1024 * 1024)  // 16 MB for requests
 ///     .send_max_bytes(8 * 1024 * 1024);     // 8 MB for responses
-///
-/// // No limits (not recommended for production)
-/// let limits = MessageLimits::unlimited();
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MessageLimits {
     /// Maximum size of incoming messages in bytes.
-    /// `None` means unlimited (not recommended).
     receive_max_bytes: Option<usize>,
     /// Maximum size of outgoing messages in bytes.
-    /// `None` means unlimited (default).
     send_max_bytes: Option<usize>,
 }
 
-impl Default for MessageLimits {
-    fn default() -> Self {
-        Self {
-            receive_max_bytes: Some(DEFAULT_MAX_MESSAGE_SIZE),
-            send_max_bytes: None, // No send limit by default (matching connect-go)
-        }
-    }
-}
-
 impl MessageLimits {
-    /// Create new limits with the specified maximum receive message size in bytes.
+    /// Create new limits with no restrictions.
     ///
-    /// This is a convenience constructor that sets only the receive limit.
-    /// For more control, use the builder methods.
-    pub fn new(max_message_size: usize) -> Self {
-        Self {
-            receive_max_bytes: Some(max_message_size),
-            send_max_bytes: None,
-        }
-    }
-
-    /// Create limits with no maximum (not recommended for production).
-    ///
-    /// # Security Warning
-    ///
-    /// Using unlimited message sizes can allow attackers to exhaust server
-    /// memory with large requests. Only use this in trusted environments.
-    pub fn unlimited() -> Self {
-        Self {
-            receive_max_bytes: None,
-            send_max_bytes: None,
-        }
+    /// Use builder methods to set specific limits.
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Set the maximum size for incoming (receive) messages.
@@ -104,12 +72,6 @@ impl MessageLimits {
     }
 
     /// Returns the maximum receive message size, or `None` if unlimited.
-    #[deprecated(since = "0.3.0", note = "Use `receive_max_bytes()` instead")]
-    pub fn max_message_size(&self) -> Option<usize> {
-        self.receive_max_bytes
-    }
-
-    /// Returns the maximum receive message size, or `None` if unlimited.
     pub fn get_receive_max_bytes(&self) -> Option<usize> {
         self.receive_max_bytes
     }
@@ -117,14 +79,6 @@ impl MessageLimits {
     /// Returns the maximum send message size, or `None` if unlimited.
     pub fn get_send_max_bytes(&self) -> Option<usize> {
         self.send_max_bytes
-    }
-
-    /// Returns the maximum receive message size for use with axum::body::to_bytes.
-    ///
-    /// Returns `usize::MAX` if unlimited.
-    #[deprecated(since = "0.3.0", note = "Use `receive_max_bytes_or_max()` instead")]
-    pub fn max_message_size_or_max(&self) -> usize {
-        self.receive_max_bytes.unwrap_or(usize::MAX)
     }
 
     /// Returns the maximum receive message size for use with axum::body::to_bytes.
@@ -192,25 +146,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_limits() {
+    fn test_default_no_limits() {
         let limits = MessageLimits::default();
-        assert_eq!(
-            limits.get_receive_max_bytes(),
-            Some(DEFAULT_MAX_MESSAGE_SIZE)
-        );
-        assert_eq!(limits.get_send_max_bytes(), None); // No send limit by default
-    }
-
-    #[test]
-    fn test_custom_limits() {
-        let limits = MessageLimits::new(1024);
-        assert_eq!(limits.get_receive_max_bytes(), Some(1024));
+        assert_eq!(limits.get_receive_max_bytes(), None);
         assert_eq!(limits.get_send_max_bytes(), None);
     }
 
     #[test]
     fn test_builder_methods() {
-        let limits = MessageLimits::default()
+        let limits = MessageLimits::new()
             .receive_max_bytes(2048)
             .send_max_bytes(1024);
         assert_eq!(limits.get_receive_max_bytes(), Some(2048));
@@ -218,23 +162,24 @@ mod tests {
     }
 
     #[test]
-    fn test_unlimited() {
-        let limits = MessageLimits::unlimited();
-        assert_eq!(limits.get_receive_max_bytes(), None);
-        assert_eq!(limits.get_send_max_bytes(), None);
+    fn test_receive_max_bytes_or_max() {
+        let limits = MessageLimits::new();
         assert_eq!(limits.receive_max_bytes_or_max(), usize::MAX);
+
+        let limits = MessageLimits::new().receive_max_bytes(1024);
+        assert_eq!(limits.receive_max_bytes_or_max(), 1024);
     }
 
     #[test]
     fn test_check_size_within_limit() {
-        let limits = MessageLimits::new(1024);
+        let limits = MessageLimits::new().receive_max_bytes(1024);
         assert!(limits.check_size(512).is_ok());
         assert!(limits.check_size(1024).is_ok());
     }
 
     #[test]
     fn test_check_size_exceeds_limit() {
-        let limits = MessageLimits::new(1024);
+        let limits = MessageLimits::new().receive_max_bytes(1024);
         let result = limits.check_size(1025);
         assert!(result.is_err());
         let err_msg = result.unwrap_err();
@@ -244,7 +189,7 @@ mod tests {
 
     #[test]
     fn test_check_size_connect_exceeds_limit() {
-        let limits = MessageLimits::new(1024);
+        let limits = MessageLimits::new().receive_max_bytes(1024);
         let result = limits.check_size_connect(1025);
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -252,21 +197,21 @@ mod tests {
     }
 
     #[test]
-    fn test_check_size_unlimited() {
-        let limits = MessageLimits::unlimited();
+    fn test_check_size_no_limit() {
+        let limits = MessageLimits::new();
         assert!(limits.check_size(usize::MAX).is_ok());
     }
 
     #[test]
     fn test_check_send_size_within_limit() {
-        let limits = MessageLimits::default().send_max_bytes(1024);
+        let limits = MessageLimits::new().send_max_bytes(1024);
         assert!(limits.check_send_size(512).is_ok());
         assert!(limits.check_send_size(1024).is_ok());
     }
 
     #[test]
     fn test_check_send_size_exceeds_limit() {
-        let limits = MessageLimits::default().send_max_bytes(1024);
+        let limits = MessageLimits::new().send_max_bytes(1024);
         let result = limits.check_send_size(1025);
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -278,13 +223,7 @@ mod tests {
 
     #[test]
     fn test_check_send_size_no_limit() {
-        let limits = MessageLimits::default(); // No send limit by default
-        assert!(limits.check_send_size(usize::MAX).is_ok());
-    }
-
-    #[test]
-    fn test_check_send_size_unlimited() {
-        let limits = MessageLimits::unlimited();
+        let limits = MessageLimits::new();
         assert!(limits.check_send_size(usize::MAX).is_ok());
     }
 }

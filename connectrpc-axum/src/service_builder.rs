@@ -60,6 +60,24 @@ use crate::tonic::ContentTypeSwitch;
 /// Marker type indicating Connect-only mode (no gRPC services added).
 pub struct ConnectOnly;
 
+/// Configuration options for the service builder.
+#[derive(Clone, Default)]
+struct BuilderConfig {
+    limits: Option<MessageLimits>,
+    require_protocol_header: bool,
+    compression: Option<CompressionConfig>,
+    timeout: Option<Duration>,
+}
+
+/// Built layers ready for router construction.
+struct BuiltLayers {
+    connect_layer: ConnectLayer,
+    timeout: Option<Duration>,
+    limits: Option<MessageLimits>,
+    compression_layer: Option<CompressionLayer<SizeAbove>>,
+    decompression_layer: Option<RequestDecompressionLayer>,
+}
+
 /// Marker type indicating Tonic-compatible mode (gRPC services added).
 #[cfg(feature = "tonic")]
 pub struct WithGrpc {
@@ -121,10 +139,7 @@ pub struct MakeServiceBuilder<S = (), G = ConnectOnly> {
     grpc_state: G,
     #[cfg(not(feature = "tonic"))]
     _grpc_state: PhantomData<G>,
-    limits: MessageLimits,
-    require_protocol_header: bool,
-    compression: Option<CompressionConfig>,
-    timeout: Option<Duration>,
+    config: BuilderConfig,
 }
 
 impl<S> Default for MakeServiceBuilder<S, ConnectOnly>
@@ -158,10 +173,10 @@ where
             grpc_state: ConnectOnly,
             #[cfg(not(feature = "tonic"))]
             _grpc_state: PhantomData,
-            limits: MessageLimits::default(),
-            require_protocol_header: false,
-            compression: Some(CompressionConfig::default()),
-            timeout: None,
+            config: BuilderConfig {
+                compression: Some(CompressionConfig::default()),
+                ..Default::default()
+            },
         }
     }
 }
@@ -172,7 +187,7 @@ where
 {
     /// Set custom message size limits.
     ///
-    /// Default is 4 MB for receive, no limit for send.
+    /// By default, no limits are applied.
     ///
     /// # Examples
     ///
@@ -182,7 +197,7 @@ where
     /// // Set both receive and send limits
     /// let app = MakeServiceBuilder::new()
     ///     .message_limits(
-    ///         MessageLimits::default()
+    ///         MessageLimits::new()
     ///             .receive_max_bytes(16 * 1024 * 1024)  // 16 MB for requests
     ///             .send_max_bytes(8 * 1024 * 1024)      // 8 MB for responses
     ///     )
@@ -190,7 +205,7 @@ where
     ///     .build();
     /// ```
     pub fn message_limits(mut self, limits: MessageLimits) -> Self {
-        self.limits = limits;
+        self.config.limits = Some(limits);
         self
     }
 
@@ -200,7 +215,7 @@ where
     /// Requests exceeding this limit are rejected with `ResourceExhausted` error
     /// before decompression occurs.
     ///
-    /// Default is 4 MB. Use `MessageLimits::unlimited()` via `message_limits()` for no limit.
+    /// By default, no limit is applied.
     ///
     /// # Examples
     ///
@@ -214,7 +229,12 @@ where
     ///     .build();
     /// ```
     pub fn receive_max_bytes(mut self, max: usize) -> Self {
-        self.limits = self.limits.receive_max_bytes(max);
+        self.config.limits = Some(
+            self.config
+                .limits
+                .unwrap_or_default()
+                .receive_max_bytes(max),
+        );
         self
     }
 
@@ -227,7 +247,7 @@ where
     /// When a response would exceed this limit, a `ResourceExhausted` error
     /// is returned to the client, following connect-go's behavior.
     ///
-    /// Default is unlimited (no limit).
+    /// By default, no limit is applied.
     ///
     /// # Examples
     ///
@@ -241,7 +261,8 @@ where
     ///     .build();
     /// ```
     pub fn send_max_bytes(mut self, max: usize) -> Self {
-        self.limits = self.limits.send_max_bytes(max);
+        self.config.limits =
+            Some(self.config.limits.unwrap_or_default().send_max_bytes(max));
         self
     }
 
@@ -252,7 +273,7 @@ where
     ///
     /// Disabled by default to allow easy ad-hoc requests (e.g., with cURL).
     pub fn require_protocol_header(mut self, require: bool) -> Self {
-        self.require_protocol_header = require;
+        self.config.require_protocol_header = require;
         self
     }
 
@@ -272,8 +293,8 @@ where
     ///     .add_router(router)
     ///     .build();
     /// ```
-    pub fn compression(mut self, config: CompressionConfig) -> Self {
-        self.compression = Some(config);
+    pub fn compression(mut self, compression: CompressionConfig) -> Self {
+        self.config.compression = Some(compression);
         self
     }
 
@@ -282,7 +303,7 @@ where
     /// When disabled, no compression/decompression layers are added to the router.
     /// This is more efficient than setting a high threshold.
     pub fn disable_compression(mut self) -> Self {
-        self.compression = None;
+        self.config.compression = None;
         self
     }
 
@@ -307,7 +328,7 @@ where
     ///     .build();
     /// ```
     pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = Some(timeout);
+        self.config.timeout = Some(timeout);
         self
     }
 
@@ -479,17 +500,45 @@ where
     }
 
     fn build_connect_layer(&self) -> ConnectLayer {
-        let compression = self.compression.unwrap_or(CompressionConfig::disabled());
+        let compression = self
+            .config
+            .compression
+            .unwrap_or(CompressionConfig::disabled());
+        let limits = self.config.limits.unwrap_or_default();
         let mut layer = ConnectLayer::new()
-            .limits(self.limits)
-            .require_protocol_header(self.require_protocol_header)
+            .limits(limits)
+            .require_protocol_header(self.config.require_protocol_header)
             .compression(compression);
 
-        if let Some(timeout) = self.timeout {
+        if let Some(timeout) = self.config.timeout {
             layer = layer.timeout(timeout);
         }
 
         layer
+    }
+
+    /// Builds a response compression layer with feature-gated compression algorithms.
+    ///
+    /// By default, gzip is always enabled. Additional algorithms (deflate, br, zstd)
+    /// are enabled based on cargo features.
+    fn build_compression_layer(
+        &self,
+        compression: &CompressionConfig,
+    ) -> CompressionLayer<SizeAbove> {
+        let min_bytes = compression.min_bytes.min(u16::MAX as usize) as u16;
+
+        // gzip is always enabled (unconditional feature in Cargo.toml)
+        let layer = CompressionLayer::new().quality(compression.level).gzip(true);
+
+        #[cfg(feature = "compression-deflate")]
+        let layer = layer.deflate(true);
+        #[cfg(feature = "compression-br")]
+        let layer = layer.br(true);
+        #[cfg(feature = "compression-zstd")]
+        let layer = layer.zstd(true);
+
+        // compress_when must be called last as it changes the type
+        layer.compress_when(SizeAbove::new(min_bytes))
     }
 
     /// Builds a request decompression layer with feature-gated compression algorithms.
@@ -508,6 +557,29 @@ where
         let layer = layer.zstd(true);
 
         layer
+    }
+
+    /// Builds the layers needed for router construction.
+    fn build_layers(&self) -> BuiltLayers {
+        let connect_layer = self.build_connect_layer();
+        let compression_layer = self
+            .config
+            .compression
+            .as_ref()
+            .map(|c| self.build_compression_layer(c));
+        let decompression_layer = self
+            .config
+            .compression
+            .as_ref()
+            .map(|_| self.build_request_decompression_layer());
+
+        BuiltLayers {
+            connect_layer,
+            timeout: self.config.timeout,
+            limits: self.config.limits,
+            compression_layer,
+            decompression_layer,
+        }
     }
 }
 
@@ -541,75 +613,83 @@ where
     ///     .build();
     /// ```
     pub fn build(self) -> Router<S> {
-        let connect_layer = self.build_connect_layer();
-        let request_decompression_layer = self.build_request_decompression_layer();
-
-        let compression = self.compression;
-        let limits = self.limits;
-        let axum_router = self.axum_router;
-        let raw_axum_router = self.raw_axum_router;
-        let timeout = self.timeout;
-
-        let router = self.connect_router.layer(connect_layer);
-
-        let router = if let Some(compression) = compression {
-            let min_bytes = compression.min_bytes.min(u16::MAX as usize) as u16;
-            let compression_layer = CompressionLayer::new()
-                .quality(compression.level)
-                .compress_when(SizeAbove::new(min_bytes));
-            let bridge_layer = BridgeLayer::with_receive_limit(limits.get_receive_max_bytes());
-
-            let router = router
-                .layer(compression_layer.clone())
-                .layer(request_decompression_layer.clone())
-                .layer(bridge_layer);
-
-            match axum_router {
-                Some(axum_router) => {
-                    let axum_router = axum_router
-                        .layer(compression_layer)
-                        .layer(request_decompression_layer);
-                    let axum_router = apply_axum_layers(axum_router, timeout, &limits);
-                    router.merge(axum_router)
-                }
-                None => router,
-            }
-        } else {
-            match axum_router {
-                Some(axum_router) => {
-                    let axum_router = apply_axum_layers(axum_router, timeout, &limits);
-                    router.merge(axum_router)
-                }
-                None => router,
-            }
-        };
-
-        match raw_axum_router {
-            Some(raw) => router.merge(raw),
-            None => router,
-        }
+        let layers = self.build_layers();
+        build_connect_and_axum_router(
+            self.connect_router,
+            self.axum_router,
+            self.raw_axum_router,
+            layers,
+        )
     }
 }
 
-fn apply_axum_layers<S>(
-    router: Router<S>,
-    timeout: Option<Duration>,
-    limits: &MessageLimits,
+/// Builds the combined router with all layers applied.
+///
+/// This is the common router building logic shared between Connect-only
+/// and Connect+gRPC builds.
+fn build_connect_and_axum_router<S>(
+    connect_router: Router<S>,
+    axum_router: Option<Router<S>>,
+    raw_axum_router: Option<Router<S>>,
+    layers: BuiltLayers,
 ) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
-    let router = match limits.get_receive_max_bytes() {
-        Some(max_bytes) => router.layer(RequestBodyLimitLayer::new(max_bytes)),
-        None => router,
-    };
-    match timeout {
-        Some(timeout) => router.layer(TimeoutLayer::with_status_code(
+    let receive_max_bytes = layers
+        .limits
+        .as_ref()
+        .and_then(|l| l.get_receive_max_bytes());
+    let bridge_layer = BridgeLayer::with_receive_limit(receive_max_bytes);
+
+    let mut router = connect_router.layer(layers.connect_layer);
+
+    // Apply compression layers if enabled
+    if let (Some(comp), Some(decomp)) = (&layers.compression_layer, &layers.decompression_layer) {
+        router = router.layer(comp.clone()).layer(decomp.clone());
+    }
+
+    // Always apply bridge layer for Connect protocol
+    router = router.layer(bridge_layer);
+
+    // Build and merge axum router if present
+    if let Some(axum_router) = axum_router {
+        let axum_router = apply_axum_layers(axum_router, &layers);
+        router = router.merge(axum_router);
+    }
+
+    // Merge raw axum router (no shared layers)
+    if let Some(raw) = raw_axum_router {
+        router = router.merge(raw);
+    }
+
+    router
+}
+
+fn apply_axum_layers<S>(mut router: Router<S>, layers: &BuiltLayers) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    if let Some(layer) = &layers.compression_layer {
+        router = router.layer(layer.clone());
+    }
+    if let Some(layer) = &layers.decompression_layer {
+        router = router.layer(layer.clone());
+    }
+    if let Some(max_bytes) = layers
+        .limits
+        .as_ref()
+        .and_then(|l| l.get_receive_max_bytes())
+    {
+        router = router.layer(RequestBodyLimitLayer::new(max_bytes));
+    }
+    if let Some(timeout) = layers.timeout {
+        router = router.layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             timeout,
-        )),
-        None => router,
+        ));
     }
+    router
 }
 
 // Tonic-specific methods (only available when tonic feature is enabled)
@@ -701,10 +781,7 @@ where
                 routes,
                 capture_request_parts: true,
             },
-            limits: self.limits,
-            require_protocol_header: self.require_protocol_header,
-            compression: self.compression,
-            timeout: self.timeout,
+            config: self.config,
         }
     }
 }
@@ -848,57 +925,17 @@ where
         use tower::ServiceBuilder;
         use tower::util::Either;
 
-        let connect_layer = self.build_connect_layer();
-        let request_decompression_layer = self.build_request_decompression_layer();
+        let layers = self.build_layers();
+        let router = build_connect_and_axum_router(
+            self.connect_router,
+            self.axum_router,
+            self.raw_axum_router,
+            layers,
+        );
 
-        let compression = self.compression;
-        let limits = self.limits;
-        let axum_router = self.axum_router;
-        let raw_axum_router = self.raw_axum_router;
-        let grpc_state = self.grpc_state;
-        let timeout = self.timeout;
-
-        let router = self.connect_router.layer(connect_layer);
-
-        let connect_router = if let Some(compression) = compression {
-            let min_bytes = compression.min_bytes.min(u16::MAX as usize) as u16;
-            let compression_layer = CompressionLayer::new()
-                .quality(compression.level)
-                .compress_when(SizeAbove::new(min_bytes));
-            let bridge_layer = BridgeLayer::with_receive_limit(limits.get_receive_max_bytes());
-
-            let router = router
-                .layer(compression_layer.clone())
-                .layer(request_decompression_layer.clone())
-                .layer(bridge_layer);
-
-            match axum_router {
-                Some(axum_router) => {
-                    let axum_router = axum_router
-                        .layer(compression_layer)
-                        .layer(request_decompression_layer);
-                    let axum_router = apply_axum_layers(axum_router, timeout, &limits);
-                    router.merge(axum_router)
-                }
-                None => router,
-            }
-        } else {
-            match axum_router {
-                Some(axum_router) => {
-                    let axum_router = apply_axum_layers(axum_router, timeout, &limits);
-                    router.merge(axum_router)
-                }
-                None => router,
-            }
-        };
-
-        let connect_router = match raw_axum_router {
-            Some(raw) => connect_router.merge(raw),
-            None => connect_router,
-        };
-
-        let grpc_routes = grpc_state.routes.prepare();
-        let grpc_service = if grpc_state.capture_request_parts {
+        // Build gRPC service with optional FromRequestParts layer
+        let grpc_routes = self.grpc_state.routes.prepare();
+        let grpc_service = if self.grpc_state.capture_request_parts {
             Either::Left(
                 ServiceBuilder::new()
                     .layer(crate::tonic::FromRequestPartsLayer::new())
@@ -907,7 +944,8 @@ where
         } else {
             Either::Right(grpc_routes)
         };
-        ContentTypeSwitch::new(grpc_service, connect_router)
+
+        ContentTypeSwitch::new(grpc_service, router)
     }
 }
 

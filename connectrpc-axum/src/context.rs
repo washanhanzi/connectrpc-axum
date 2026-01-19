@@ -55,7 +55,7 @@ pub(crate) use config::ServerConfig;
 pub use error::ContextError;
 
 // Re-export limit types
-pub use limit::{DEFAULT_MAX_MESSAGE_SIZE, MessageLimits};
+pub use limit::MessageLimits;
 
 // Re-export protocol types and functions
 pub use protocol::{

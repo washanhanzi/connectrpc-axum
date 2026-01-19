@@ -37,7 +37,7 @@ let service = MakeServiceBuilder::new()
     .add_router(user_router)
 
     // Configure options
-    .message_limits(MessageLimits::new(16 * 1024 * 1024))  // 16MB max
+    .message_limits(MessageLimits::new().receive_max_bytes(16 * 1024 * 1024))  // 16MB max
     .timeout(Duration::from_secs(30))
     .require_protocol_header(true)
 
