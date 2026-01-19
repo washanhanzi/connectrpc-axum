@@ -29,6 +29,35 @@
 //!     .route("/service/Method", post(handler))
 //!     .layer(ConnectLayer::new());
 //! ```
+//!
+//! ## Why BridgeLayer Exists
+//!
+//! The Connect protocol uses two different compression mechanisms:
+//!
+//! - **Unary RPCs**: Use standard HTTP `Content-Encoding`/`Accept-Encoding` headers.
+//!   Tower's `CompressionLayer` handles this automatically.
+//! - **Streaming RPCs**: Use `Connect-Content-Encoding`/`Connect-Accept-Encoding` headers.
+//!   Each message envelope is individually compressed. HTTP body compression must be disabled.
+//!
+//! The [`BridgeLayer`] ensures streaming requests don't get double-compressed by setting
+//! `Accept-Encoding: identity` for streaming requests (prevents Tower from compressing response).
+//! It also enforces request body size limits (on compressed size) before decompression,
+//! protecting against oversized payloads.
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────┐
+//! │              BridgeLayer                    │  ← Size limit check, streaming headers
+//! │  ┌───────────────────────────────────────┐  │
+//! │  │     Tower CompressionLayer            │  │  ← HTTP body compression (unary only)
+//! │  │  ┌─────────────────────────────────┐  │  │
+//! │  │  │         ConnectLayer            │  │  │  ← Protocol detection, context
+//! │  │  │  ┌───────────────────────────┐  │  │  │
+//! │  │  │  │          Handler          │  │  │  │  ← Your RPC handlers
+//! │  │  │  └───────────────────────────┘  │  │  │
+//! │  │  └─────────────────────────────────┘  │  │
+//! │  └───────────────────────────────────────┘  │
+//! └─────────────────────────────────────────────┘
+//! ```
 
 mod bridge;
 mod connect;

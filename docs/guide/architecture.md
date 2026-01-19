@@ -120,6 +120,10 @@ The `pipeline.rs` module provides the low-level functions used by extractors and
 - `decode_bytes` - Decode from raw bytes (decompress, check size, decode)
 - `decode_enveloped_bytes` - Decode from enveloped bytes (for `application/connect+json` or `application/connect+proto`)
 
+**`ResponsePipeline` methods:**
+- `encode` - Encode response message to HTTP response (reads context from request extensions)
+- `encode_with_context` - Encode with explicit context (when request not available)
+
 **Response side:**
 - `encode_proto` / `encode_json` - Encode message to bytes
 - `compress_bytes` - Compress if beneficial
@@ -147,8 +151,12 @@ These are the types you interact with when building services:
 | `RequestProtocol` | Enum identifying Connect variant (Unary/Stream x Json/Proto) |
 | `MessageLimits` | Receive/send size limits (default: 4MB receive, unlimited send) |
 | `CompressionConfig` | Compression settings (default: min_bytes=0, matching connect-go) |
+| `CompressionContext` | Per-request compression context with envelope settings and min_bytes threshold |
 | `CompressionEncoding` | Supported encodings: `Gzip`, `Deflate`, `Brotli`, `Zstd`, or `Identity` |
+| `CompressionLevel` | Compression level (re-exported from tower-http) |
 | `EnvelopeCompression` | Per-envelope compression settings for streaming RPCs |
+| `ContextError` | Error type for context building failures (protocol detection, header parsing) |
+| `BoxedCodec` | Type-erased codec storage (`Box<dyn Codec>`) for dynamic compression dispatch |
 
 ### Request/Response Types
 
@@ -178,6 +186,7 @@ The library uses a unified handler wrapper that supports all RPC patterns:
 | Wrapper | Use Case |
 |---------|----------|
 | `ConnectHandlerWrapper<F>` | Unified: unary, server/client/bidi streaming with optional extractors |
+| `ConnectHandler<F>` | Type alias for `ConnectHandlerWrapper<F>` (convenience re-export) |
 | `TonicCompatibleHandlerWrapper<F>` | Tonic-style unary with axum extractors |
 | `TonicCompatibleStreamHandlerWrapper<F>` | Tonic-style server streaming with axum extractors |
 | `TonicCompatibleClientStreamHandlerWrapper<F>` | Tonic-style client streaming with axum extractors |
@@ -297,8 +306,29 @@ The tonic module defines boxed callable types for generated service code:
 | `BoxedStreamCall<Req, Resp>` | Server streaming RPC callable |
 | `BoxedClientStreamCall<Req, Resp>` | Client streaming RPC callable |
 | `BoxedBidiStreamCall<Req, Resp>` | Bidirectional streaming RPC callable |
+| `BoxedStream<T>` | Pinned boxed stream for streaming responses (`Pin<Box<dyn Stream<Item = Result<T, ConnectError>> + Send>>`) |
 
 Each has corresponding factory traits (`IntoFactory`, `IntoStreamFactory`, `IntoClientStreamFactory`, `IntoBidiStreamFactory`) for adapting user handlers.
+
+#### Handler Functions
+
+| Function | Purpose |
+|----------|---------|
+| `post_tonic_unary(f)` | Creates POST router for tonic-compatible unary handlers |
+| `post_tonic_stream(f)` | Creates POST router for tonic-compatible server streaming handlers |
+| `post_tonic_client_stream(f)` | Creates POST router for tonic-compatible client streaming handlers |
+| `post_tonic_bidi_stream(f)` | Creates POST router for tonic-compatible bidirectional streaming handlers |
+
+#### Unimplemented Helpers
+
+For generated code to provide default "unimplemented" methods:
+
+| Function | Purpose |
+|----------|---------|
+| `unimplemented_boxed_call()` | Returns `BoxedCall` that returns `ConnectError::unimplemented` |
+| `unimplemented_boxed_stream_call()` | Returns `BoxedStreamCall` that returns `ConnectError::unimplemented` |
+| `unimplemented_boxed_client_stream_call()` | Returns `BoxedClientStreamCall` that returns `ConnectError::unimplemented` |
+| `unimplemented_boxed_bidi_stream_call()` | Returns `BoxedBidiStreamCall` that returns `ConnectError::unimplemented` |
 
 ### context/ module
 
@@ -308,6 +338,8 @@ Each has corresponding factory traits (`IntoFactory`, `IntoStreamFactory`, `Into
 | `envelope_compression.rs` | `Codec` trait and per-envelope compression for streaming RPCs |
 | `limit.rs` | Receive and send message size limits |
 | `timeout.rs` | Request timeout handling |
+| `config.rs` | `ServerConfig` (crate-internal configuration) |
+| `error.rs` | `ContextError` type for context building failures |
 
 #### Compression Architecture
 
