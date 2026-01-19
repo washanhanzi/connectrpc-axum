@@ -54,11 +54,11 @@ use std::sync::Arc;
 /// impl Codec for Lz4Codec {
 ///     fn name(&self) -> &'static str { "lz4" }
 ///
-///     fn compress(&self, data: Bytes) -> io::Result<Bytes> {
+///     fn compress(&self, data: &[u8]) -> io::Result<Bytes> {
 ///         // ... lz4 compression
 ///     }
 ///
-///     fn decompress(&self, data: Bytes) -> io::Result<Bytes> {
+///     fn decompress(&self, data: &[u8]) -> io::Result<Bytes> {
 ///         // ... lz4 decompression
 ///     }
 /// }
@@ -68,10 +68,10 @@ pub trait Codec: Send + Sync + 'static {
     fn name(&self) -> &'static str;
 
     /// Compress data.
-    fn compress(&self, data: Bytes) -> io::Result<Bytes>;
+    fn compress(&self, data: &[u8]) -> io::Result<Bytes>;
 
     /// Decompress data.
-    fn decompress(&self, data: Bytes) -> io::Result<Bytes>;
+    fn decompress(&self, data: &[u8]) -> io::Result<Bytes>;
 }
 
 // ============================================================================
@@ -96,12 +96,12 @@ impl BoxedCodec {
     }
 
     /// Compress data.
-    pub fn compress(&self, data: Bytes) -> io::Result<Bytes> {
+    pub fn compress(&self, data: &[u8]) -> io::Result<Bytes> {
         self.0.compress(data)
     }
 
     /// Decompress data.
-    pub fn decompress(&self, data: Bytes) -> io::Result<Bytes> {
+    pub fn decompress(&self, data: &[u8]) -> io::Result<Bytes> {
         self.0.decompress(data)
     }
 }
@@ -145,26 +145,18 @@ impl Codec for GzipCodec {
         "gzip"
     }
 
-    fn compress(&self, data: Bytes) -> io::Result<Bytes> {
+    fn compress(&self, data: &[u8]) -> io::Result<Bytes> {
         let mut encoder = GzEncoder::new(Vec::new(), GzipLevel::new(self.level));
-        encoder.write_all(&data)?;
+        encoder.write_all(data)?;
         Ok(Bytes::from(encoder.finish()?))
     }
 
-    fn decompress(&self, data: Bytes) -> io::Result<Bytes> {
-        decompress_gzip(data)
+    fn decompress(&self, data: &[u8]) -> io::Result<Bytes> {
+        let mut decoder = GzDecoder::new(data);
+        let mut decompressed = Vec::new();
+        decoder.read_to_end(&mut decompressed)?;
+        Ok(Bytes::from(decompressed))
     }
-}
-
-/// Decompress gzip data.
-///
-/// Size limits are enforced at the HTTP layer (BridgeLayer checks Content-Length)
-/// before decompression occurs.
-pub(crate) fn decompress_gzip(data: Bytes) -> io::Result<Bytes> {
-    let mut decoder = GzDecoder::new(&data[..]);
-    let mut decompressed = Vec::new();
-    decoder.read_to_end(&mut decompressed)?;
-    Ok(Bytes::from(decompressed))
 }
 
 // ============================================================================
@@ -206,22 +198,22 @@ impl Codec for DeflateCodec {
         "deflate"
     }
 
-    fn compress(&self, data: Bytes) -> io::Result<Bytes> {
+    fn compress(&self, data: &[u8]) -> io::Result<Bytes> {
         // HTTP "deflate" Content-Encoding uses zlib format (RFC 1950),
         // not raw DEFLATE (RFC 1951). This ensures compatibility with
         // tower-http and standard HTTP clients.
         use flate2::write::ZlibEncoder;
         let mut encoder = ZlibEncoder::new(Vec::new(), GzipLevel::new(self.level));
-        encoder.write_all(&data)?;
+        encoder.write_all(data)?;
         Ok(Bytes::from(encoder.finish()?))
     }
 
-    fn decompress(&self, data: Bytes) -> io::Result<Bytes> {
+    fn decompress(&self, data: &[u8]) -> io::Result<Bytes> {
         // HTTP "deflate" Content-Encoding uses zlib format (RFC 1950),
         // not raw DEFLATE (RFC 1951). This ensures compatibility with
         // tower-http and standard HTTP clients.
         use flate2::read::ZlibDecoder;
-        let mut decoder = ZlibDecoder::new(&data[..]);
+        let mut decoder = ZlibDecoder::new(data);
         let mut decompressed = Vec::new();
         decoder.read_to_end(&mut decompressed)?;
         Ok(Bytes::from(decompressed))
@@ -267,20 +259,20 @@ impl Codec for BrotliCodec {
         "br"
     }
 
-    fn compress(&self, data: Bytes) -> io::Result<Bytes> {
+    fn compress(&self, data: &[u8]) -> io::Result<Bytes> {
         use brotli::enc::BrotliEncoderParams;
         let mut output = Vec::new();
         let params = BrotliEncoderParams {
             quality: self.quality as i32,
             ..Default::default()
         };
-        brotli::enc::BrotliCompress(&mut std::io::Cursor::new(&data), &mut output, &params)?;
+        brotli::enc::BrotliCompress(&mut std::io::Cursor::new(data), &mut output, &params)?;
         Ok(Bytes::from(output))
     }
 
-    fn decompress(&self, data: Bytes) -> io::Result<Bytes> {
+    fn decompress(&self, data: &[u8]) -> io::Result<Bytes> {
         let mut output = Vec::new();
-        brotli::BrotliDecompress(&mut std::io::Cursor::new(&data), &mut output)?;
+        brotli::BrotliDecompress(&mut std::io::Cursor::new(data), &mut output)?;
         Ok(Bytes::from(output))
     }
 }
@@ -324,14 +316,14 @@ impl Codec for ZstdCodec {
         "zstd"
     }
 
-    fn compress(&self, data: Bytes) -> io::Result<Bytes> {
-        let compressed = zstd::bulk::compress(&data, self.level)
+    fn compress(&self, data: &[u8]) -> io::Result<Bytes> {
+        let compressed = zstd::bulk::compress(data, self.level)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         Ok(Bytes::from(compressed))
     }
 
-    fn decompress(&self, data: Bytes) -> io::Result<Bytes> {
-        let mut decoder = zstd::Decoder::new(&data[..])?;
+    fn decompress(&self, data: &[u8]) -> io::Result<Bytes> {
+        let mut decoder = zstd::Decoder::new(data)?;
         let mut decompressed = Vec::new();
         decoder.read_to_end(&mut decompressed)?;
         Ok(Bytes::from(decompressed))
@@ -446,7 +438,7 @@ fn supported_encodings_str() -> &'static str {
 pub fn compress_bytes(bytes: Bytes, codec: Option<&BoxedCodec>) -> io::Result<Bytes> {
     match codec {
         None => Ok(bytes), // identity: zero-copy passthrough
-        Some(c) => c.compress(bytes),
+        Some(c) => c.compress(&bytes),
     }
 }
 
@@ -456,7 +448,7 @@ pub fn compress_bytes(bytes: Bytes, codec: Option<&BoxedCodec>) -> io::Result<By
 pub fn decompress_bytes(bytes: Bytes, codec: Option<&BoxedCodec>) -> io::Result<Bytes> {
     match codec {
         None => Ok(bytes), // identity: zero-copy passthrough
-        Some(c) => c.decompress(bytes),
+        Some(c) => c.decompress(&bytes),
     }
 }
 
@@ -984,12 +976,12 @@ mod tests {
         let codec = GzipCodec::default();
         assert_eq!(codec.name(), "gzip");
 
-        let original = Bytes::from_static(b"Hello, World! This is a test message.");
-        let compressed = codec.compress(original.clone()).unwrap();
-        assert_ne!(compressed, original);
+        let original = b"Hello, World! This is a test message.";
+        let compressed = codec.compress(original).unwrap();
+        assert_ne!(&compressed[..], &original[..]);
 
-        let decompressed = codec.decompress(compressed).unwrap();
-        assert_eq!(decompressed, original);
+        let decompressed = codec.decompress(&compressed).unwrap();
+        assert_eq!(&decompressed[..], &original[..]);
     }
 
     #[test]
@@ -997,10 +989,10 @@ mod tests {
         let codec = GzipCodec::with_level(9);
         assert_eq!(codec.level, 9);
 
-        let original = Bytes::from_static(b"Hello, World! This is a test message.");
-        let compressed = codec.compress(original.clone()).unwrap();
-        let decompressed = codec.decompress(compressed).unwrap();
-        assert_eq!(decompressed, original);
+        let original = b"Hello, World! This is a test message.";
+        let compressed = codec.compress(original).unwrap();
+        let decompressed = codec.decompress(&compressed).unwrap();
+        assert_eq!(&decompressed[..], &original[..]);
     }
 
     #[test]
@@ -1008,12 +1000,12 @@ mod tests {
         let codec = BoxedCodec::new(GzipCodec::default());
         assert_eq!(codec.name(), "gzip");
 
-        let original = Bytes::from_static(b"Hello, World! This is a test message.");
-        let compressed = codec.compress(original.clone()).unwrap();
-        assert_ne!(compressed, original);
+        let original = b"Hello, World! This is a test message.";
+        let compressed = codec.compress(original).unwrap();
+        assert_ne!(&compressed[..], &original[..]);
 
-        let decompressed = codec.decompress(compressed).unwrap();
-        assert_eq!(decompressed, original);
+        let decompressed = codec.decompress(&compressed).unwrap();
+        assert_eq!(&decompressed[..], &original[..]);
     }
 
     #[test]
@@ -1088,7 +1080,7 @@ mod tests {
     #[test]
     fn test_decompress_invalid_gzip() {
         let codec = BoxedCodec::new(GzipCodec::default());
-        let invalid = Bytes::from_static(b"not valid gzip data");
+        let invalid = b"not valid gzip data";
         let result = codec.decompress(invalid);
         assert!(result.is_err());
     }
@@ -1127,12 +1119,12 @@ mod tests {
         let codec = DeflateCodec::default();
         assert_eq!(codec.name(), "deflate");
 
-        let original = Bytes::from_static(b"Hello, World! This is a test message for deflate.");
-        let compressed = codec.compress(original.clone()).unwrap();
-        assert_ne!(compressed, original);
+        let original = b"Hello, World! This is a test message for deflate.";
+        let compressed = codec.compress(original).unwrap();
+        assert_ne!(&compressed[..], &original[..]);
 
-        let decompressed = codec.decompress(compressed).unwrap();
-        assert_eq!(decompressed, original);
+        let decompressed = codec.decompress(&compressed).unwrap();
+        assert_eq!(&decompressed[..], &original[..]);
     }
 
     #[cfg(feature = "compression-deflate")]
@@ -1141,10 +1133,10 @@ mod tests {
         let codec = DeflateCodec::with_level(9);
         assert_eq!(codec.level, 9);
 
-        let original = Bytes::from_static(b"Hello, World! This is a test message.");
-        let compressed = codec.compress(original.clone()).unwrap();
-        let decompressed = codec.decompress(compressed).unwrap();
-        assert_eq!(decompressed, original);
+        let original = b"Hello, World! This is a test message.";
+        let compressed = codec.compress(original).unwrap();
+        let decompressed = codec.decompress(&compressed).unwrap();
+        assert_eq!(&decompressed[..], &original[..]);
     }
 
     #[cfg(feature = "compression-br")]
@@ -1153,12 +1145,12 @@ mod tests {
         let codec = BrotliCodec::default();
         assert_eq!(codec.name(), "br");
 
-        let original = Bytes::from_static(b"Hello, World! This is a test message for brotli.");
-        let compressed = codec.compress(original.clone()).unwrap();
-        assert_ne!(compressed, original);
+        let original = b"Hello, World! This is a test message for brotli.";
+        let compressed = codec.compress(original).unwrap();
+        assert_ne!(&compressed[..], &original[..]);
 
-        let decompressed = codec.decompress(compressed).unwrap();
-        assert_eq!(decompressed, original);
+        let decompressed = codec.decompress(&compressed).unwrap();
+        assert_eq!(&decompressed[..], &original[..]);
     }
 
     #[cfg(feature = "compression-br")]
@@ -1167,10 +1159,10 @@ mod tests {
         let codec = BrotliCodec::with_quality(11);
         assert_eq!(codec.quality, 11);
 
-        let original = Bytes::from_static(b"Hello, World! This is a test message.");
-        let compressed = codec.compress(original.clone()).unwrap();
-        let decompressed = codec.decompress(compressed).unwrap();
-        assert_eq!(decompressed, original);
+        let original = b"Hello, World! This is a test message.";
+        let compressed = codec.compress(original).unwrap();
+        let decompressed = codec.decompress(&compressed).unwrap();
+        assert_eq!(&decompressed[..], &original[..]);
     }
 
     #[cfg(feature = "compression-zstd")]
@@ -1179,12 +1171,12 @@ mod tests {
         let codec = ZstdCodec::default();
         assert_eq!(codec.name(), "zstd");
 
-        let original = Bytes::from_static(b"Hello, World! This is a test message for zstd.");
-        let compressed = codec.compress(original.clone()).unwrap();
-        assert_ne!(compressed, original);
+        let original = b"Hello, World! This is a test message for zstd.";
+        let compressed = codec.compress(original).unwrap();
+        assert_ne!(&compressed[..], &original[..]);
 
-        let decompressed = codec.decompress(compressed).unwrap();
-        assert_eq!(decompressed, original);
+        let decompressed = codec.decompress(&compressed).unwrap();
+        assert_eq!(&decompressed[..], &original[..]);
     }
 
     #[cfg(feature = "compression-zstd")]
@@ -1193,9 +1185,9 @@ mod tests {
         let codec = ZstdCodec::with_level(19);
         assert_eq!(codec.level, 19);
 
-        let original = Bytes::from_static(b"Hello, World! This is a test message.");
-        let compressed = codec.compress(original.clone()).unwrap();
-        let decompressed = codec.decompress(compressed).unwrap();
-        assert_eq!(decompressed, original);
+        let original = b"Hello, World! This is a test message.";
+        let compressed = codec.compress(original).unwrap();
+        let decompressed = codec.decompress(&compressed).unwrap();
+        assert_eq!(&decompressed[..], &original[..]);
     }
 }

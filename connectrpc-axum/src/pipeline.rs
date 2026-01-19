@@ -63,7 +63,7 @@ pub fn decompress_bytes(
     };
 
     codec
-        .decompress(bytes)
+        .decompress(&bytes)
         .map_err(|e| ConnectError::new(Code::InvalidArgument, format!("decompression failed: {e}")))
 }
 
@@ -217,7 +217,7 @@ pub fn compress_bytes(
         return Ok((data, false));
     }
 
-    match codec.compress(data) {
+    match codec.compress(&data) {
         Ok(compressed) => Ok((compressed, true)),
         Err(e) => Err(ConnectError::new(Code::Internal, format!("compress: {e}"))),
     }

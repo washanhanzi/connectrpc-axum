@@ -261,8 +261,7 @@ where
     ///     .build();
     /// ```
     pub fn send_max_bytes(mut self, max: usize) -> Self {
-        self.config.limits =
-            Some(self.config.limits.unwrap_or_default().send_max_bytes(max));
+        self.config.limits = Some(self.config.limits.unwrap_or_default().send_max_bytes(max));
         self
     }
 
@@ -528,7 +527,9 @@ where
         let min_bytes = compression.min_bytes.min(u16::MAX as usize) as u16;
 
         // gzip is always enabled (unconditional feature in Cargo.toml)
-        let layer = CompressionLayer::new().quality(compression.level).gzip(true);
+        let layer = CompressionLayer::new()
+            .quality(compression.level)
+            .gzip(true);
 
         #[cfg(feature = "compression-deflate")]
         let layer = layer.deflate(true);
