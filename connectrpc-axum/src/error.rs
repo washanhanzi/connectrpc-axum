@@ -325,10 +325,12 @@ impl ConnectError {
     fn http_status_code(&self) -> StatusCode {
         match self.code {
             Code::Ok => StatusCode::OK,
-            Code::Canceled => StatusCode::REQUEST_TIMEOUT,
+            // 499 Client Closed Request (nginx extension) - client canceled the operation
+            Code::Canceled => StatusCode::from_u16(499).unwrap(),
             Code::Unknown => StatusCode::INTERNAL_SERVER_ERROR,
             Code::InvalidArgument => StatusCode::BAD_REQUEST,
-            Code::DeadlineExceeded => StatusCode::REQUEST_TIMEOUT,
+            // 504 Gateway Timeout - server-side deadline exceeded
+            Code::DeadlineExceeded => StatusCode::GATEWAY_TIMEOUT,
             Code::NotFound => StatusCode::NOT_FOUND,
             Code::AlreadyExists => StatusCode::CONFLICT,
             Code::PermissionDenied => StatusCode::FORBIDDEN,
@@ -808,10 +810,10 @@ mod tests {
     fn test_http_status_code_mapping() {
         let test_cases = [
             (Code::Ok, StatusCode::OK),
-            (Code::Canceled, StatusCode::REQUEST_TIMEOUT),
+            (Code::Canceled, StatusCode::from_u16(499).unwrap()), // Client Closed Request
             (Code::Unknown, StatusCode::INTERNAL_SERVER_ERROR),
             (Code::InvalidArgument, StatusCode::BAD_REQUEST),
-            (Code::DeadlineExceeded, StatusCode::REQUEST_TIMEOUT),
+            (Code::DeadlineExceeded, StatusCode::GATEWAY_TIMEOUT), // 504
             (Code::NotFound, StatusCode::NOT_FOUND),
             (Code::AlreadyExists, StatusCode::CONFLICT),
             (Code::PermissionDenied, StatusCode::FORBIDDEN),
