@@ -296,7 +296,7 @@ checksum = "75984efb6ed102a0d42db99afb6c1948f0380d1d91808d5529916e6c08b49d8d"
 
 [[package]]
 name = "connectrpc-axum"
-version = "0.0.27"
+version = "0.0.28"
 dependencies = [
  "async-stream",
  "axum",
@@ -327,7 +327,7 @@ dependencies = [
 
 [[package]]
 name = "connectrpc-axum-build"
-version = "0.0.27"
+version = "0.0.28"
 dependencies = [
  "convert_case",
  "pbjson-build",
