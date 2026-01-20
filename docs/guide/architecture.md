@@ -112,7 +112,7 @@ The `pipeline.rs` module provides the low-level functions used by extractors and
 - `read_body` - Read HTTP body with size limit
 - `decompress_bytes` - Decompress based on encoding
 - `decode_proto` / `decode_json` - Decode message from bytes
-- `unwrap_envelope` - Unwrap Connect streaming frame
+- `process_envelope_payload` - Validate envelope flags and decompress payload
 - `get_context_or_default` - Get `ConnectContext` from request extensions (with fallback)
 
 **`RequestPipeline` methods:**

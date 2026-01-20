@@ -15,7 +15,7 @@
 //! - [`decompress_bytes`]: Decompress bytes based on encoding
 //! - [`decode_proto`]: Decode protobuf message
 //! - [`decode_json`]: Decode JSON message
-//! - [`unwrap_envelope`]: Unwrap a Connect streaming frame envelope
+//! - [`process_envelope_payload`]: Validate envelope flags and decompress payload
 //!
 //! ### Response primitives
 //! - [`encode_proto`]: Encode protobuf message to bytes
@@ -111,62 +111,47 @@ where
     })
 }
 
-/// Unwrap a single Connect envelope frame.
+/// Process envelope payload based on flags, with optional decompression.
 ///
-/// Frame format: `[flags:1][length:4][payload:length]`
+/// Given the flags byte and payload bytes from an envelope, validates the flags
+/// and decompresses the payload if needed.
 ///
-/// Returns the payload bytes. Validates that flags indicate a regular message
-/// (0x00) and that the frame is complete.
+/// # Returns
+/// - `Ok(Some(payload))` for message frames (flags 0x00 or 0x01)
+/// - `Ok(None)` for end-stream frames (flag 0x02)
+/// - `Err` for invalid/unknown flags
 ///
-/// # Errors
-/// - `InvalidArgument` if the envelope is incomplete or malformed
-/// - `InvalidArgument` if flags indicate end-of-stream (0x02) or unknown flags
-pub fn unwrap_envelope(bytes: &[u8]) -> Result<Bytes, ConnectError> {
-    if bytes.len() < 5 {
-        return Err(ConnectError::new(
-            Code::InvalidArgument,
-            "protocol error: incomplete envelope",
-        ));
+/// # Arguments
+/// - `flags`: The envelope flags byte
+/// - `payload`: The raw payload bytes from the envelope
+/// - `encoding`: Compression encoding to use for decompression (from `Connect-Content-Encoding`)
+pub fn process_envelope_payload(
+    flags: u8,
+    payload: Bytes,
+    encoding: CompressionEncoding,
+) -> Result<Option<Bytes>, ConnectError> {
+    // EndStream frame (flags = 0x02) signals end of stream
+    if flags == envelope_flags::END_STREAM {
+        return Ok(None);
     }
 
-    let flags = bytes[0];
-    let length = u32::from_be_bytes([bytes[1], bytes[2], bytes[3], bytes[4]]) as usize;
-
-    // Connect streaming: flag 0x00 = message, 0x02 = end-stream
-    if flags == 0x02 {
-        return Err(ConnectError::new(
-            Code::InvalidArgument,
-            "unexpected EndStreamResponse in request",
-        ));
-    } else if flags != 0x00 {
+    // Validate message flags: 0x00 = uncompressed, 0x01 = compressed
+    let is_compressed = flags == envelope_flags::COMPRESSED;
+    if flags != envelope_flags::MESSAGE && !is_compressed {
         return Err(ConnectError::new(
             Code::InvalidArgument,
             format!("invalid Connect frame flags: 0x{:02x}", flags),
         ));
     }
 
-    // Validate frame length
-    let expected_len = 5 + length;
-    if bytes.len() > expected_len {
-        return Err(ConnectError::new(
-            Code::InvalidArgument,
-            format!(
-                "frame has {} unexpected trailing bytes",
-                bytes.len() - expected_len
-            ),
-        ));
-    } else if bytes.len() < expected_len {
-        return Err(ConnectError::new(
-            Code::InvalidArgument,
-            format!(
-                "incomplete frame: expected {} bytes, got {}",
-                expected_len,
-                bytes.len()
-            ),
-        ));
-    }
+    // Decompress if needed
+    let payload = if is_compressed {
+        decompress_bytes(payload, encoding)?
+    } else {
+        payload
+    };
 
-    Ok(Bytes::copy_from_slice(&bytes[5..expected_len]))
+    Ok(Some(payload))
 }
 
 // ============================================================================
@@ -502,13 +487,67 @@ impl RequestPipeline {
     /// Used when Content-Type is `application/connect+json` or `application/connect+proto`.
     /// These use envelope framing even for unary requests.
     ///
-    /// Note: For unary RPCs, decompression and size checking are handled by
-    /// Tower's DecompressionLayer and BridgeLayer respectively.
+    /// Handles per-envelope compression: frames with flag 0x01 are decompressed
+    /// using the encoding from the `Connect-Content-Encoding` header.
     pub fn decode_enveloped_bytes<T>(ctx: &ConnectContext, body: Bytes) -> Result<T, ContextError>
     where
         T: Message + DeserializeOwned + Default,
     {
-        let payload = unwrap_envelope(&body).map_err(|e| ContextError::new(ctx.protocol, e))?;
+        // Parse envelope header: [flags:1][length:4][payload:length]
+        if body.len() < 5 {
+            return Err(ContextError::new(
+                ctx.protocol,
+                ConnectError::new(Code::InvalidArgument, "protocol error: incomplete envelope"),
+            ));
+        }
+
+        let flags = body[0];
+        let length = u32::from_be_bytes([body[1], body[2], body[3], body[4]]) as usize;
+
+        // Validate frame length
+        let expected_len = 5 + length;
+        if body.len() > expected_len {
+            return Err(ContextError::new(
+                ctx.protocol,
+                ConnectError::new(
+                    Code::InvalidArgument,
+                    format!(
+                        "frame has {} unexpected trailing bytes",
+                        body.len() - expected_len
+                    ),
+                ),
+            ));
+        } else if body.len() < expected_len {
+            return Err(ContextError::new(
+                ctx.protocol,
+                ConnectError::new(
+                    Code::InvalidArgument,
+                    format!(
+                        "incomplete frame: expected {} bytes, got {}",
+                        expected_len,
+                        body.len()
+                    ),
+                ),
+            ));
+        }
+
+        // Extract payload and process (validate flags + decompress)
+        let raw_payload = body.slice(5..expected_len);
+        let encoding = ctx
+            .compression
+            .envelope
+            .map(|e| e.request)
+            .unwrap_or(CompressionEncoding::Identity);
+
+        let payload = process_envelope_payload(flags, raw_payload, encoding)
+            .map_err(|e| ContextError::new(ctx.protocol, e))?
+            .ok_or_else(|| {
+                ContextError::new(
+                    ctx.protocol,
+                    ConnectError::new(Code::InvalidArgument, "unexpected EndStreamResponse in request"),
+                )
+            })?;
+
         Self::decode_message(ctx, &payload)
     }
 

@@ -2,8 +2,8 @@
 use crate::context::{CompressionEncoding, MessageLimits};
 use crate::error::{Code, ConnectError};
 use crate::pipeline::{
-    RequestPipeline, decode_json, decode_proto, decompress_bytes, envelope_flags,
-    get_context_or_default, read_body, read_frame_bytes,
+    RequestPipeline, decode_json, decode_proto, decompress_bytes, get_context_or_default,
+    process_envelope_payload, read_body, read_frame_bytes,
 };
 use axum::{
     body::Body,
@@ -132,8 +132,8 @@ where
 
 /// Handle streaming-style POST requests used for unary (application/connect+json, application/connect+proto).
 ///
-/// Flow: read_body → decode_enveloped_bytes (decompress → check_size → unwrap_envelope → decode)
-/// Has envelope handling.
+/// Flow: read_body → decode_enveloped_bytes (unwrap envelope → decompress if flag 0x01 → decode)
+/// Handles per-envelope compression via Connect-Content-Encoding header.
 async fn from_streaming_post_request<T>(
     req: Request,
     ctx: crate::context::ConnectContext,
@@ -326,36 +326,20 @@ where
                     break; // Need more data
                 }
 
-                // EndStream frame (flags = 0x02) signals end of client stream
-                if flags == envelope_flags::END_STREAM {
-                    // Client sent EndStream, we're done
-                    return;
-                }
-
-                // Check for valid message flags (0x00 = uncompressed, 0x01 = compressed)
-                let is_compressed = flags == envelope_flags::COMPRESSED;
-                if flags != envelope_flags::MESSAGE && !is_compressed {
-                    yield Err(ConnectError::new(
-                        Code::InvalidArgument,
-                        format!("invalid Connect frame flags: 0x{:02x}", flags),
-                    ));
-                    return;
-                }
-
                 // Extract payload
-                let payload = buffer.split_to(5 + length).split_off(5);
+                let raw_payload = buffer.split_to(5 + length).split_off(5);
 
-                // Decompress if needed (size already checked above on compressed envelope)
-                let payload = if is_compressed {
-                    match decompress_bytes(payload.freeze(), request_encoding) {
-                        Ok(decompressed) => decompressed,
-                        Err(err) => {
-                            yield Err(err);
-                            return;
-                        }
+                // Process envelope: validate flags and decompress if needed
+                let payload = match process_envelope_payload(flags, raw_payload.freeze(), request_encoding) {
+                    Ok(Some(payload)) => payload,
+                    Ok(None) => {
+                        // EndStream frame - client stream is done
+                        return;
                     }
-                } else {
-                    payload.freeze()
+                    Err(err) => {
+                        yield Err(err);
+                        return;
+                    }
                 };
 
                 // Decode the message using pipeline primitives
