@@ -196,11 +196,6 @@ where
             .map(|e| e.response)
             .unwrap_or(CompressionEncoding::Identity);
 
-        eprintln!(
-            "[DEBUG] StreamBody::into_response_with_context: send_max_bytes={:?}",
-            ctx.limits.get_send_max_bytes()
-        );
-
         self.into_response_with_context_inner(
             ctx.protocol.is_proto(),
             ctx.protocol.streaming_response_content_type(),

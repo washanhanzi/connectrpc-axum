@@ -30,17 +30,17 @@ use tower::{Layer, Service, ServiceExt};
 /// ```rust,ignore
 /// use connectrpc_axum::{ConnectLayer, MessageLimits};
 ///
-/// // Use default 4 MB limit
+/// // Use default (no message size limits)
 /// let router = Router::new()
 ///     .route("/service/Method", post(handler))
 ///     .layer(ConnectLayer::new());
 ///
-/// // Custom 16 MB limit with protocol header required
+/// // Custom 16 MB receive limit with protocol header required
 /// let router = Router::new()
 ///     .route("/service/Method", post(handler))
 ///     .layer(
 ///         ConnectLayer::new()
-///             .limits(MessageLimits::new(16 * 1024 * 1024))
+///             .limits(MessageLimits::new().receive_max_bytes(16 * 1024 * 1024))
 ///             .require_protocol_header(true)
 ///     );
 /// ```
@@ -57,7 +57,7 @@ impl Default for ConnectLayer {
 }
 
 impl ConnectLayer {
-    /// Create a new ConnectLayer with default message limits (4 MB).
+    /// Create a new ConnectLayer with default settings (no message size limits).
     pub fn new() -> Self {
         Self {
             config: ServerConfig::default(),
