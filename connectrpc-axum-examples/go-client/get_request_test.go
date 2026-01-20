@@ -54,11 +54,10 @@ func TestGetRequestValidation(t *testing.T) {
 			wantContains:  "missing encoding parameter",
 		},
 		{
-			name:          "invalid_encoding",
-			query:         fmt.Sprintf("connect=v1&encoding=xml&message=%s", validMessage),
-			wantStatus:    400,
-			wantErrorCode: "invalid_argument",
-			wantContains:  "invalid message encoding",
+			name:       "invalid_encoding",
+			query:      fmt.Sprintf("connect=v1&encoding=xml&message=%s", validMessage),
+			wantStatus: 415, // HTTP 415 Unsupported Media Type with Accept-Post header
+			// No error code in body - 415 responses have empty body
 		},
 		{
 			name:          "missing_message",
@@ -79,7 +78,7 @@ func TestGetRequestValidation(t *testing.T) {
 			query:         fmt.Sprintf("connect=v1&encoding=json&compression=br&message=%s", validMessage),
 			wantStatus:    501,
 			wantErrorCode: "unimplemented",
-			wantContains:  "unknown compression",
+			wantContains:  "unsupported compression", // Message from resolve_codec
 		},
 		{
 			name:          "gzip_compression_with_uncompressed_message",

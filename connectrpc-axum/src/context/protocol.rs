@@ -5,6 +5,7 @@
 //! - [`detect_protocol`] for detecting protocol from incoming requests
 //! - Validation functions for protocol version and content-type
 
+use crate::context::envelope_compression::resolve_codec;
 use crate::error::{Code, ConnectError};
 use axum::http::{Method, Request, header};
 
@@ -17,6 +18,13 @@ pub const CONNECT_PROTOCOL_VERSION: &str = "1";
 
 /// Header name for Connect protocol version.
 pub const CONNECT_PROTOCOL_VERSION_HEADER: &str = "connect-protocol-version";
+
+/// Supported content types for the Accept-Post header.
+///
+/// Used in 415 Unsupported Media Type responses to indicate which
+/// content types are supported by the Connect protocol.
+pub const SUPPORTED_CONTENT_TYPES: &str =
+    "application/json, application/proto, application/connect+json, application/connect+proto";
 
 // ============================================================================
 // RequestProtocol enum
@@ -243,6 +251,38 @@ pub fn validate_content_type(protocol: RequestProtocol) -> Option<ConnectError> 
     }
 }
 
+/// Check if the content-type can be handled by the Connect protocol.
+///
+/// Returns `true` if the content-type is a supported Connect content-type.
+/// Returns `false` if the content-type is unknown and should trigger HTTP 415.
+///
+/// This is used for pre-protocol validation before context creation.
+pub fn can_handle_content_type(protocol: RequestProtocol) -> bool {
+    protocol.is_valid()
+}
+
+/// Check if the GET request encoding parameter can be handled.
+///
+/// Returns `true` if encoding is "json" or "proto" (or missing, which defaults to json).
+/// Returns `false` if encoding is something else (e.g., "xml") which should trigger HTTP 415.
+///
+/// This is used for pre-protocol validation of GET requests.
+pub fn can_handle_get_encoding<B>(req: &Request<B>) -> bool {
+    let query = req.uri().query().unwrap_or("");
+
+    for pair in query.split('&') {
+        if let Some((key, value)) = pair.split_once('=') {
+            if key == "encoding" {
+                // Encoding must be "json" or "proto"
+                return value == "json" || value == "proto";
+            }
+        }
+    }
+
+    // No encoding parameter - defaults to json, which is valid
+    true
+}
+
 /// Validate that the protocol is appropriate for unary RPC.
 ///
 /// Returns `Some(ConnectError)` if a streaming content-type is used for a unary RPC.
@@ -370,18 +410,14 @@ pub fn validate_get_query_params<B>(
     }
 
     // Validate compression if present (matching connect-go: negotiateCompression)
+    // Use resolve_codec to support all configured compression algorithms
     if let Some(comp) = compression
         && !comp.is_empty()
         && comp != "identity"
-        && comp != "gzip"
     {
-        return Some(ConnectError::new(
-            Code::Unimplemented,
-            format!(
-                "unknown compression \"{}\": supported encodings are gzip, identity",
-                comp
-            ),
-        ));
+        if let Err(err) = resolve_codec(comp) {
+            return Some(err);
+        }
     }
 
     None
@@ -857,14 +893,15 @@ mod tests {
     fn test_get_unsupported_compression() {
         let req = Request::builder()
             .method(Method::GET)
-            .uri("/svc/Method?connect=v1&encoding=json&message=abc&compression=br")
+            .uri("/svc/Method?connect=v1&encoding=json&message=abc&compression=lz4")
             .body(())
             .unwrap();
         let err = validate_get_query_params(&req, false);
         assert!(err.is_some());
         let err = err.unwrap();
         assert!(matches!(err.code(), Code::Unimplemented));
-        assert!(err.message().unwrap().contains("unknown compression"));
+        // resolve_codec returns "unsupported compression" for unknown algorithms
+        assert!(err.message().unwrap().contains("unsupported compression"));
     }
 
     #[test]
@@ -876,5 +913,85 @@ mod tests {
             .body(())
             .unwrap();
         assert!(validate_get_query_params(&req, false).is_none());
+    }
+
+    // --- can_handle_content_type tests ---
+
+    #[test]
+    fn test_can_handle_content_type_valid() {
+        assert!(can_handle_content_type(RequestProtocol::ConnectUnaryJson));
+        assert!(can_handle_content_type(RequestProtocol::ConnectUnaryProto));
+        assert!(can_handle_content_type(RequestProtocol::ConnectStreamJson));
+        assert!(can_handle_content_type(RequestProtocol::ConnectStreamProto));
+    }
+
+    #[test]
+    fn test_can_handle_content_type_unknown() {
+        assert!(!can_handle_content_type(RequestProtocol::Unknown));
+    }
+
+    // --- can_handle_get_encoding tests ---
+
+    #[test]
+    fn test_can_handle_get_encoding_json() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?encoding=json&message=")
+            .body(())
+            .unwrap();
+        assert!(can_handle_get_encoding(&req));
+    }
+
+    #[test]
+    fn test_can_handle_get_encoding_proto() {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?encoding=proto&message=")
+            .body(())
+            .unwrap();
+        assert!(can_handle_get_encoding(&req));
+    }
+
+    #[test]
+    fn test_can_handle_get_encoding_missing() {
+        // No encoding parameter - defaults to json, which is valid
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?message=")
+            .body(())
+            .unwrap();
+        assert!(can_handle_get_encoding(&req));
+    }
+
+    #[test]
+    fn test_can_handle_get_encoding_invalid() {
+        // Invalid encoding like "xml" should return false
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?encoding=xml&message=")
+            .body(())
+            .unwrap();
+        assert!(!can_handle_get_encoding(&req));
+    }
+
+    #[test]
+    fn test_can_handle_get_encoding_empty() {
+        // Empty encoding value should return false (neither json nor proto)
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?encoding=&message=")
+            .body(())
+            .unwrap();
+        assert!(!can_handle_get_encoding(&req));
+    }
+
+    // --- SUPPORTED_CONTENT_TYPES constant test ---
+
+    #[test]
+    fn test_supported_content_types_constant() {
+        assert!(SUPPORTED_CONTENT_TYPES.contains("application/json"));
+        assert!(SUPPORTED_CONTENT_TYPES.contains("application/proto"));
+        assert!(SUPPORTED_CONTENT_TYPES.contains("application/connect+json"));
+        assert!(SUPPORTED_CONTENT_TYPES.contains("application/connect+proto"));
     }
 }

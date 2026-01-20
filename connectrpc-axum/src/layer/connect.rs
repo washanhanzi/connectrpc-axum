@@ -3,9 +3,11 @@
 //! The [`ConnectLayer`] middleware detects the protocol variant from incoming requests,
 //! builds a [`ConnectContext`], and stores it in request extensions for use by pipelines.
 
+use crate::context::error::ProtocolNegotiationError;
+use crate::context::protocol::{can_handle_content_type, can_handle_get_encoding, detect_protocol};
 use crate::context::{CompressionConfig, ConnectContext, MessageLimits, ServerConfig};
 use crate::error::{Code, ConnectError};
-use axum::http::Request;
+use axum::http::{Method, Request};
 use axum::response::Response;
 use std::time::Duration;
 use std::{
@@ -137,6 +139,37 @@ impl<S> Layer<S> for ConnectLayer {
     }
 }
 
+// ============================================================================
+// Pre-protocol validation
+// ============================================================================
+
+/// Check if the request can be handled by the Connect protocol.
+///
+/// Returns `Some(ProtocolNegotiationError)` if the request cannot be handled,
+/// which should result in an HTTP 415 response with `Accept-Post` header.
+///
+/// This is called before context creation to handle cases where the protocol
+/// cannot be determined (unsupported content-type or invalid GET encoding).
+fn check_protocol_negotiation<B>(req: &Request<B>) -> Option<ProtocolNegotiationError> {
+    if *req.method() == Method::GET {
+        // For GET requests, check the encoding parameter
+        if !can_handle_get_encoding(req) {
+            return Some(ProtocolNegotiationError::UnsupportedMediaType);
+        }
+    } else if *req.method() == Method::POST {
+        // For POST requests, check the Content-Type
+        let protocol = detect_protocol(req);
+        if !can_handle_content_type(protocol) {
+            return Some(ProtocolNegotiationError::UnsupportedMediaType);
+        }
+    }
+    None
+}
+
+// ============================================================================
+// ConnectService
+// ============================================================================
+
 /// Service wrapper that provides per-request protocol context and message limits.
 #[derive(Debug, Clone)]
 pub struct ConnectService<S> {
@@ -160,6 +193,12 @@ where
     }
 
     fn call(&mut self, mut req: Request<ReqBody>) -> Self::Future {
+        // 0. Pre-protocol validation (can produce HTTP 415)
+        if let Some(nego_err) = check_protocol_negotiation(&req) {
+            let response = nego_err.into_response();
+            return Box::pin(async move { Ok(response) });
+        }
+
         // 1. Build request context from request headers
         let request_ctx = match ConnectContext::from_request(&req, &self.config) {
             Ok(ctx) => ctx,

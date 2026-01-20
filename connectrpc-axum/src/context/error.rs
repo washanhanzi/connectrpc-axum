@@ -1,7 +1,10 @@
 //! Response error type - bundles ConnectError with protocol for response formatting.
 
 use crate::context::RequestProtocol;
+use crate::context::protocol::SUPPORTED_CONTENT_TYPES;
 use crate::error::{Code, ConnectError};
+use axum::body::Body;
+use axum::http::StatusCode;
 use axum::response::Response;
 
 /// Error bundled with protocol for HTTP response formatting.
@@ -58,6 +61,46 @@ impl std::fmt::Display for ContextError {
 
 impl std::error::Error for ContextError {}
 
+// ============================================================================
+// Protocol Negotiation Error
+// ============================================================================
+
+/// Pre-protocol error for unsupported media types.
+///
+/// This error type produces raw HTTP 415 responses that bypass Connect error
+/// formatting. Per connect-go behavior, unsupported content-types and invalid
+/// GET encodings return HTTP 415 Unsupported Media Type with an `Accept-Post`
+/// header listing supported content types.
+///
+/// This is used before protocol detection completes, when the request cannot
+/// be handled by any supported protocol variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtocolNegotiationError {
+    /// Content-Type or encoding is not supported.
+    UnsupportedMediaType,
+}
+
+impl ProtocolNegotiationError {
+    /// Convert to HTTP 415 response with Accept-Post header.
+    pub fn into_response(self) -> Response {
+        Response::builder()
+            .status(StatusCode::UNSUPPORTED_MEDIA_TYPE)
+            .header("Accept-Post", SUPPORTED_CONTENT_TYPES)
+            .body(Body::empty())
+            .unwrap()
+    }
+}
+
+impl std::fmt::Display for ProtocolNegotiationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedMediaType => write!(f, "unsupported media type"),
+        }
+    }
+}
+
+impl std::error::Error for ProtocolNegotiationError {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,5 +139,39 @@ mod tests {
             ConnectError::new(Code::NotFound, "not found"),
         );
         assert_eq!(format!("{err}"), "not found");
+    }
+
+    // --- ProtocolNegotiationError tests ---
+
+    #[test]
+    fn test_protocol_negotiation_error_into_response() {
+        use axum::http::StatusCode;
+
+        let err = ProtocolNegotiationError::UnsupportedMediaType;
+        let response = err.into_response();
+
+        // Should return HTTP 415
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+        // Should have Accept-Post header with supported content types
+        let accept_post = response.headers().get("Accept-Post");
+        assert!(accept_post.is_some());
+        let accept_post_value = accept_post.unwrap().to_str().unwrap();
+        assert!(accept_post_value.contains("application/json"));
+        assert!(accept_post_value.contains("application/proto"));
+        assert!(accept_post_value.contains("application/connect+json"));
+        assert!(accept_post_value.contains("application/connect+proto"));
+    }
+
+    #[test]
+    fn test_protocol_negotiation_error_display() {
+        let err = ProtocolNegotiationError::UnsupportedMediaType;
+        assert_eq!(format!("{err}"), "unsupported media type");
+    }
+
+    #[test]
+    fn test_protocol_negotiation_error_debug() {
+        let err = ProtocolNegotiationError::UnsupportedMediaType;
+        assert_eq!(format!("{err:?}"), "UnsupportedMediaType");
     }
 }
