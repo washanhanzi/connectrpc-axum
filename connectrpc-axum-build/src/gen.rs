@@ -691,44 +691,121 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                 }
             };
 
+            // Determine which streaming types are actually used by this service
+            let has_unary = method_info
+                .iter()
+                .any(|(_, _, _, _, _, is_ss, is_cs)| !*is_ss && !*is_cs);
+            let has_server_stream = method_info
+                .iter()
+                .any(|(_, _, _, _, _, is_ss, is_cs)| *is_ss && !*is_cs);
+            let has_client_stream = method_info
+                .iter()
+                .any(|(_, _, _, _, _, is_ss, is_cs)| !*is_ss && *is_cs);
+            let has_bidi_stream = method_info
+                .iter()
+                .any(|(_, _, _, _, _, is_ss, is_cs)| *is_ss && *is_cs);
+
+            // Only generate type aliases and helper functions for streaming types actually used
+            let boxed_call_alias = if has_unary {
+                quote! {
+                    type BoxedCall<Req, Resp> = connectrpc_axum::tonic::BoxedCall<Req, Resp>;
+                }
+            } else {
+                quote! {}
+            };
+
+            let boxed_stream_call_alias = if has_server_stream {
+                quote! {
+                    type BoxedStreamCall<Req, Resp> = connectrpc_axum::tonic::BoxedStreamCall<Req, Resp>;
+                }
+            } else {
+                quote! {}
+            };
+
+            let boxed_client_stream_call_alias = if has_client_stream {
+                quote! {
+                    type BoxedClientStreamCall<Req, Resp> = connectrpc_axum::tonic::BoxedClientStreamCall<Req, Resp>;
+                }
+            } else {
+                quote! {}
+            };
+
+            let boxed_bidi_stream_call_alias = if has_bidi_stream {
+                quote! {
+                    type BoxedBidiStreamCall<Req, Resp> = connectrpc_axum::tonic::BoxedBidiStreamCall<Req, Resp>;
+                }
+            } else {
+                quote! {}
+            };
+
+            let unimplemented_boxed_call_fn = if has_unary {
+                quote! {
+                    fn unimplemented_boxed_call<Req, Resp>() -> BoxedCall<Req, Resp>
+                    where
+                        Req: Send + Sync + 'static,
+                        Resp: Send + Sync + 'static,
+                    {
+                        connectrpc_axum::tonic::unimplemented_boxed_call::<Req, Resp>()
+                    }
+                }
+            } else {
+                quote! {}
+            };
+
+            let unimplemented_boxed_stream_call_fn = if has_server_stream {
+                quote! {
+                    fn unimplemented_boxed_stream_call<Req, Resp>() -> BoxedStreamCall<Req, Resp>
+                    where
+                        Req: Send + Sync + 'static,
+                        Resp: Send + Sync + 'static,
+                    {
+                        connectrpc_axum::tonic::unimplemented_boxed_stream_call::<Req, Resp>()
+                    }
+                }
+            } else {
+                quote! {}
+            };
+
+            let unimplemented_boxed_client_stream_call_fn = if has_client_stream {
+                quote! {
+                    fn unimplemented_boxed_client_stream_call<Req, Resp>() -> BoxedClientStreamCall<Req, Resp>
+                    where
+                        Req: Send + Sync + 'static,
+                        Resp: Send + Sync + 'static,
+                    {
+                        connectrpc_axum::tonic::unimplemented_boxed_client_stream_call::<Req, Resp>()
+                    }
+                }
+            } else {
+                quote! {}
+            };
+
+            let unimplemented_boxed_bidi_stream_call_fn = if has_bidi_stream {
+                quote! {
+                    fn unimplemented_boxed_bidi_stream_call<Req, Resp>() -> BoxedBidiStreamCall<Req, Resp>
+                    where
+                        Req: Send + Sync + 'static,
+                        Resp: Send + Sync + 'static,
+                    {
+                        connectrpc_axum::tonic::unimplemented_boxed_bidi_stream_call::<Req, Resp>()
+                    }
+                }
+            } else {
+                quote! {}
+            };
+
             let module_bits = quote! {
                 // Local aliases to reduce fully-qualified verbosity in generated code
-                type BoxedCall<Req, Resp> = connectrpc_axum::tonic::BoxedCall<Req, Resp>;
-                type BoxedStreamCall<Req, Resp> = connectrpc_axum::tonic::BoxedStreamCall<Req, Resp>;
-                type BoxedClientStreamCall<Req, Resp> = connectrpc_axum::tonic::BoxedClientStreamCall<Req, Resp>;
-                type BoxedBidiStreamCall<Req, Resp> = connectrpc_axum::tonic::BoxedBidiStreamCall<Req, Resp>;
+                // Only include type aliases for streaming types actually used by this service
+                #boxed_call_alias
+                #boxed_stream_call_alias
+                #boxed_client_stream_call_alias
+                #boxed_bidi_stream_call_alias
 
-                fn unimplemented_boxed_call<Req, Resp>() -> BoxedCall<Req, Resp>
-                where
-                    Req: Send + Sync + 'static,
-                    Resp: Send + Sync + 'static,
-                {
-                    connectrpc_axum::tonic::unimplemented_boxed_call::<Req, Resp>()
-                }
-
-                fn unimplemented_boxed_stream_call<Req, Resp>() -> BoxedStreamCall<Req, Resp>
-                where
-                    Req: Send + Sync + 'static,
-                    Resp: Send + Sync + 'static,
-                {
-                    connectrpc_axum::tonic::unimplemented_boxed_stream_call::<Req, Resp>()
-                }
-
-                fn unimplemented_boxed_client_stream_call<Req, Resp>() -> BoxedClientStreamCall<Req, Resp>
-                where
-                    Req: Send + Sync + 'static,
-                    Resp: Send + Sync + 'static,
-                {
-                    connectrpc_axum::tonic::unimplemented_boxed_client_stream_call::<Req, Resp>()
-                }
-
-                fn unimplemented_boxed_bidi_stream_call<Req, Resp>() -> BoxedBidiStreamCall<Req, Resp>
-                where
-                    Req: Send + Sync + 'static,
-                    Resp: Send + Sync + 'static,
-                {
-                    connectrpc_axum::tonic::unimplemented_boxed_bidi_stream_call::<Req, Resp>()
-                }
+                #unimplemented_boxed_call_fn
+                #unimplemented_boxed_stream_call_fn
+                #unimplemented_boxed_client_stream_call_fn
+                #unimplemented_boxed_bidi_stream_call_fn
 
                 #tonic_builder_structs
             };
@@ -737,6 +814,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                 /// Generated Tonic-compatible service that holds boxed calls.
                 /// This struct directly implements the Tonic trait, following Tonic's idiomatic
                 /// approach where the trait serves as the primary interface.
+                #[allow(dead_code)]
                 pub struct #tonic_service_name {
                     #(#tonic_service_handler_fields,)*
                 }
@@ -758,6 +836,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
         };
 
         let routes_fn = quote! {
+            #[allow(dead_code)]
             pub mod #service_module_name {
                 #[allow(unused_imports)]
                 use super::*;
