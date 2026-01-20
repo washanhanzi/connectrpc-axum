@@ -24,7 +24,9 @@
 //! - [`wrap_envelope`]: Wrap payload in a Connect streaming frame
 //! - [`build_end_stream_frame`]: Build an EndStream frame for streaming responses
 
-use crate::context::{CompressionEncoding, ConnectContext, detect_protocol, error::ContextError};
+use crate::context::{
+    CompressionConfig, CompressionEncoding, ConnectContext, detect_protocol, error::ContextError,
+};
 use crate::error::{Code, ConnectError};
 use axum::body::Body;
 use axum::http::{HeaderMap, Request, Response, StatusCode, header};
@@ -192,13 +194,13 @@ where
 pub fn compress_bytes(
     data: Bytes,
     encoding: CompressionEncoding,
-    min_bytes: usize,
+    config: &CompressionConfig,
 ) -> Result<(Bytes, bool), ConnectError> {
-    let Some(codec) = encoding.codec() else {
+    let Some(codec) = encoding.codec_with_level(config.level) else {
         return Ok((data, false));
     };
 
-    if data.len() < min_bytes {
+    if data.len() < config.min_bytes {
         return Ok((data, false));
     }
 

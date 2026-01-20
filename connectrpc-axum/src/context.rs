@@ -100,8 +100,8 @@ pub struct ConnectContext {
 pub struct CompressionContext {
     /// Per-envelope compression for streaming RPCs (None for unary).
     pub envelope: Option<EnvelopeCompression>,
-    /// Minimum bytes before envelope compression is applied (streaming only).
-    pub min_compress_bytes: usize,
+    /// Full compression configuration (includes level and min_bytes).
+    pub config: CompressionConfig,
 }
 
 impl ConnectContext {
@@ -123,7 +123,7 @@ impl ConnectContext {
                 .map_err(|err| ContextError::new(protocol, err))?;
             CompressionContext {
                 envelope,
-                min_compress_bytes: config.compression.min_bytes,
+                config: config.compression,
             }
         } else {
             CompressionContext::default()

@@ -519,6 +519,78 @@ impl CompressionEncoding {
             Self::Zstd => Some(BoxedCodec::new(ZstdCodec::default())),
         }
     }
+
+    /// Get the codec for this encoding with the specified compression level.
+    ///
+    /// Returns `None` for identity, `Some(BoxedCodec)` for others.
+    /// The level is converted to algorithm-specific values matching tower-http behavior.
+    pub fn codec_with_level(&self, level: CompressionLevel) -> Option<BoxedCodec> {
+        match self {
+            Self::Identity => None,
+            Self::Gzip => Some(BoxedCodec::new(GzipCodec::with_level(level_to_flate2(level)))),
+            #[cfg(feature = "compression-deflate")]
+            Self::Deflate => Some(BoxedCodec::new(DeflateCodec::with_level(level_to_flate2(
+                level,
+            )))),
+            #[cfg(feature = "compression-br")]
+            Self::Brotli => Some(BoxedCodec::new(BrotliCodec::with_quality(level_to_brotli(
+                level,
+            )))),
+            #[cfg(feature = "compression-zstd")]
+            Self::Zstd => Some(BoxedCodec::new(ZstdCodec::with_level(level_to_zstd(level)))),
+        }
+    }
+}
+
+// ============================================================================
+// Compression Level Conversion
+// ============================================================================
+
+/// Convert CompressionLevel to flate2 gzip/deflate level (0-9).
+///
+/// Matches tower-http → async_compression → compression_codecs behavior:
+/// - `Fastest` → 1 (flate2::Compression::fast())
+/// - `Best` → 9 (flate2::Compression::best())
+/// - `Default` → 6 (flate2::Compression::default())
+/// - `Precise(n)` → n clamped to 0-9
+fn level_to_flate2(level: CompressionLevel) -> u32 {
+    match level {
+        CompressionLevel::Fastest => 1,
+        CompressionLevel::Best => 9,
+        CompressionLevel::Default => 6,
+        CompressionLevel::Precise(n) => n.clamp(0, 9) as u32,
+        _ => 6, // Future variants: use default
+    }
+}
+
+/// Convert CompressionLevel to brotli quality (0-11).
+///
+/// tower-http overrides Default to 4 (NGINX default) for performance.
+/// The brotli library default is 11, which is too slow for on-the-fly compression.
+#[cfg(feature = "compression-br")]
+fn level_to_brotli(level: CompressionLevel) -> u32 {
+    match level {
+        CompressionLevel::Fastest => 0,
+        CompressionLevel::Best => 11,
+        CompressionLevel::Default => 4, // tower-http's custom default (not 11)
+        CompressionLevel::Precise(n) => n.clamp(0, 11) as u32,
+        _ => 4, // Future variants: use default
+    }
+}
+
+/// Convert CompressionLevel to zstd level (1-22).
+///
+/// Note: zstd supports negative levels but we follow tower-http/async-compression
+/// which uses 1 as "fastest" (negative levels produce larger outputs).
+#[cfg(feature = "compression-zstd")]
+fn level_to_zstd(level: CompressionLevel) -> i32 {
+    match level {
+        CompressionLevel::Fastest => 1,   // OUR_FASTEST in async-compression
+        CompressionLevel::Best => 22,     // libzstd max
+        CompressionLevel::Default => 3,   // libzstd::DEFAULT_COMPRESSION_LEVEL
+        CompressionLevel::Precise(n) => (n as i32).clamp(1, 22),
+        _ => 3, // Future variants: use default
+    }
 }
 
 // ============================================================================
@@ -1189,5 +1261,69 @@ mod tests {
         let compressed = codec.compress(original).unwrap();
         let decompressed = codec.decompress(&compressed).unwrap();
         assert_eq!(&decompressed[..], &original[..]);
+    }
+
+    #[test]
+    fn test_codec_with_level_produces_different_compression() {
+        // Use sufficiently large data to see compression differences
+        let original: Vec<u8> = (0..10000)
+            .map(|i| ((i % 256) as u8).wrapping_add((i / 256) as u8))
+            .collect();
+
+        // Test gzip with different levels
+        let codec_fastest = CompressionEncoding::Gzip
+            .codec_with_level(CompressionLevel::Fastest)
+            .unwrap();
+        let codec_best = CompressionEncoding::Gzip
+            .codec_with_level(CompressionLevel::Best)
+            .unwrap();
+
+        let compressed_fastest = codec_fastest.compress(&original).unwrap();
+        let compressed_best = codec_best.compress(&original).unwrap();
+
+        // Best compression should produce smaller output (or equal in edge cases)
+        assert!(
+            compressed_best.len() <= compressed_fastest.len(),
+            "Best compression ({}) should be <= fastest ({})",
+            compressed_best.len(),
+            compressed_fastest.len()
+        );
+
+        // Both should decompress correctly
+        let decompressed_fastest = codec_fastest.decompress(&compressed_fastest).unwrap();
+        let decompressed_best = codec_best.decompress(&compressed_best).unwrap();
+        assert_eq!(decompressed_fastest, original);
+        assert_eq!(decompressed_best, original);
+    }
+
+    #[test]
+    fn test_codec_with_level_vs_default_codec() {
+        // Verify that codec_with_level(Default) produces same results as codec()
+        let original = b"Hello, World! This is a test message for compression level comparison.";
+
+        let codec_default = CompressionEncoding::Gzip.codec().unwrap();
+        let codec_with_default = CompressionEncoding::Gzip
+            .codec_with_level(CompressionLevel::Default)
+            .unwrap();
+
+        let compressed_default = codec_default.compress(original).unwrap();
+        let compressed_with_default = codec_with_default.compress(original).unwrap();
+
+        // Should produce identical output since both use default level
+        assert_eq!(compressed_default, compressed_with_default);
+    }
+
+    #[test]
+    fn test_codec_with_level_identity_returns_none() {
+        // Identity encoding should return None for any level
+        assert!(CompressionEncoding::Identity
+            .codec_with_level(CompressionLevel::Default)
+            .is_none());
+        assert!(CompressionEncoding::Identity
+            .codec_with_level(CompressionLevel::Best)
+            .is_none());
+        assert!(CompressionEncoding::Identity
+            .codec_with_level(CompressionLevel::Fastest)
+            .is_none());
     }
 }

@@ -1,5 +1,5 @@
 //! Response types for Connect.
-use crate::context::{CompressionEncoding, ConnectContext};
+use crate::context::{CompressionConfig, CompressionEncoding, ConnectContext};
 use crate::error::{
     ConnectError, internal_error_end_stream_frame, internal_error_response,
     internal_error_streaming_response,
@@ -105,7 +105,7 @@ where
         let (data, compressed) = match compress_bytes(
             payload,
             response_encoding,
-            ctx.compression.min_compress_bytes,
+            &ctx.compression.config,
         ) {
             Ok(result) => result,
             Err(_) => return internal_error_streaming_response(content_type),
@@ -205,7 +205,7 @@ where
             ctx.protocol.is_proto(),
             ctx.protocol.streaming_response_content_type(),
             response_encoding,
-            ctx.compression.min_compress_bytes,
+            &ctx.compression.config,
             ctx.limits.get_send_max_bytes(),
         )
     }
@@ -215,13 +215,16 @@ where
         use_proto: bool,
         content_type: &'static str,
         response_encoding: CompressionEncoding,
-        min_compress_bytes: usize,
+        config: &CompressionConfig,
         send_max_bytes: Option<usize>,
     ) -> Response {
         use crate::error::Code;
         use futures::StreamExt;
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
+
+        // Copy config for use in closure (CompressionConfig is Copy)
+        let config = *config;
 
         // Track if an error was sent (for EndStream handling)
         let error_sent = Arc::new(AtomicBool::new(false));
@@ -246,7 +249,7 @@ where
 
                     // 2. Compress if beneficial (per-message compression)
                     let (data, compressed) =
-                        match compress_bytes(payload, response_encoding, min_compress_bytes) {
+                        match compress_bytes(payload, response_encoding, &config) {
                             Ok(result) => result,
                             Err(_) => {
                                 return (Bytes::from(internal_error_end_stream_frame()), true);
