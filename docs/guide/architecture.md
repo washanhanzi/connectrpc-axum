@@ -65,7 +65,7 @@ The library uses a three-layer middleware stack when compression is enabled:
 │  ┌───────────────────────────────────────┐  │
 │  │     Tower CompressionLayer            │  │  ← HTTP body compression (unary only)
 │  │  ┌─────────────────────────────────┐  │  │
-│  │  │         ConnectLayer            │  │  │  ← Protocol detection, context
+│  │  │         ConnectLayer            │  │  │  ← Protocol negotiation, context
 │  │  │  ┌───────────────────────────┐  │  │  │
 │  │  │  │          Handler          │  │  │  │  ← Your RPC handlers
 │  │  │  └───────────────────────────┘  │  │  │
@@ -86,6 +86,9 @@ The library uses a three-layer middleware stack when compression is enabled:
 - Skipped for streaming (BridgeLayer sets identity encoding)
 
 **ConnectLayer** (innermost):
+- **Pre-protocol validation**: Checks content-type/encoding before protocol detection
+  - Returns HTTP 415 with `Accept-Post` header for unsupported content-types
+  - Uses `check_protocol_negotiation()` with `can_handle_content_type()` and `can_handle_get_encoding()`
 - Parses `Content-Type` to determine encoding (JSON/Protobuf)
 - Parses `?encoding=` query param for GET requests
 - Validates `Connect-Protocol-Version` header when required
@@ -126,7 +129,7 @@ The `pipeline.rs` module provides the low-level functions used by extractors and
 
 **Response side:**
 - `encode_proto` / `encode_json` - Encode message to bytes
-- `compress_bytes` - Compress if beneficial
+- `compress_bytes` - Compress if beneficial (takes `&CompressionConfig` for level-aware compression)
 - `wrap_envelope` - Wrap in Connect streaming frame
 - `build_end_stream_frame` - Build EndStream frame
 
@@ -150,9 +153,9 @@ These are the types you interact with when building services:
 | `ConnectContext` | Protocol, compression, timeout, limits - set by layer, read by handlers |
 | `RequestProtocol` | Enum identifying Connect variant (Unary/Stream x Json/Proto) |
 | `MessageLimits` | Receive/send size limits (default: no limits) |
-| `CompressionConfig` | Compression settings (default: min_bytes=0, matching connect-go) |
-| `CompressionContext` | Per-request compression context with envelope settings and min_bytes threshold |
-| `CompressionEncoding` | Supported encodings: `Gzip`, `Deflate`, `Brotli`, `Zstd`, or `Identity` |
+| `CompressionConfig` | Compression settings: `min_bytes` threshold and `level` (default: min_bytes=0, matching connect-go) |
+| `CompressionContext` | Per-request compression context with envelope settings and full `CompressionConfig` |
+| `CompressionEncoding` | Supported encodings: `Gzip`, `Deflate`, `Brotli`, `Zstd`, or `Identity`. Use `codec_with_level()` for level-aware compression |
 | `CompressionLevel` | Compression level (re-exported from tower-http) |
 | `EnvelopeCompression` | Per-envelope compression settings for streaming RPCs |
 | `ContextError` | Error type for context building failures (protocol detection, header parsing) |
@@ -176,8 +179,12 @@ These are the types you interact with when building services:
 | `ConnectError` | Error with code, message, metadata, and optional details |
 | `Code` | Connect/gRPC status codes (OK, InvalidArgument, NotFound, etc.) |
 | `ErrorDetail` | Structured error detail with type URL and protobuf-encoded bytes |
+| `ContextError` | Error bundled with protocol for proper response encoding |
+| `ProtocolNegotiationError` | Pre-protocol error for HTTP 415 responses (unsupported content-type/encoding) |
 
 Error details follow the Connect protocol's structured error format, serialized as JSON objects with `type` and `value` fields. The `ErrorDetail` type supports the `google.protobuf.Any` wire format.
+
+`ProtocolNegotiationError` is used before protocol detection when the request cannot be handled. It produces raw HTTP 415 responses with an `Accept-Post` header listing supported content types (`SUPPORTED_CONTENT_TYPES`), bypassing Connect error formatting.
 
 ## Handler Wrappers
 
@@ -334,12 +341,12 @@ For generated code to provide default "unimplemented" methods:
 
 | Module | Purpose |
 |--------|---------|
-| `protocol.rs` | `RequestProtocol` enum and detection |
-| `envelope_compression.rs` | `Codec` trait and per-envelope compression for streaming RPCs |
+| `protocol.rs` | `RequestProtocol` enum, detection, and validation functions (`can_handle_content_type`, `can_handle_get_encoding`, `SUPPORTED_CONTENT_TYPES`) |
+| `envelope_compression.rs` | `Codec` trait, per-envelope compression, `CompressionEncoding::codec_with_level()` for level-aware codecs |
 | `limit.rs` | Receive and send message size limits |
 | `timeout.rs` | Request timeout handling |
 | `config.rs` | `ServerConfig` (crate-internal configuration) |
-| `error.rs` | `ContextError` type for context building failures |
+| `error.rs` | `ContextError` and `ProtocolNegotiationError` types |
 
 #### Compression Architecture
 
@@ -417,6 +424,7 @@ prost_build::Config
 - All type customization (attributes, extern paths) must be done in this pass
 - Generated builders use the unified `post_connect()` function which auto-detects RPC type from handler signature
 - With `no_handlers()`, only message types are generated (no service builders)
+- Streaming type aliases (`BoxedCall`, `BoxedStreamCall`, etc.) are only generated for RPC patterns actually used by the service
 
 ### Pass 1.5: Serde Implementations
 
