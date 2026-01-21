@@ -179,6 +179,7 @@ impl<C, T, TC> CompileBuilder<C, T, TC> {
     ///     Ok(())
     /// }
     /// ```
+    #[cfg(feature = "fetch-protoc")]
     pub fn fetch_protoc(self, version: Option<&str>, path: Option<&Path>) -> Result<Self> {
         let version = version.unwrap_or("31.1");
         let out_dir = match path {

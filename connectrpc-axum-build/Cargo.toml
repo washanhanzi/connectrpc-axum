@@ -14,11 +14,12 @@ proc-macro2 = { workspace = true }
 prost = { workspace = true }
 prost-build = { workspace = true }
 prost-types = { workspace = true }
-protoc-fetcher = { workspace = true }
+protoc-fetcher = { workspace = true, optional = true }
 quote = { workspace = true }
 tonic-prost-build = { workspace = true, optional = true }
 
 [features]
 default = []
+fetch-protoc = ["dep:protoc-fetcher"]
 tonic = ["dep:tonic-prost-build"]
 tonic-client = ["dep:tonic-prost-build"]
