@@ -59,6 +59,23 @@ Router::new().rpc(HelloWorldService::say_hello(say_hello))
 
 - **Error model**: connectrpc-axum supports full Connect error details (additional proto messages); axum-connect has basic error codes only.
 
+## Handler Transformation
+
+Both libraries transform user functions into axum-compatible handlers, but use different approaches:
+
+**axum-connect** uses a macro-based approach:
+- Separate traits for each RPC pattern: `RpcHandlerUnary`, `RpcHandlerStream`
+- `impl_handler!` macro generates trait implementations for each (0-15 extractor parameters)
+- Defines custom `RpcFromRequestParts` trait (mirrors axum's `FromRequestParts`)
+- Custom `RpcIntoResponse` trait for response handling
+
+**connectrpc-axum** uses a newtype wrapper approach:
+- Unified `ConnectHandlerWrapper<F>` handles all RPC patterns (unary, server/client/bidi streaming)
+- Compiler selects impl based on handler signature via trait bounds
+- Reuses axum's native `FromRequestParts` directly (no custom trait)
+
+The key difference: axum-connect requires extractors to implement their RPC-specific traits and separates handler logic by RPC type, while connectrpc-axum uses a single unified wrapper that works with any standard axum extractor.
+
 ## Summary
 
 | connectrpc-axum strengths | axum-connect strengths |

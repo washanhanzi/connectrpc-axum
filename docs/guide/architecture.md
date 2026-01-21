@@ -1,219 +1,153 @@
 # Architecture
 
-This page provides a technical overview of the connectrpc-axum library internals.
+This page provides a conceptual overview of how connectrpc-axum works internally.
 
 ## Overview
 
-connectrpc-axum bridges the Connect protocol with Axum's handler model. The core design principle is **separation of concerns**: protocol parsing happens in middleware, message encoding/decoding happens in extractors and response types, and your handlers stay focused on business logic.
+connectrpc-axum bridges the Connect protocol with Axum's handler model through two crates:
 
-```
-HTTP Request → BridgeLayer → CompressionLayer → ConnectLayer → Handler → HTTP Response
-                   ↓               ↓                 ↓
-             Size limits,    HTTP body          Parse headers,
-             streaming       compression        detect protocol
-             detection       (unary only)
-```
+| Crate | Purpose |
+|-------|---------|
+| `connectrpc-axum` | Runtime library - layers, extractors, response types |
+| `connectrpc-axum-build` | Build-time code generation from proto files |
+
+The core modules in the runtime library:
+
+| Module | Purpose |
+|--------|---------|
+| `context/` | Protocol detection, compression config, message limits, timeouts |
+| `pipeline.rs` | Request/response primitives (decode, encode, compress) |
+| `layer/` | Middleware layers (`BridgeLayer`, `ConnectLayer`) |
+| `message/` | `ConnectRequest<T>` extractor and `ConnectResponse<T>` wrapper |
+| `handler.rs` | Handler wrappers that implement `axum::handler::Handler` |
+| `tonic/` | Optional gRPC interop and extractor support |
 
 ## Request Lifecycle
 
-Understanding how a request flows through the library clarifies why each component exists.
+### Layer Stack
 
-### 1. Protocol Detection
-
-The library first determines which protocol variant is in use:
-
-| Method | Detection Source | Example |
-|--------|------------------|---------|
-| GET | `?encoding=` query param | `?encoding=proto` |
-| POST | `Content-Type` header | `application/proto` |
-
-This yields a `RequestProtocol` enum: `ConnectUnaryJson`, `ConnectUnaryProto`, `ConnectStreamJson`, or `ConnectStreamProto`.
-
-For mixed Connect/gRPC deployments, `ContentTypeSwitch` routes by `Content-Type`:
-- `application/grpc*` → Tonic gRPC server
-- Otherwise → Axum routes (Connect protocol)
-
-gRPC compression is configured on the tonic service before it is added to `MakeServiceBuilder`. For gzip, enable it on the generated gRPC server:
-
-```rust
-use tonic::codec::CompressionEncoding;
-
-let grpc_server = hello_world_service_server::HelloWorldServiceServer::new(tonic_service)
-    .accept_compressed(CompressionEncoding::Gzip)
-    .send_compressed(CompressionEncoding::Gzip);
-```
-
-You can also apply this via `MakeServiceBuilder::add_grpc_service_with`:
-
-```rust
-let app = MakeServiceBuilder::new()
-    .add_router(connect_router)
-    .add_grpc_service_with(grpc_server, |svc| {
-        svc.accept_compressed(CompressionEncoding::Gzip)
-            .send_compressed(CompressionEncoding::Gzip)
-    })
-    .build();
-```
-
-### 2. Layer Stack Processing
-
-The library uses a three-layer middleware stack when compression is enabled:
+Requests flow through a three-layer middleware stack:
 
 ```
+HTTP Request
+    ↓
 ┌─────────────────────────────────────────────┐
-│              BridgeLayer                    │  ← Size limit check, streaming detection
+│              BridgeLayer                    │  ← Size limits, streaming detection
 │  ┌───────────────────────────────────────┐  │
 │  │     Tower CompressionLayer            │  │  ← HTTP body compression (unary only)
 │  │  ┌─────────────────────────────────┐  │  │
-│  │  │         ConnectLayer            │  │  │  ← Protocol negotiation, context
+│  │  │         ConnectLayer            │  │  │  ← Protocol detection, context
 │  │  │  ┌───────────────────────────┐  │  │  │
 │  │  │  │          Handler          │  │  │  │  ← Your RPC handlers
 │  │  │  └───────────────────────────┘  │  │  │
 │  │  └─────────────────────────────────┘  │  │
 │  └───────────────────────────────────────┘  │
 └─────────────────────────────────────────────┘
+    ↓
+HTTP Response
 ```
 
-**BridgeLayer** (outermost):
+**BridgeLayer** (outermost) - see `layer/bridge.rs`:
 - Checks `Content-Length` against receive size limits (on compressed body)
 - Detects Connect streaming requests (`application/connect+*`)
-- For streaming: sets `Accept-Encoding: identity` to prevent Tower from compressing responses
-- For streaming: removes `Content-Encoding` to prevent Tower from decompressing request body
+- For streaming: prevents Tower compression by setting identity encoding
 
 **Tower CompressionLayer** (middle):
 - Standard HTTP body compression for unary RPCs
 - Uses `Accept-Encoding`/`Content-Encoding` headers
-- Skipped for streaming (BridgeLayer sets identity encoding)
 
-**ConnectLayer** (innermost):
-- **Pre-protocol validation**: Checks content-type/encoding before protocol detection
-  - Returns HTTP 415 with `Accept-Post` header for unsupported content-types
-  - Uses `check_protocol_negotiation()` with `can_handle_content_type()` and `can_handle_get_encoding()`
+**ConnectLayer** (innermost) - see `layer/connect.rs`:
+- Validates content-type and returns HTTP 415 for unsupported types
 - Parses `Content-Type` to determine encoding (JSON/Protobuf)
 - Parses `?encoding=` query param for GET requests
 - Validates `Connect-Protocol-Version` header when required
 - Parses timeout from `Connect-Timeout-Ms` header
 - Builds `ConnectContext` and stores it in request extensions
 
-### 3. Handler Execution
+### Compression Paths
 
-Your handler receives a `ConnectRequest<T>` extractor that:
-- Reads the HTTP body (respecting size limits)
-- Decompresses if needed
-- Decodes from JSON or Protobuf based on the detected protocol
+The Connect protocol uses different compression mechanisms for unary vs streaming RPCs:
 
-Your handler returns a `ConnectResponse<T>` (or error) that:
-- Encodes the response message per the request protocol
-- Compresses if beneficial
-- Sets appropriate headers
+**Unary RPCs** - HTTP body compression:
+```
+Request → BridgeLayer (size check) → Tower decompress → ConnectLayer → Handler
+                                                                          ↓
+Response ← BridgeLayer ← Tower compress ← ConnectLayer ← Handler response
+```
+- Uses standard `Accept-Encoding` / `Content-Encoding` headers
+- Handled entirely by Tower's `CompressionLayer`
+- BridgeLayer checks compressed body size before decompression
 
-### 4. Pipeline Primitives
+**Streaming RPCs** - per-envelope compression:
+```
+Request → BridgeLayer (bypass Tower) → ConnectLayer → Handler
+                                                          ↓
+                                    Each message envelope compressed individually
+```
+- Uses `Connect-Accept-Encoding` / `Connect-Content-Encoding` headers
+- BridgeLayer sets `Accept-Encoding: identity` to prevent Tower from interfering
+- `context/envelope_compression.rs` provides codec implementations
 
-The `pipeline.rs` module provides the low-level functions used by extractors and response types:
+### Code Structure
 
-**Request side:**
-- `read_body` - Read HTTP body with size limit
-- `decompress_bytes` - Decompress based on encoding
-- `decode_proto` / `decode_json` - Decode message from bytes
-- `process_envelope_payload` - Validate envelope flags and decompress payload
-- `get_context_or_default` - Get `ConnectContext` from request extensions (with fallback)
+The request/response processing follows this module hierarchy:
 
-**`RequestPipeline` methods:**
-- `decode` - Decode from HTTP request (read body, decompress, decode)
-- `decode_bytes` - Decode from raw bytes (decompress, check size, decode)
-- `decode_enveloped_bytes` - Decode from enveloped bytes (for `application/connect+json` or `application/connect+proto`)
+```
+context/           ← Configuration and protocol state
+    protocol.rs        RequestProtocol enum, detection
+    envelope_compression.rs    Per-message compression
+    limit.rs           Message size limits
+    timeout.rs         Request timeout
+        ↓
+pipeline.rs        ← Low-level encode/decode functions
+        ↓
+layer/             ← Middleware that builds context
+    bridge.rs          BridgeLayer/BridgeService
+    connect.rs         ConnectLayer/ConnectService
+        ↓
+message/           ← Axum extractors and response types
+    request.rs         ConnectRequest<T>, Streaming<T>
+    response.rs        ConnectResponse<T>, StreamBody<S>
+```
 
-**`ResponsePipeline` methods:**
-- `encode` - Encode response message to HTTP response (reads context from request extensions)
-- `encode_with_context` - Encode with explicit context (when request not available)
+Handlers receive a `ConnectRequest<T>` extractor that reads the `ConnectContext` from request extensions, then uses `pipeline.rs` functions to decode the message. Response encoding follows the reverse path.
 
-**Response side:**
-- `encode_proto` / `encode_json` - Encode message to bytes
-- `compress_bytes` - Compress if beneficial (takes `&CompressionConfig` for level-aware compression)
-- `wrap_envelope` - Wrap in Connect streaming frame
-- `build_end_stream_frame` - Build EndStream frame
+### Axum Extractor Support in Tonic Handlers
 
-## Core Types
+When using tonic-compatible handlers, axum's `FromRequestParts` extractors need access to HTTP request parts. The challenge: tonic consumes the HTTP request before your handler runs.
 
-These are the types you interact with when building services:
+The solution is `FromRequestPartsLayer` in `tonic/parts.rs`:
 
-### Layer Types
+```
+HTTP Request
+    ↓
+FromRequestPartsLayer ← Clones method, uri, version, headers into extensions
+    ↓
+Tonic gRPC Server    ← Consumes HTTP request, but extensions survive
+    ↓
+Your Handler         ← Reconstructs RequestContext from:
+                        - CapturedParts (from extensions)
+                        - extensions (from tonic::Request)
+```
 
-| Type | Purpose |
-|------|---------|
-| `BridgeLayer` | Bridges Tower compression with Connect streaming; enforces size limits |
-| `BridgeService` | Service wrapper created by `BridgeLayer` |
-| `ConnectLayer` | Protocol detection, context building, timeout handling |
-| `ConnectService` | Service wrapper created by `ConnectLayer` |
+Key insight: `http::Extensions` cannot be cloned, but it can be *moved*. The layer captures clonable parts (`CapturedParts`), and the handler later combines them with the owned extensions to build a complete `RequestContext` for extraction.
 
-### Context Types
+## Code Generation
 
-| Type | Purpose |
-|------|---------|
-| `ConnectContext` | Protocol, compression, timeout, limits - set by layer, read by handlers |
-| `RequestProtocol` | Enum identifying Connect variant (Unary/Stream x Json/Proto) |
-| `MessageLimits` | Receive/send size limits (default: no limits) |
-| `CompressionConfig` | Compression settings: `min_bytes` threshold and `level` (default: min_bytes=0, matching connect-go) |
-| `CompressionContext` | Per-request compression context with envelope settings and full `CompressionConfig` |
-| `CompressionEncoding` | Supported encodings: `Gzip`, `Deflate`, `Brotli`, `Zstd`, or `Identity`. Use `codec_with_level()` for level-aware compression |
-| `CompressionLevel` | Compression level (re-exported from tower-http) |
-| `IdempotencyLevel` | Method idempotency: `Unknown`, `NoSideEffects` (enables GET), `Idempotent` |
-| `EnvelopeCompression` | Per-envelope compression settings for streaming RPCs |
-| `ContextError` | Error type for context building failures (protocol detection, header parsing) |
-| `BoxedCodec` | Type-erased codec storage (`Box<dyn Codec>`) for dynamic compression dispatch |
+### ConnectHandlerWrapper
 
-### Request/Response Types
+The `ConnectHandlerWrapper<F>` type transforms user functions into axum-compatible handlers. It's a newtype wrapper with multiple `impl Handler<T, S>` blocks, each with different trait bounds:
 
-| Type | Purpose |
-|------|---------|
-| `ConnectRequest<T>` | Axum extractor - deserializes protobuf/JSON from request body |
-| `ConnectRequest<Streaming<T>>` | Extractor for client/bidi streaming requests |
-| `Streaming<T>` | Stream of messages from client (similar to Tonic's `Streaming<T>`) |
-| `ConnectResponse<T>` | Response wrapper - encodes per detected protocol |
-| `ConnectResponse<StreamBody<S>>` | Server streaming response wrapper |
-| `StreamBody<S>` | Marker for streaming response bodies |
+```
+User function: async fn(E1, E2, ..., ConnectRequest<Req>) -> ConnectResponse<Resp>
+               where E1, E2, ... : FromRequestParts
+                                    ↓
+            ConnectHandlerWrapper<F> implements Handler<T, S>
+                                    ↓
+                        Axum can route to it
+```
 
-### Error Handling
-
-| Type | Purpose |
-|------|---------|
-| `ConnectError` | Error with code, message, metadata, and optional details |
-| `Code` | Connect/gRPC status codes (OK, InvalidArgument, NotFound, etc.) |
-| `ErrorDetail` | Structured error detail with type URL and protobuf-encoded bytes |
-| `ContextError` | Error bundled with protocol for proper response encoding |
-| `ProtocolNegotiationError` | Pre-protocol error for HTTP 415 responses (unsupported content-type/encoding) |
-
-Error details follow the Connect protocol's structured error format, serialized as JSON objects with `type` and `value` fields. The `ErrorDetail` type supports the `google.protobuf.Any` wire format.
-
-`ProtocolNegotiationError` is used before protocol detection when the request cannot be handled. It produces raw HTTP 415 responses with an `Accept-Post` header listing supported content types (`SUPPORTED_CONTENT_TYPES`), bypassing Connect error formatting.
-
-## Handler Wrappers
-
-The library uses a unified handler wrapper that supports all RPC patterns:
-
-| Wrapper | Use Case |
-|---------|----------|
-| `ConnectHandlerWrapper<F>` | Unified: unary, server/client/bidi streaming with optional extractors |
-| `ConnectHandler<F>` | Type alias for `ConnectHandlerWrapper<F>` (convenience re-export) |
-| `TonicCompatibleHandlerWrapper<F>` | Tonic-style unary with axum extractors |
-| `TonicCompatibleStreamHandlerWrapper<F>` | Tonic-style server streaming with axum extractors |
-| `TonicCompatibleClientStreamHandlerWrapper<F>` | Tonic-style client streaming with axum extractors |
-| `TonicCompatibleBidiStreamHandlerWrapper<F>` | Tonic-style bidi streaming with axum extractors |
-
-### Handler Functions
-
-Two functions create method routers from handlers:
-
-| Function | HTTP Method | Use Case |
-|----------|-------------|----------|
-| `post_connect(f)` | POST | Unary and streaming RPCs |
-| `get_connect(f)` | GET | Idempotent unary RPCs (query param encoding) |
-
-For methods marked with `option idempotency_level = NO_SIDE_EFFECTS` in proto, the code generator automatically merges `get_connect()` and `post_connect()` handlers, enabling both HTTP GET and POST requests per the Connect protocol spec.
-
-### How Handler Wrappers Work
-
-`ConnectHandlerWrapper<F>` is a newtype that wraps a user function `F`. It has multiple `impl Handler<T, S>` blocks, each with different `where` bounds on `F`. The compiler selects the appropriate impl based on the handler signature.
+Handlers can include any types implementing `FromRequestParts` before the `ConnectRequest<T>` parameter, just like regular axum handlers. The compiler selects the appropriate impl based on the handler signature:
 
 | Pattern | Request Type | Response Type |
 |---------|--------------|---------------|
@@ -222,247 +156,88 @@ For methods marked with `option idempotency_level = NO_SIDE_EFFECTS` in proto, t
 | Client streaming | `ConnectRequest<Streaming<Req>>` | `ConnectResponse<Resp>` |
 | Bidi streaming | `ConnectRequest<Streaming<Req>>` | `ConnectResponse<StreamBody<St>>` |
 
-The `T` parameter in `Handler<T, S>` acts as a discriminator tag for impl selection. Macro-generated implementations handle additional extractors for each pattern.
+See `handler.rs` for the implementation.
 
-## Builder Pattern
+### Tonic-Compatible Handlers
 
-The library uses a two-tier builder pattern to separate per-service concerns from infrastructure concerns.
-
-### Generated Builders (per-service)
-
-Generated at build time for each proto service. Handles handler registration, per-method routing, and state application.
-
-### MakeServiceBuilder (library-level)
-
-Combines multiple services and applies cross-cutting infrastructure. Supports two route types:
-- `add_router()` - ConnectRPC routes that go through `ConnectLayer` for protocol handling
-- `add_axum_router()` - Plain axum routes that bypass `ConnectLayer` (health checks, metrics, static files)
-
-### Separation of Concerns
-
-| Concern | Generated Builder | MakeServiceBuilder |
-|---------|:-----------------:|:------------------:|
-| Handler registration | ✓ | |
-| Per-method routing | ✓ | |
-| State application | ✓ | |
-| Multi-service composition | | ✓ |
-| ConnectLayer application | | ✓ |
-| Plain HTTP routes | | ✓ |
-| Message limits (receive/send) | | ✓ |
-| Protocol header validation | | ✓ |
-| Server-side timeout | | ✓ |
-| gRPC service integration | | ✓ |
-| FromRequestParts extraction | | ✓ |
-
-## Wire Format
-
-### Streaming Frame Format
-
-5-byte envelope: `[flags: 1 byte][length: 4 bytes BE][payload]`
-
-- Connect streaming uses EndStream flag (0x02) with JSON payload for trailing metadata
-- gRPC uses HTTP trailers instead of EndStream frames
-
-### Route Paths
-
-Routes follow the pattern: `/<package>.<Service>/<Method>`
-
-## Module Organization
+For tonic-style handlers (trait-based), the library uses a factory pattern with boxed calls:
 
 ```
-connectrpc-axum/          # Core library
-connectrpc-axum-build/    # Protobuf code generation
-connectrpc-axum-examples/ # Examples and test clients
+User trait impl: async fn method(&self, req: tonic::Request<Req>) -> Result<Response<Resp>, Status>
+                                    ↓
+            IntoFactory trait converts to BoxedCall
+                                    ↓
+            TonicCompatibleHandlerWrapper adapts to axum Handler
+                                    ↓
+                        Axum can route to it
 ```
 
-### Core Modules
+The "2-layer box" approach (same pattern axum uses for `Handler` → `MethodRouter`):
+1. **Factory layer**: `IntoFactory` trait produces `BoxedCall<Req, Resp>` - a type-erased callable
+2. **Wrapper layer**: `TonicCompatibleHandlerWrapper` implements `Handler` for the boxed call
 
-| Module | Purpose |
-|--------|---------|
-| `handler.rs` | Handler wrappers implementing `axum::handler::Handler` |
-| `layer/` | Middleware layers (see below) |
-| `error.rs` | `ConnectError`, `ErrorDetail`, and `Code` types |
-| `pipeline.rs` | Request/response primitives (decode, encode, compress) |
-| `service_builder.rs` | Multi-service router composition |
-| `tonic/` | Optional gRPC/Tonic interop module |
+One caveat: axum uses a trait for the factory layer, while we use closures. See [this discussion](https://github.com/washanhanzi/connectrpc-axum/discussions/18) for the design rationale.
 
-### layer/ module
+This allows generated code to work with user-provided trait implementations without knowing concrete types at compile time. See `tonic/handler.rs` for the boxed call types and factory traits.
 
-| Module | Purpose |
-|--------|---------|
-| `bridge.rs` | `BridgeLayer`/`BridgeService` - bridges Tower compression with Connect streaming |
-| `connect.rs` | `ConnectLayer`/`ConnectService` - protocol detection, context building, timeouts |
+### Two-Pass Prost Generation
 
-### tonic/ module (with `tonic` feature)
+Code generation uses two passes to avoid type duplication:
 
-| Module | Purpose |
-|--------|---------|
-| `tonic.rs` | `ContentTypeSwitch` and `TonicCompatible` types  |
-| `tonic/handler.rs` | Tonic-compatible handler wrappers, factory traits, and boxed call types |
-| `tonic/parts.rs` | `RequestContext`, `CapturedParts`, and `FromRequestPartsLayer` |
-
-The tonic module provides two key capabilities:
-
-1. **Protocol switching**: `ContentTypeSwitch` routes by Content-Type header between gRPC and Connect
-2. **Extractor support**: `FromRequestPartsLayer` captures HTTP request parts for use with axum's `FromRequestParts` extractors in tonic-style handlers
-
-#### Boxed Call Types
-
-The tonic module defines boxed callable types for generated service code:
-
-| Type | Purpose |
-|------|---------|
-| `BoxedCall<Req, Resp>` | Unary RPC callable |
-| `BoxedStreamCall<Req, Resp>` | Server streaming RPC callable |
-| `BoxedClientStreamCall<Req, Resp>` | Client streaming RPC callable |
-| `BoxedBidiStreamCall<Req, Resp>` | Bidirectional streaming RPC callable |
-| `BoxedStream<T>` | Pinned boxed stream for streaming responses (`Pin<Box<dyn Stream<Item = Result<T, ConnectError>> + Send>>`) |
-
-Each has corresponding factory traits (`IntoFactory`, `IntoStreamFactory`, `IntoClientStreamFactory`, `IntoBidiStreamFactory`) for adapting user handlers.
-
-#### Handler Functions
-
-| Function | Purpose |
-|----------|---------|
-| `post_tonic_unary(f)` | Creates POST router for tonic-compatible unary handlers |
-| `post_tonic_stream(f)` | Creates POST router for tonic-compatible server streaming handlers |
-| `post_tonic_client_stream(f)` | Creates POST router for tonic-compatible client streaming handlers |
-| `post_tonic_bidi_stream(f)` | Creates POST router for tonic-compatible bidirectional streaming handlers |
-
-#### Unimplemented Helpers
-
-For generated code to provide default "unimplemented" methods:
-
-| Function | Purpose |
-|----------|---------|
-| `unimplemented_boxed_call()` | Returns `BoxedCall` that returns `ConnectError::unimplemented` |
-| `unimplemented_boxed_stream_call()` | Returns `BoxedStreamCall` that returns `ConnectError::unimplemented` |
-| `unimplemented_boxed_client_stream_call()` | Returns `BoxedClientStreamCall` that returns `ConnectError::unimplemented` |
-| `unimplemented_boxed_bidi_stream_call()` | Returns `BoxedBidiStreamCall` that returns `ConnectError::unimplemented` |
-
-### context/ module
-
-| Module | Purpose |
-|--------|---------|
-| `protocol.rs` | `RequestProtocol` enum, `IdempotencyLevel` enum, detection, and validation functions (`can_handle_content_type`, `can_handle_get_encoding`, `SUPPORTED_CONTENT_TYPES`) |
-| `envelope_compression.rs` | `Codec` trait, per-envelope compression, `CompressionEncoding::codec_with_level()` for level-aware codecs |
-| `limit.rs` | Receive and send message size limits |
-| `timeout.rs` | Request timeout handling |
-| `config.rs` | `ServerConfig` (crate-internal configuration) |
-| `error.rs` | `ContextError` and `ProtocolNegotiationError` types |
-
-#### Compression Architecture
-
-The Connect protocol uses two different compression mechanisms depending on the RPC type:
-
-**Unary RPCs** - HTTP Body Compression (Tower middleware):
-- Uses standard `Accept-Encoding` / `Content-Encoding` headers
-- Handled by Tower's `CompressionLayer` (gzip, br, deflate, zstd)
-- `BridgeLayer` checks compressed body size before decompression
-- No Connect-specific code needed
-
-**Streaming RPCs** - Per-Envelope Compression (connectrpc-axum):
-- Uses `Connect-Accept-Encoding` / `Connect-Content-Encoding` headers
-- Each message envelope is individually compressed
-- `BridgeLayer` prevents Tower from compressing/decompressing streaming bodies
-- `envelope_compression.rs` provides `Codec` trait and built-in codecs
-
-**Built-in Codecs** (for envelope compression):
-- `GzipCodec` - always available
-- `DeflateCodec` - requires `compression-deflate` feature
-- `BrotliCodec` - requires `compression-br` feature
-- `ZstdCodec` - requires `compression-zstd` feature
-
-**Configuration** (matching connect-go):
-- Default `min_bytes` is 0 (compress everything when compression is requested)
-- `CompressionConfig::disabled()` sets threshold to `usize::MAX`
-
-Response compression negotiation follows connect-go's approach: `negotiate_response_encoding()` uses first-match-wins (client preference order) and respects `q=0` (not acceptable) values.
-
-### message/ module
-
-| Module | Purpose |
-|--------|---------|
-| `request.rs` | `ConnectRequest<T>` and `Streaming<T>` extractors |
-| `response.rs` | `ConnectResponse<T>` and streaming response encoding |
-
-## Code Generation
-
-The build crate uses a multi-pass approach to generate all necessary code.
-
-### CompileBuilder Type-State Pattern
-
-`CompileBuilder<Connect, Tonic, TonicClient>` uses phantom type parameters to enforce valid configurations at compile time:
-
-| Parameter | `Enabled` | `Disabled` |
-|-----------|-----------|------------|
-| `Connect` | Generate Connect handlers | Types + serde only |
-| `Tonic` | Generate tonic server stubs | No server stubs |
-| `TonicClient` | Generate tonic client stubs | No client stubs |
-
-The marker types (`Enabled`/`Disabled`) implement the `BuildMarker` trait, enabling compile-time configuration validation.
-
-Default state: `CompileBuilder<Enabled, Disabled, Disabled>` (Connect handlers only).
-
-Method availability is enforced via trait bounds:
-- `no_handlers()` requires `Connect = Enabled`, transitions to `Connect = Disabled`
-- `with_tonic()` requires `Connect = Enabled` and `Tonic = Disabled`
-- `with_tonic_client()` requires `TonicClient = Disabled`
-
-**Constraints:** `no_handlers()` and `with_tonic()` cannot be combined (enforced at compile time).
-
-**Protoc Fetching:** The `fetch_protoc(version, path)` method downloads a protoc binary to the specified path using the protoc-fetcher crate. This requires the `fetch-protoc` feature flag. Useful for CI environments or when a system protoc is unavailable.
-
-### Pass 1: Prost + Connect
-
+**Pass 1: Prost + Connect**
 ```
-prost_build::Config
-    ↓
-├── Message/Enum types (Rust structs)
-├── Connect service builders (if handlers enabled)
-└── File descriptor set (for subsequent passes)
+proto files → prost_build → Message types (Rust structs)
+                          → Connect service builders
+                          → File descriptor set
 ```
 
-- User configuration via `with_prost_config()` is applied here
-- All type customization (attributes, extern paths) must be done in this pass
-- Generated builders use the unified `post_connect()` function which auto-detects RPC type from handler signature
-- For methods with `idempotency_level = NO_SIDE_EFFECTS`, the generator merges `get_connect()` and `post_connect()` handlers
-- Generated builders expose `{METHOD}_IDEMPOTENCY` constants for each method's idempotency level
-- `build_connect()` convenience method wraps the router with `MakeServiceBuilder::new()`, providing default gzip compression
-- With `no_handlers()`, only message types are generated (no service builders)
-- Streaming type aliases (`BoxedCall`, `BoxedStreamCall`, etc.) are only generated for RPC patterns actually used by the service
-
-### Pass 1.5: Serde Implementations
-
+**Pass 2: Tonic (optional)**
 ```
-pbjson-build
-    ↓
-└── Serde Serialize/Deserialize impls for all messages
+File descriptor set → tonic_build → Service traits
+                                  → Uses extern_path to reference Pass 1 types
 ```
 
-- Uses the file descriptor set from Pass 1
-- Handles `oneof` fields correctly with proper JSON representation
+The key is `extern_path`: Pass 2 doesn't regenerate types, it references the types from Pass 1. This keeps one source of truth for message types while allowing both Connect and gRPC code to coexist.
 
-### Pass 2: Tonic Server Stubs (with `tonic` feature + `with_tonic()`)
+See `CompileBuilder` in `connectrpc-axum-build` for the type-state pattern that enforces valid configurations at compile time.
 
-```
-tonic_prost_build::Builder
-    ↓
-└── Service traits ({Service} trait + {Service}Server)
-```
+## MakeServiceBuilder
 
-- **Types are NOT regenerated** - uses `extern_path` to reference Pass 1 types
-- Generated code is appended to the Pass 1 output files
+`MakeServiceBuilder` combines multiple services and applies cross-cutting infrastructure:
 
-### Pass 3: Tonic Client Stubs (with `tonic-client` feature + `with_tonic_client()`)
-
-```
-tonic_prost_build::Builder
-    ↓
-└── Client types ({service_name}_client::{Service}Client)
+```rust
+let app = MakeServiceBuilder::new()
+    .add_router(hello_service_router)      // Connect service
+    .add_router(echo_service_router)       // Another Connect service
+    .add_grpc_service(grpc_server)         // Tonic gRPC service
+    .add_axum_router(health_router)        // Plain axum routes (bypass ConnectLayer)
+    .build();
 ```
 
-- **Types are NOT regenerated** - uses `extern_path` to reference Pass 1 types
-- Can be used independently of `with_tonic()` (server stubs)
-- Generated code is appended to the Pass 1 output files
+The builder handles:
+- Wrapping Connect routes with `ConnectLayer` for protocol handling
+- Wrapping routes with `BridgeLayer` for compression bridging
+- Adding Tower `CompressionLayer` for HTTP body compression
+- Routing gRPC services through `ContentTypeSwitch` (by Content-Type header)
+- Passing plain axum routes through without Connect processing
 
+```
+User provides:
+    ├── Connect routers (from generated builders)
+    ├── gRPC services (tonic)
+    └── Plain axum routers
+
+MakeServiceBuilder adds:
+    ├── BridgeLayer
+    ├── CompressionLayer
+    ├── ConnectLayer (for Connect routes only)
+    └── ContentTypeSwitch (routes gRPC vs Connect)
+
+Output: Single axum Router
+```
+
+For mixed Connect/gRPC deployments, `ContentTypeSwitch` routes by `Content-Type` header:
+- `application/grpc*` → Tonic gRPC server
+- Otherwise → Axum routes (Connect protocol)
+
+See `service_builder.rs` for the implementation.

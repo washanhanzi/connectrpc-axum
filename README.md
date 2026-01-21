@@ -38,7 +38,7 @@ This project includes [Claude Code skills](https://docs.anthropic.com/en/docs/cl
 
 ### Architecture
 
-See [`.claude/architecture.md`](./docs/guide/architecture.md) for detailed documentation on the project structure, core modules, and design decisions.
+See [`/architecture.md`](./docs/guide/architecture.md) for detailed documentation on the project structure, core modules, and design decisions.
 
 ## Examples
 
