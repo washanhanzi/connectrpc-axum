@@ -1,6 +1,30 @@
 use convert_case::{Case, Casing};
 use prost_build::{Service, ServiceGenerator};
+use prost_types::method_options::IdempotencyLevel;
 use quote::{format_ident, quote};
+
+/// Convert protobuf IdempotencyLevel to a token stream referencing connectrpc_axum's enum.
+fn idempotency_level_tokens(level: Option<i32>) -> proc_macro2::TokenStream {
+    match level.and_then(|v| IdempotencyLevel::try_from(v).ok()) {
+        Some(IdempotencyLevel::NoSideEffects) => {
+            quote! { connectrpc_axum::IdempotencyLevel::NoSideEffects }
+        }
+        Some(IdempotencyLevel::Idempotent) => {
+            quote! { connectrpc_axum::IdempotencyLevel::Idempotent }
+        }
+        Some(IdempotencyLevel::IdempotencyUnknown) | None => {
+            quote! { connectrpc_axum::IdempotencyLevel::Unknown }
+        }
+    }
+}
+
+/// Check if idempotency level is NoSideEffects (enables GET requests).
+fn is_no_side_effects(level: Option<i32>) -> bool {
+    matches!(
+        level.and_then(|v| IdempotencyLevel::try_from(v).ok()),
+        Some(IdempotencyLevel::NoSideEffects)
+    )
+}
 
 #[derive(Default)]
 pub struct AxumConnectServiceGenerator {
@@ -46,6 +70,8 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                 let stream_assoc = format_ident!("{}Stream", method.proto_name);
                 let is_server_streaming = method.server_streaming;
                 let is_client_streaming = method.client_streaming;
+                let idempotency_level = method.options.idempotency_level;
+                let idempotency_tokens = idempotency_level_tokens(idempotency_level);
                 (
                     method_name,
                     request_type,
@@ -54,25 +80,54 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                     stream_assoc,
                     is_server_streaming,
                     is_client_streaming,
+                    idempotency_level,
+                    idempotency_tokens,
                 )
             })
             .collect();
 
         // Generate Connect-only builder methods for ALL streaming types
         // Uses the unified post_connect function which auto-detects RPC type from handler signature
+        // For unary methods with NoSideEffects, automatically enables GET requests (per Connect spec)
         let connect_builder_methods: Vec<_> = method_info
             .iter()
-            .map(|(method_name, _request_type, _response_type, path, _assoc, is_ss, is_cs)| {
-                // Generate doc comment based on streaming type
-                let doc = match (*is_ss, *is_cs) {
-                    (false, false) => "Register a handler for this RPC method (unary)",
-                    (true, false) => "Register a handler for this RPC method (server streaming)",
-                    (false, true) => "Register a handler for this RPC method (client streaming)",
-                    (true, true) => "Register a handler for this RPC method (bidirectional streaming)",
+            .map(|(method_name, _request_type, _response_type, path, _assoc, is_ss, is_cs, idempotency_level, idempotency_tokens)| {
+                // Generate doc comment based on streaming type and idempotency
+                let is_unary = !*is_ss && !*is_cs;
+                let supports_get = is_unary && is_no_side_effects(*idempotency_level);
+
+                let doc = match (*is_ss, *is_cs, supports_get) {
+                    (false, false, true) => "Register a handler for this RPC method (unary, GET+POST enabled)",
+                    (false, false, false) => "Register a handler for this RPC method (unary)",
+                    (true, false, _) => "Register a handler for this RPC method (server streaming)",
+                    (false, true, _) => "Register a handler for this RPC method (client streaming)",
+                    (true, true, _) => "Register a handler for this RPC method (bidirectional streaming)",
                 };
 
-                // All methods use the unified ConnectHandlerWrapper + post_connect
+                // Generate constant name for idempotency level (e.g., GET_USER_IDEMPOTENCY)
+                let idempotency_const_name = format_ident!(
+                    "{}_IDEMPOTENCY",
+                    method_name.to_string().to_uppercase()
+                );
+
+                // For unary methods with NoSideEffects, enable both GET and POST
+                // This follows the Connect protocol spec where NO_SIDE_EFFECTS enables HTTP GET
+                let method_router_expr = if supports_get {
+                    quote! {
+                        connectrpc_axum::handler::get_connect(handler.clone())
+                            .merge(connectrpc_axum::handler::post_connect(handler))
+                    }
+                } else {
+                    quote! {
+                        connectrpc_axum::handler::post_connect(handler)
+                    }
+                };
+
                 quote! {
+                    /// Idempotency level for this RPC method.
+                    #[allow(dead_code)]
+                    pub const #idempotency_const_name: connectrpc_axum::IdempotencyLevel = #idempotency_tokens;
+
                     #[doc = #doc]
                     pub fn #method_name<F, T>(self, handler: F) -> #service_builder_name<S>
                     where
@@ -80,7 +135,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                         F: Clone + Send + Sync + 'static,
                         T: 'static,
                     {
-                        let method_router = connectrpc_axum::handler::post_connect(handler);
+                        let method_router = #method_router_expr;
                         #service_builder_name {
                             router: self.router.route(#path, method_router),
                         }
@@ -107,14 +162,14 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             // Generate field names for tonic builder field assignments
             let field_names: Vec<_> = method_info
                 .iter()
-                .map(|(name, _, _, _, _, _, _)| name)
+                .map(|(name, _, _, _, _, _, _, _, _)| name)
                 .collect();
 
             // Generate Tonic-compatible builder methods
             let tonic_builder_methods: Vec<_> = method_info
                     .iter()
                     .map(
-                        |(method_name, request_type, response_type, path, _assoc, is_ss, is_cs)| {
+                        |(method_name, request_type, response_type, path, _assoc, is_ss, is_cs, _, _)| {
                             let field_assignments: Vec<_> = field_names
                                 .iter()
                                 .map(|field_name| {
@@ -256,7 +311,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             let tonic_handler_fields: Vec<_> = method_info
                     .iter()
                     .map(
-                        |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs)| {
+                        |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs, _, _)| {
                             match (*is_ss, *is_cs) {
                                 (false, false) => quote! {
                                     pub #method_name: Option<
@@ -287,7 +342,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             let tonic_server_handler_fields: Vec<_> = method_info
                     .iter()
                     .map(
-                        |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs)| {
+                        |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs, _, _)| {
                             match (*is_ss, *is_cs) {
                                 (false, false) => quote! {
                                     pub #method_name: Option<BoxedCall<#request_type, #response_type>>
@@ -310,7 +365,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             let tonic_service_handler_fields: Vec<_> = method_info
                     .iter()
                     .map(
-                        |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs)| {
+                        |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs, _, _)| {
                             match (*is_ss, *is_cs) {
                                 (false, false) => quote! {
                                     #method_name: connectrpc_axum::tonic::BoxedCall<#request_type, #response_type>
@@ -333,7 +388,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             let tonic_field_init: Vec<_> = method_info
                 .iter()
                 .map(
-                    |(method_name, _request_type, _response_type, _path, _assoc, _ss, _is_cs)| {
+                    |(method_name, _request_type, _response_type, _path, _assoc, _ss, _is_cs, _, _)| {
                         quote! { #method_name: None }
                     },
                 )
@@ -343,7 +398,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             let tonic_build_handlers_no_state: Vec<_> = method_info
                     .iter()
                     .map(
-                        |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs)| {
+                        |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs, _, _)| {
                             match (*is_ss, *is_cs) {
                                 (false, false) => quote! {
                                     let #method_name: BoxedCall<#request_type, #response_type> =
@@ -378,7 +433,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             let tonic_build_handlers_with_state: Vec<_> = method_info
                     .iter()
                     .map(
-                        |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs)| {
+                        |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs, _, _)| {
                             match (*is_ss, *is_cs) {
                                 (false, false) => quote! {
                                     let #method_name: BoxedCall<#request_type, #response_type> =
@@ -409,7 +464,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             let with_state_field_mapping: Vec<_> = method_info
                 .iter()
                 .map(
-                    |(method_name, _request_type, _response_type, _path, _assoc, _ss, _is_cs)| {
+                    |(method_name, _request_type, _response_type, _path, _assoc, _ss, _is_cs, _, _)| {
                         quote! { #method_name: self.#method_name.map(|mk| mk(&state)) }
                     },
                 )
@@ -419,7 +474,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             let service_field_names: Vec<_> = method_info
                 .iter()
                 .map(
-                    |(method_name, _request_type, _response_type, _path, _assoc, _ss, _is_cs)| {
+                    |(method_name, _request_type, _response_type, _path, _assoc, _ss, _is_cs, _, _)| {
                         quote! { #method_name }
                     },
                 )
@@ -428,7 +483,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             // Generate tonic trait associated types for streaming response methods (server-streaming and bidi)
             let tonic_assoc_types: Vec<_> = method_info
                     .iter()
-                    .filter_map(|(_method_name, _req, resp, _path, assoc, is_ss, _is_cs)| {
+                    .filter_map(|(_method_name, _req, resp, _path, assoc, is_ss, _is_cs, _, _)| {
                         // Both server streaming and bidi streaming have response streams
                         if *is_ss {
                             Some(quote! {
@@ -445,7 +500,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             let tonic_trait_methods: Vec<_> = method_info
                     .iter()
                     .map(
-                        |(method_name, request_type, response_type, _path, assoc, is_ss, is_cs)| {
+                        |(method_name, request_type, response_type, _path, assoc, is_ss, is_cs, _, _)| {
                             match (*is_ss, *is_cs) {
                                 (false, false) => {
                                     // Unary: Request<Req> -> Response<Resp>
@@ -694,16 +749,16 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             // Determine which streaming types are actually used by this service
             let has_unary = method_info
                 .iter()
-                .any(|(_, _, _, _, _, is_ss, is_cs)| !*is_ss && !*is_cs);
+                .any(|(_, _, _, _, _, is_ss, is_cs, _, _)| !*is_ss && !*is_cs);
             let has_server_stream = method_info
                 .iter()
-                .any(|(_, _, _, _, _, is_ss, is_cs)| *is_ss && !*is_cs);
+                .any(|(_, _, _, _, _, is_ss, is_cs, _, _)| *is_ss && !*is_cs);
             let has_client_stream = method_info
                 .iter()
-                .any(|(_, _, _, _, _, is_ss, is_cs)| !*is_ss && *is_cs);
+                .any(|(_, _, _, _, _, is_ss, is_cs, _, _)| !*is_ss && *is_cs);
             let has_bidi_stream = method_info
                 .iter()
-                .any(|(_, _, _, _, _, is_ss, is_cs)| *is_ss && *is_cs);
+                .any(|(_, _, _, _, _, is_ss, is_cs, _, _)| *is_ss && *is_cs);
 
             // Only generate type aliases and helper functions for streaming types actually used
             let boxed_call_alias = if has_unary {

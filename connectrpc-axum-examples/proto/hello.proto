@@ -29,4 +29,9 @@ message ResponseDetails {
 service HelloWorldService {
   rpc SayHello(HelloRequest) returns (HelloResponse) {}
   rpc SayHelloStream(HelloRequest) returns (stream HelloResponse) {}
+
+  // Idempotent query - automatically enables HTTP GET in Connect protocol
+  rpc GetGreeting(HelloRequest) returns (HelloResponse) {
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
 }

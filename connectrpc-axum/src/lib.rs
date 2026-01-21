@@ -62,6 +62,8 @@ pub use context::{
     EnvelopeCompression,
     // Built-in codecs
     GzipCodec,
+    // Idempotency
+    IdempotencyLevel,
     // Limits
     MessageLimits,
     RequestProtocol,
@@ -121,6 +123,8 @@ pub mod prelude {
         EnvelopeCompression,
         // Built-in codecs
         GzipCodec,
+        // Idempotency
+        IdempotencyLevel,
         // Limits
         MessageLimits,
         RequestProtocol,

@@ -59,7 +59,7 @@ pub use limit::MessageLimits;
 
 // Re-export protocol types and functions
 pub use protocol::{
-    CONNECT_PROTOCOL_VERSION, CONNECT_PROTOCOL_VERSION_HEADER, RequestProtocol,
+    CONNECT_PROTOCOL_VERSION, CONNECT_PROTOCOL_VERSION_HEADER, IdempotencyLevel, RequestProtocol,
     SUPPORTED_CONTENT_TYPES, can_handle_content_type, can_handle_get_encoding, detect_protocol,
     validate_content_type, validate_get_query_params, validate_protocol_version,
     validate_streaming_content_type, validate_unary_content_type,

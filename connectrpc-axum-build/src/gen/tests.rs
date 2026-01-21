@@ -1,5 +1,6 @@
 use super::AxumConnectServiceGenerator;
 use prost_build::{Method, Service, ServiceGenerator};
+use prost_types::method_options::IdempotencyLevel;
 
 #[test]
 fn test_no_tonic_codegen() {
@@ -109,5 +110,187 @@ fn test_with_tonic_codegen() {
     assert!(
         buf.contains("HelloWorldServiceBuilder"),
         "Should contain HelloWorldServiceBuilder"
+    );
+}
+
+#[test]
+fn test_idempotency_level_no_side_effects() {
+    // Create a mock service with a NO_SIDE_EFFECTS method
+    let mut method_options = prost_types::MethodOptions::default();
+    method_options.idempotency_level = Some(IdempotencyLevel::NoSideEffects as i32);
+
+    let service = Service {
+        name: "UserService".to_string(),
+        proto_name: "UserService".to_string(),
+        package: "user".to_string(),
+        comments: Default::default(),
+        methods: vec![Method {
+            name: "GetUser".to_string(),
+            proto_name: "GetUser".to_string(),
+            comments: Default::default(),
+            input_type: ".user.GetUserRequest".to_string(),
+            output_type: ".user.GetUserResponse".to_string(),
+            input_proto_type: "GetUserRequest".to_string(),
+            output_proto_type: "GetUserResponse".to_string(),
+            options: method_options,
+            client_streaming: false,
+            server_streaming: false,
+        }],
+        options: Default::default(),
+    };
+
+    let mut generator = AxumConnectServiceGenerator::with_tonic(false);
+    let mut buf = String::new();
+    generator.generate(service, &mut buf);
+
+    // Verify idempotency level is present in generated code
+    // Note: quote! outputs tokens with spaces around ::
+    assert!(
+        buf.contains("IdempotencyLevel :: NoSideEffects"),
+        "Should contain IdempotencyLevel::NoSideEffects for NO_SIDE_EFFECTS method.\nGenerated:\n{}",
+        buf
+    );
+}
+
+#[test]
+fn test_idempotency_level_idempotent() {
+    // Create a mock service with an IDEMPOTENT method
+    let mut method_options = prost_types::MethodOptions::default();
+    method_options.idempotency_level = Some(IdempotencyLevel::Idempotent as i32);
+
+    let service = Service {
+        name: "UserService".to_string(),
+        proto_name: "UserService".to_string(),
+        package: "user".to_string(),
+        comments: Default::default(),
+        methods: vec![Method {
+            name: "DeleteUser".to_string(),
+            proto_name: "DeleteUser".to_string(),
+            comments: Default::default(),
+            input_type: ".user.DeleteUserRequest".to_string(),
+            output_type: ".user.DeleteUserResponse".to_string(),
+            input_proto_type: "DeleteUserRequest".to_string(),
+            output_proto_type: "DeleteUserResponse".to_string(),
+            options: method_options,
+            client_streaming: false,
+            server_streaming: false,
+        }],
+        options: Default::default(),
+    };
+
+    let mut generator = AxumConnectServiceGenerator::with_tonic(false);
+    let mut buf = String::new();
+    generator.generate(service, &mut buf);
+
+    // Verify idempotency level is present in generated code
+    // Note: quote! outputs tokens with spaces around ::
+    assert!(
+        buf.contains("IdempotencyLevel :: Idempotent"),
+        "Should contain IdempotencyLevel::Idempotent for IDEMPOTENT method.\nGenerated:\n{}",
+        buf
+    );
+}
+
+#[test]
+fn test_idempotency_level_unknown_default() {
+    // Create a mock service without idempotency_level set (default)
+    let service = Service {
+        name: "UserService".to_string(),
+        proto_name: "UserService".to_string(),
+        package: "user".to_string(),
+        comments: Default::default(),
+        methods: vec![Method {
+            name: "CreateUser".to_string(),
+            proto_name: "CreateUser".to_string(),
+            comments: Default::default(),
+            input_type: ".user.CreateUserRequest".to_string(),
+            output_type: ".user.CreateUserResponse".to_string(),
+            input_proto_type: "CreateUserRequest".to_string(),
+            output_proto_type: "CreateUserResponse".to_string(),
+            options: Default::default(),
+            client_streaming: false,
+            server_streaming: false,
+        }],
+        options: Default::default(),
+    };
+
+    let mut generator = AxumConnectServiceGenerator::with_tonic(false);
+    let mut buf = String::new();
+    generator.generate(service, &mut buf);
+
+    // Verify idempotency level defaults to Unknown
+    // Note: quote! outputs tokens with spaces around ::
+    assert!(
+        buf.contains("IdempotencyLevel :: Unknown"),
+        "Should contain IdempotencyLevel::Unknown for unset idempotency_level.\nGenerated:\n{}",
+        buf
+    );
+
+    // Verify only POST is used (not GET) for methods without NoSideEffects
+    assert!(
+        buf.contains("post_connect (handler)"),
+        "Should use post_connect only for non-idempotent methods.\nGenerated:\n{}",
+        buf
+    );
+    assert!(
+        !buf.contains("get_connect"),
+        "Should NOT use get_connect for non-idempotent methods.\nGenerated:\n{}",
+        buf
+    );
+}
+
+#[test]
+fn test_no_side_effects_enables_get_routing() {
+    // Create a mock service with a NO_SIDE_EFFECTS method
+    let mut method_options = prost_types::MethodOptions::default();
+    method_options.idempotency_level = Some(IdempotencyLevel::NoSideEffects as i32);
+
+    let service = Service {
+        name: "UserService".to_string(),
+        proto_name: "UserService".to_string(),
+        package: "user".to_string(),
+        comments: Default::default(),
+        methods: vec![Method {
+            name: "GetUser".to_string(),
+            proto_name: "GetUser".to_string(),
+            comments: Default::default(),
+            input_type: ".user.GetUserRequest".to_string(),
+            output_type: ".user.GetUserResponse".to_string(),
+            input_proto_type: "GetUserRequest".to_string(),
+            output_proto_type: "GetUserResponse".to_string(),
+            options: method_options,
+            client_streaming: false,
+            server_streaming: false,
+        }],
+        options: Default::default(),
+    };
+
+    let mut generator = AxumConnectServiceGenerator::with_tonic(false);
+    let mut buf = String::new();
+    generator.generate(service, &mut buf);
+
+    // Verify GET routing is auto-enabled for NoSideEffects unary methods
+    assert!(
+        buf.contains("get_connect"),
+        "Should auto-enable get_connect for NO_SIDE_EFFECTS unary methods.\nGenerated:\n{}",
+        buf
+    );
+    assert!(
+        buf.contains("post_connect"),
+        "Should also include post_connect for NO_SIDE_EFFECTS unary methods.\nGenerated:\n{}",
+        buf
+    );
+    // Verify both are merged together
+    // Note: quote! outputs tokens with spaces around .
+    assert!(
+        buf.contains(". merge"),
+        "Should merge get_connect and post_connect for NO_SIDE_EFFECTS unary methods.\nGenerated:\n{}",
+        buf
+    );
+    // Verify the doc comment mentions GET+POST
+    assert!(
+        buf.contains("GET+POST enabled"),
+        "Should document that GET+POST is enabled.\nGenerated:\n{}",
+        buf
     );
 }

@@ -27,6 +27,89 @@ pub const SUPPORTED_CONTENT_TYPES: &str =
     "application/json, application/proto, application/connect+json, application/connect+proto";
 
 // ============================================================================
+// IdempotencyLevel enum
+// ============================================================================
+
+/// Idempotency level for an RPC method.
+///
+/// This value declares how "idempotent" an RPC is, which can affect RPC behaviors
+/// such as determining whether it is safe to retry a request, or what kinds of
+/// request modalities are allowed for a given procedure.
+///
+/// The Connect protocol uses `NoSideEffects` to enable HTTP GET requests for
+/// idempotent query methods, allowing caching by CDNs and browsers.
+///
+/// These values match `google.protobuf.MethodOptions.IdempotencyLevel`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(i32)]
+pub enum IdempotencyLevel {
+    /// The default idempotency level. A procedure with this idempotency level
+    /// may not be idempotent. This is appropriate for any kind of procedure.
+    #[default]
+    Unknown = 0,
+
+    /// Specifies that a given call has no side-effects. This is equivalent to
+    /// [RFC 9110 § 9.2.1] "safe" methods in terms of semantics.
+    ///
+    /// This procedure should not mutate any state. This idempotency level is
+    /// appropriate for queries, or anything that would be suitable for an HTTP
+    /// GET request.
+    ///
+    /// In Connect protocol, methods with this level can be called via HTTP GET,
+    /// enabling caching by CDNs and browsers.
+    ///
+    /// [RFC 9110 § 9.2.1]: https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.1
+    NoSideEffects = 1,
+
+    /// Specifies that a given call is "idempotent", such that multiple instances
+    /// of the same request to this procedure would have the same side-effects as
+    /// a single request.
+    ///
+    /// This is equivalent to [RFC 9110 § 9.2.2] "idempotent" methods. This level
+    /// is a subset of `NoSideEffects`. This idempotency level is appropriate for
+    /// any procedure that is safe to retry multiple times and be guaranteed that
+    /// the response and side-effects will not be altered as a result of multiple
+    /// attempts, for example, entity deletion requests.
+    ///
+    /// Note: In Connect protocol, `Idempotent` methods still use POST, not GET.
+    /// Only `NoSideEffects` enables GET requests.
+    ///
+    /// [RFC 9110 § 9.2.2]: https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2
+    Idempotent = 2,
+}
+
+impl IdempotencyLevel {
+    /// Convert from protobuf integer value.
+    ///
+    /// Returns `Unknown` for unrecognized values.
+    pub fn from_i32(value: i32) -> Self {
+        match value {
+            0 => Self::Unknown,
+            1 => Self::NoSideEffects,
+            2 => Self::Idempotent,
+            _ => Self::Unknown,
+        }
+    }
+
+    /// Returns `true` if this method can be called via HTTP GET.
+    ///
+    /// Only methods marked `NoSideEffects` support GET requests.
+    pub fn supports_get(&self) -> bool {
+        matches!(self, Self::NoSideEffects)
+    }
+}
+
+impl std::fmt::Display for IdempotencyLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unknown => write!(f, "idempotency_unknown"),
+            Self::NoSideEffects => write!(f, "no_side_effects"),
+            Self::Idempotent => write!(f, "idempotent"),
+        }
+    }
+}
+
+// ============================================================================
 // RequestProtocol enum
 // ============================================================================
 
