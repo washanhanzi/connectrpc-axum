@@ -933,15 +933,22 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                         self.router
                     }
 
-                    /// Build with default [`ConnectLayer`] applied.
+                    /// Build with default layers applied via [`MakeServiceBuilder`].
                     ///
-                    /// This is a convenience method that applies a default `ConnectLayer`
-                    /// to the router. For custom configuration, use [`build()`] and apply
-                    /// the layer manually.
+                    /// This is a convenience method that wraps the router with
+                    /// `MakeServiceBuilder::new()` which provides:
+                    /// - Default gzip compression/decompression
+                    /// - [`ConnectLayer`] with default settings
                     ///
+                    /// For custom configuration, use [`build()`] and configure
+                    /// `MakeServiceBuilder` manually.
+                    ///
+                    /// [`MakeServiceBuilder`]: connectrpc_axum::MakeServiceBuilder
                     /// [`ConnectLayer`]: connectrpc_axum::ConnectLayer
                     pub fn build_connect(self) -> axum::Router<()> {
-                        self.router.layer(connectrpc_axum::ConnectLayer::new())
+                        connectrpc_axum::MakeServiceBuilder::new()
+                            .add_router(self.router)
+                            .build()
                     }
                 }
 
