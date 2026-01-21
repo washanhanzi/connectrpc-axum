@@ -49,8 +49,6 @@ where
     }
 }
 
-// Note: Tonic handler types are now in crate::tonic module
-
 /// Validate protocol for unary handlers. Returns error response if invalid.
 ///
 /// Unary handlers only accept unary content-types (`application/json`, `application/proto`).
