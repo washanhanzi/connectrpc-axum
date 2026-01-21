@@ -11,6 +11,7 @@ See the [connectrpc-axum-examples](https://github.com/washanhanzi/connectrpc-axu
 | `connect-client-stream` | Pure Connect client streaming |
 | `connect-bidi-stream` | Pure Connect bidirectional streaming |
 | `get-request` | GET request support for idempotent unary RPCs |
+| `idempotency-get` | Automatic GET support via proto `idempotency_level = NO_SIDE_EFFECTS` |
 
 ## Tonic/gRPC Integration
 

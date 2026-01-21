@@ -15,6 +15,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Use `.fetch_protoc()` to automatically download the protoc compiler. This is useful when you don't want to require protoc to be installed on the build machine.
 
+::: warning Feature Required
+The `fetch_protoc()` method requires the `fetch-protoc` feature flag:
+
+```toml
+[build-dependencies]
+connectrpc-axum-build = { version = "*", features = ["fetch-protoc"] }
+```
+:::
+
 ```rust
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     connectrpc_axum_build::compile_dir("proto")

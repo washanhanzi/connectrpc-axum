@@ -157,6 +157,7 @@ These are the types you interact with when building services:
 | `CompressionContext` | Per-request compression context with envelope settings and full `CompressionConfig` |
 | `CompressionEncoding` | Supported encodings: `Gzip`, `Deflate`, `Brotli`, `Zstd`, or `Identity`. Use `codec_with_level()` for level-aware compression |
 | `CompressionLevel` | Compression level (re-exported from tower-http) |
+| `IdempotencyLevel` | Method idempotency: `Unknown`, `NoSideEffects` (enables GET), `Idempotent` |
 | `EnvelopeCompression` | Per-envelope compression settings for streaming RPCs |
 | `ContextError` | Error type for context building failures (protocol detection, header parsing) |
 | `BoxedCodec` | Type-erased codec storage (`Box<dyn Codec>`) for dynamic compression dispatch |
@@ -207,6 +208,8 @@ Two functions create method routers from handlers:
 |----------|-------------|----------|
 | `post_connect(f)` | POST | Unary and streaming RPCs |
 | `get_connect(f)` | GET | Idempotent unary RPCs (query param encoding) |
+
+For methods marked with `option idempotency_level = NO_SIDE_EFFECTS` in proto, the code generator automatically merges `get_connect()` and `post_connect()` handlers, enabling both HTTP GET and POST requests per the Connect protocol spec.
 
 ### How Handler Wrappers Work
 
@@ -341,7 +344,7 @@ For generated code to provide default "unimplemented" methods:
 
 | Module | Purpose |
 |--------|---------|
-| `protocol.rs` | `RequestProtocol` enum, detection, and validation functions (`can_handle_content_type`, `can_handle_get_encoding`, `SUPPORTED_CONTENT_TYPES`) |
+| `protocol.rs` | `RequestProtocol` enum, `IdempotencyLevel` enum, detection, and validation functions (`can_handle_content_type`, `can_handle_get_encoding`, `SUPPORTED_CONTENT_TYPES`) |
 | `envelope_compression.rs` | `Codec` trait, per-envelope compression, `CompressionEncoding::codec_with_level()` for level-aware codecs |
 | `limit.rs` | Receive and send message size limits |
 | `timeout.rs` | Request timeout handling |
@@ -408,7 +411,7 @@ Method availability is enforced via trait bounds:
 
 **Constraints:** `no_handlers()` and `with_tonic()` cannot be combined (enforced at compile time).
 
-**Protoc Fetching:** The `fetch_protoc(version, path)` method downloads a protoc binary to the specified path using the protoc-fetcher crate. This is useful for CI environments or when a system protoc is unavailable.
+**Protoc Fetching:** The `fetch_protoc(version, path)` method downloads a protoc binary to the specified path using the protoc-fetcher crate. This requires the `fetch-protoc` feature flag. Useful for CI environments or when a system protoc is unavailable.
 
 ### Pass 1: Prost + Connect
 
@@ -423,6 +426,9 @@ prost_build::Config
 - User configuration via `with_prost_config()` is applied here
 - All type customization (attributes, extern paths) must be done in this pass
 - Generated builders use the unified `post_connect()` function which auto-detects RPC type from handler signature
+- For methods with `idempotency_level = NO_SIDE_EFFECTS`, the generator merges `get_connect()` and `post_connect()` handlers
+- Generated builders expose `{METHOD}_IDEMPOTENCY` constants for each method's idempotency level
+- `build_connect()` convenience method wraps the router with `MakeServiceBuilder::new()`, providing default gzip compression
 - With `no_handlers()`, only message types are generated (no service builders)
 - Streaming type aliases (`BoxedCall`, `BoxedStreamCall`, etc.) are only generated for RPC patterns actually used by the service
 

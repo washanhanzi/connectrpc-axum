@@ -1,8 +1,22 @@
 # Compression
 
-## Basic Usage
+## Default Compression
 
-Configure response compression using `MakeServiceBuilder`:
+When using `build_connect()` on a service builder, gzip compression is enabled by default:
+
+```rust
+let router = helloworldservice::HelloWorldServiceBuilder::new()
+    .say_hello(say_hello)
+    .build_connect();  // Includes default gzip compression
+```
+
+This uses `MakeServiceBuilder::new()` internally, which provides:
+- Default gzip compression and decompression
+- Standard ConnectLayer configuration
+
+## Custom Configuration
+
+For custom compression settings, use `MakeServiceBuilder` directly:
 
 ```rust
 use connectrpc_axum::{MakeServiceBuilder, CompressionConfig, CompressionLevel};

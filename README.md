@@ -33,12 +33,12 @@ This project includes [Claude Code skills](https://docs.anthropic.com/en/docs/cl
 | Skill | Description |
 |-------|-------------|
 | `submit-issue` | Report bugs, request features, or ask questions |
+| `resolve-issue` | Investigate and resolve GitHub issues |
 | `test` | Run the full test suite |
-| `compare-repo` | Compare an external GitHub repository against connectrpc-axum |
 
 ### Architecture
 
-See [`.claude/architecture.md`](.claude/architecture.md) for detailed documentation on the project structure, core modules, and design decisions.
+See [`.claude/architecture.md`](./docs/guide/architecture.md) for detailed documentation on the project structure, core modules, and design decisions.
 
 ## Examples
 

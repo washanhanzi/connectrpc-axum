@@ -89,7 +89,34 @@ This serves:
 
 ### GET Requests
 
-Use `get_connect` for idempotent RPCs to enable browser caching:
+#### Automatic GET Support (Recommended)
+
+Mark methods with `idempotency_level = NO_SIDE_EFFECTS` in your proto file to automatically enable GET requests:
+
+```protobuf
+rpc GetUser(GetUserRequest) returns (GetUserResponse) {
+  option idempotency_level = NO_SIDE_EFFECTS;
+}
+```
+
+The generated service builder will automatically handle both GET and POST requests:
+
+```rust
+let router = userservice::UserServiceBuilder::new()
+    .get_user(get_user)
+    .build_connect();  // GET + POST automatically enabled for GetUser
+```
+
+The code generator also exports idempotency level constants for each method:
+
+```rust
+use your_crate::userservice::GET_USER_IDEMPOTENCY;
+// GET_USER_IDEMPOTENCY == IdempotencyLevel::NoSideEffects
+```
+
+#### Manual GET Support
+
+For custom routing, use `get_connect` and `post_connect`:
 
 ```rust
 use axum::Router;
@@ -99,6 +126,8 @@ let router = Router::new()
     .route("/user.v1.UserService/GetUser",
         get_connect(get_user).merge(post_connect(get_user)));
 ```
+
+#### GET Request Format
 
 GET requests encode the message in query parameters:
 
