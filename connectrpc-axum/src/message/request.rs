@@ -2,9 +2,12 @@
 use crate::context::{CompressionEncoding, MessageLimits};
 use crate::error::{Code, ConnectError};
 use crate::pipeline::{
-    RequestPipeline, decode_json, decode_proto, decompress_bytes, get_context_or_default,
-    process_envelope_payload, read_body, read_frame_bytes,
+    RequestPipeline, decode_json, decode_proto, get_context_or_default, process_envelope_payload,
+    read_body, read_frame_bytes,
 };
+
+#[cfg(feature = "compression-gzip")]
+use crate::pipeline::decompress_bytes;
 use axum::{
     body::Body,
     extract::{FromRequest, Request},
@@ -225,6 +228,7 @@ where
 
     // 2. Decompress if compression is specified
     let bytes = match params.compression.as_deref() {
+        #[cfg(feature = "compression-gzip")]
         Some("gzip") => decompress_bytes(bytes.into(), CompressionEncoding::Gzip)?,
         Some("identity") | Some("") | None => bytes.into(),
         Some(other) => {
@@ -232,8 +236,9 @@ where
             return Err(ConnectError::new(
                 Code::Unimplemented,
                 format!(
-                    "unknown compression \"{}\": supported encodings are gzip, identity",
-                    other
+                    "unknown compression \"{}\": supported encodings are {}",
+                    other,
+                    connectrpc_axum_core::supported_encodings_str()
                 ),
             ));
         }

@@ -1,0 +1,64 @@
+[package]
+name = "connectrpc-axum-client"
+version = "0.1.0-alpha.1"
+edition = "2024"
+description = "Connect protocol client for connectrpc-axum"
+repository = "https://github.com/washanhanzi/connectrpc-axum"
+license = "MIT"
+
+[dependencies]
+# Core protocol types
+connectrpc-axum-core = { path = "../connectrpc-axum-core" }
+
+# HTTP client
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "json",
+    "stream",
+    "http2",
+] }
+reqwest-middleware = "0.4"
+
+# Serialization
+bytes = { workspace = true }
+prost = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# HTTP types
+http = { workspace = true }
+
+# Async
+futures = { workspace = true }
+tokio = { workspace = true }
+
+# Compression (re-use from core via features)
+flate2 = { workspace = true, optional = true }
+brotli = { workspace = true, optional = true }
+zstd = { workspace = true, optional = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Base64 for error detail parsing
+base64 = { workspace = true }
+
+# Observability (optional)
+tracing = { workspace = true, optional = true }
+
+[features]
+default = []
+compression-gzip = ["dep:flate2", "connectrpc-axum-core/compression-gzip"]
+compression-deflate = ["dep:flate2", "connectrpc-axum-core/compression-deflate"]
+compression-br = ["dep:brotli", "connectrpc-axum-core/compression-br"]
+compression-zstd = ["dep:zstd", "connectrpc-axum-core/compression-zstd"]
+compression-full = ["compression-gzip", "compression-deflate", "compression-br", "compression-zstd"]
+# Enable tracing instrumentation for RPC calls
+tracing = ["dep:tracing"]
+
+[dev-dependencies]
+# For integration tests
+connectrpc-axum = { path = "../connectrpc-axum" }
+axum = { workspace = true }
+tokio = { workspace = true, features = ["full", "macros", "rt-multi-thread"] }
+tokio-stream = { workspace = true }

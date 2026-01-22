@@ -60,6 +60,6 @@ async fn main() -> anyhow::Result<()> {
     println!("    -H 'Connect-Protocol-Version: 2' \\");
     println!("    -d '{{\"name\": \"Charlie\"}}'");
 
-    axum::serve(listener, tower::make::Shared::new(app)).await?;
+    axum::serve(listener, app).await?;
     Ok(())
 }

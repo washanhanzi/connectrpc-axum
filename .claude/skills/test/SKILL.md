@@ -5,11 +5,11 @@ description: Run the complete test suite for connectrpc-axum. Use when the user 
 
 # test
 
-Run the complete test suite for connectrpc-axum: unit tests, doc tests, and integration tests with Go clients.
+Run the complete test suite for connectrpc-axum: unit tests, doc tests, Rust client integration tests, and Go client integration tests.
 
 ## Instructions
 
-Run both test suites in order:
+Run all test suites in order:
 
 ### 1. Unit Tests
 
@@ -17,7 +17,27 @@ Run both test suites in order:
 cargo test
 ```
 
-### 2. Integration Tests
+### 2. Rust Client Integration Tests
+
+Tests the `connectrpc-axum-client` crate against the Rust server.
+
+**Location**: `connectrpc-axum-examples/src/bin/client/` (client binaries are separate from server binaries in `src/bin/`)
+
+```bash
+# Start the server in background, run client test, then stop server
+cargo run --bin connect-unary --no-default-features &
+sleep 1
+cargo run --bin unary-client --no-default-features
+kill %1 2>/dev/null || true
+```
+
+The Rust client tests verify:
+- JSON and Proto encoding
+- Response wrapper methods (Deref, map, into_parts)
+- Metadata extraction
+- Connection error handling
+
+### 3. Go Client Integration Tests
 
 Run from the repo root (use `-C` to avoid changing working directory):
 ```bash
@@ -34,9 +54,19 @@ The Go tests:
 
 **Unit Tests**: All tests pass with exit code 0
 
-**Integration Tests**: All tests pass (PASS in output)
+**Rust Client Tests**: All 7 tests pass ("=== All tests passed! ===" in output)
+
+**Go Integration Tests**: All tests pass (PASS in output)
 
 ## Integration Test Matrix
+
+### Rust Client Tests
+
+| Test | Server | Protocol | Test Type |
+|------|--------|----------|-----------|
+| unary-client | connect-unary | Connect | Unary (JSON + Proto) |
+
+### Go Client Tests
 
 | Test | Server | Protocol | Test Type |
 |------|--------|----------|-----------|
@@ -75,6 +105,9 @@ Unit Tests: [PASS/FAIL]
 - Passed: X
 - Failed: Y
 
-Integration Tests: [PASS/FAIL]
+Rust Client Tests: [PASS/FAIL]
+- 7 tests passed
+
+Go Integration Tests: [PASS/FAIL]
 - X tests passed
 ```

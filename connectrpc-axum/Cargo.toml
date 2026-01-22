@@ -8,6 +8,7 @@ repository = "https://github.com/washanhanzi/connectrpc-axum"
 license = "MIT"
 
 [dependencies]
+connectrpc-axum-core = { workspace = true }
 async-stream = { workspace = true }
 axum = { workspace = true, features = ["multipart"] }
 base64 = { workspace = true }
@@ -28,9 +29,13 @@ tokio-stream = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }
 tonic-prost = { workspace = true, optional = true }
 tower = { workspace = true, features = ["full"] }
-tower-http = { workspace = true, features = ["compression-gzip", "decompression-gzip", "timeout", "limit"] }
+tower-http = { workspace = true, features = [
+    "timeout",
+    "limit",
+] }
 tracing = { workspace = true }
-flate2 = { workspace = true }
+
+flate2 = { workspace = true, optional = true }
 brotli = { workspace = true, optional = true }
 zstd = { workspace = true, optional = true }
 
@@ -40,9 +45,30 @@ tonic = ["dep:tokio-stream", "dep:tonic", "dep:tonic-prost"]
 
 # Compression algorithm features
 # Each feature enables both tower-http layer compression and envelope streaming compression
-compression-deflate = ["tower-http/compression-deflate", "tower-http/decompression-deflate"]
-compression-br = ["tower-http/compression-br", "tower-http/decompression-br", "dep:brotli"]
-compression-zstd = ["tower-http/compression-zstd", "tower-http/decompression-zstd", "dep:zstd"]
+compression-gzip = [
+    "tower-http/compression-gzip",
+    "tower-http/decompression-gzip",
+    "dep:flate2",
+    "connectrpc-axum-core/compression-gzip",
+]
+compression-deflate = [
+    "tower-http/compression-deflate",
+    "tower-http/decompression-deflate",
+    "dep:flate2",
+    "connectrpc-axum-core/compression-deflate",
+]
+compression-br = [
+    "tower-http/compression-br",
+    "tower-http/decompression-br",
+    "dep:brotli",
+    "connectrpc-axum-core/compression-br",
+]
+compression-zstd = [
+    "tower-http/compression-zstd",
+    "tower-http/decompression-zstd",
+    "dep:zstd",
+    "connectrpc-axum-core/compression-zstd",
+]
 
 # Enable all compression algorithms
-compression-full = ["compression-deflate", "compression-br", "compression-zstd"]
+compression-full = ["compression-gzip", "compression-deflate", "compression-br", "compression-zstd"]

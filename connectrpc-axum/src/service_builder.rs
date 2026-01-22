@@ -45,13 +45,39 @@ use http::StatusCode;
 #[cfg(not(feature = "tonic"))]
 use std::marker::PhantomData;
 use std::time::Duration;
-use tower_http::compression::CompressionLayer;
-use tower_http::compression::predicate::SizeAbove;
-use tower_http::decompression::RequestDecompressionLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 
+#[cfg(any(
+    feature = "compression-gzip",
+    feature = "compression-deflate",
+    feature = "compression-br",
+    feature = "compression-zstd"
+))]
+use tower_http::compression::CompressionLayer;
+#[cfg(any(
+    feature = "compression-gzip",
+    feature = "compression-deflate",
+    feature = "compression-br",
+    feature = "compression-zstd"
+))]
+use tower_http::compression::predicate::SizeAbove;
+#[cfg(any(
+    feature = "compression-gzip",
+    feature = "compression-deflate",
+    feature = "compression-br",
+    feature = "compression-zstd"
+))]
+use tower_http::decompression::RequestDecompressionLayer;
+
 use crate::context::{CompressionConfig, MessageLimits};
+#[cfg(any(
+    feature = "compression-gzip",
+    feature = "compression-deflate",
+    feature = "compression-br",
+    feature = "compression-zstd"
+))]
+use crate::context::to_tower_compression_level;
 use crate::layer::{BridgeLayer, ConnectLayer};
 
 #[cfg(feature = "tonic")]
@@ -74,7 +100,19 @@ struct BuiltLayers {
     connect_layer: ConnectLayer,
     timeout: Option<Duration>,
     limits: Option<MessageLimits>,
+    #[cfg(any(
+        feature = "compression-gzip",
+        feature = "compression-deflate",
+        feature = "compression-br",
+        feature = "compression-zstd"
+    ))]
     compression_layer: Option<CompressionLayer<SizeAbove>>,
+    #[cfg(any(
+        feature = "compression-gzip",
+        feature = "compression-deflate",
+        feature = "compression-br",
+        feature = "compression-zstd"
+    ))]
     decompression_layer: Option<RequestDecompressionLayer>,
 }
 
@@ -518,19 +556,24 @@ where
 
     /// Builds a response compression layer with feature-gated compression algorithms.
     ///
-    /// By default, gzip is always enabled. Additional algorithms (deflate, br, zstd)
-    /// are enabled based on cargo features.
+    /// Only available when at least one compression feature is enabled.
+    #[cfg(any(
+        feature = "compression-gzip",
+        feature = "compression-deflate",
+        feature = "compression-br",
+        feature = "compression-zstd"
+    ))]
     fn build_compression_layer(
         &self,
         compression: &CompressionConfig,
     ) -> CompressionLayer<SizeAbove> {
         let min_bytes = compression.min_bytes.min(u16::MAX as usize) as u16;
 
-        // gzip is always enabled (unconditional feature in Cargo.toml)
         let layer = CompressionLayer::new()
-            .quality(compression.level)
-            .gzip(true);
+            .quality(to_tower_compression_level(compression.level));
 
+        #[cfg(feature = "compression-gzip")]
+        let layer = layer.gzip(true);
         #[cfg(feature = "compression-deflate")]
         let layer = layer.deflate(true);
         #[cfg(feature = "compression-br")]
@@ -544,12 +587,18 @@ where
 
     /// Builds a request decompression layer with feature-gated compression algorithms.
     ///
-    /// By default, gzip is always enabled. Additional algorithms (deflate, br, zstd)
-    /// are enabled based on cargo features.
+    /// Only available when at least one compression feature is enabled.
+    #[cfg(any(
+        feature = "compression-gzip",
+        feature = "compression-deflate",
+        feature = "compression-br",
+        feature = "compression-zstd"
+    ))]
     fn build_request_decompression_layer(&self) -> RequestDecompressionLayer {
-        // gzip is always enabled (unconditional feature in Cargo.toml)
-        let layer = RequestDecompressionLayer::new().gzip(true);
+        let layer = RequestDecompressionLayer::new();
 
+        #[cfg(feature = "compression-gzip")]
+        let layer = layer.gzip(true);
         #[cfg(feature = "compression-deflate")]
         let layer = layer.deflate(true);
         #[cfg(feature = "compression-br")]
@@ -561,13 +610,21 @@ where
     }
 
     /// Builds the layers needed for router construction.
+    #[cfg(any(
+        feature = "compression-gzip",
+        feature = "compression-deflate",
+        feature = "compression-br",
+        feature = "compression-zstd"
+    ))]
     fn build_layers(&self) -> BuiltLayers {
         let connect_layer = self.build_connect_layer();
+
         let compression_layer = self
             .config
             .compression
             .as_ref()
             .map(|c| self.build_compression_layer(c));
+
         let decompression_layer = self
             .config
             .compression
@@ -580,6 +637,23 @@ where
             limits: self.config.limits,
             compression_layer,
             decompression_layer,
+        }
+    }
+
+    /// Builds the layers needed for router construction (no compression features).
+    #[cfg(not(any(
+        feature = "compression-gzip",
+        feature = "compression-deflate",
+        feature = "compression-br",
+        feature = "compression-zstd"
+    )))]
+    fn build_layers(&self) -> BuiltLayers {
+        let connect_layer = self.build_connect_layer();
+
+        BuiltLayers {
+            connect_layer,
+            timeout: self.config.timeout,
+            limits: self.config.limits,
         }
     }
 }
@@ -646,6 +720,12 @@ where
     let mut router = connect_router.layer(layers.connect_layer);
 
     // Apply compression layers if enabled
+    #[cfg(any(
+        feature = "compression-gzip",
+        feature = "compression-deflate",
+        feature = "compression-br",
+        feature = "compression-zstd"
+    ))]
     if let (Some(comp), Some(decomp)) = (&layers.compression_layer, &layers.decompression_layer) {
         router = router.layer(comp.clone()).layer(decomp.clone());
     }
@@ -671,9 +751,21 @@ fn apply_axum_layers<S>(mut router: Router<S>, layers: &BuiltLayers) -> Router<S
 where
     S: Clone + Send + Sync + 'static,
 {
+    #[cfg(any(
+        feature = "compression-gzip",
+        feature = "compression-deflate",
+        feature = "compression-br",
+        feature = "compression-zstd"
+    ))]
     if let Some(layer) = &layers.compression_layer {
         router = router.layer(layer.clone());
     }
+    #[cfg(any(
+        feature = "compression-gzip",
+        feature = "compression-deflate",
+        feature = "compression-br",
+        feature = "compression-zstd"
+    ))]
     if let Some(layer) = &layers.decompression_layer {
         router = router.layer(layer.clone());
     }

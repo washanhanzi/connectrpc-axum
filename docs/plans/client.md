@@ -110,25 +110,68 @@ pub trait Middleware: 'static + Send + Sync {
 
 ## Unified Response Types
 
-Reuse existing types from `connectrpc-axum/src/message/response.rs`:
+Reuse and extend types from `connectrpc-axum/src/message/response.rs`:
 
 ```rust
-// Simple wrapper for any response
-pub struct ConnectResponse<T>(pub T);
+use http::HeaderMap;
 
-impl<T> ConnectResponse<T> {
-    pub fn new(inner: T) -> Self { Self(inner) }
-    pub fn into_inner(self) -> T { self.0 }
+/// Metadata from response headers/trailers
+#[derive(Debug, Default, Clone)]
+pub struct Metadata {
+    headers: HeaderMap,
 }
 
-// Wrapper for streaming responses
+impl Metadata {
+    pub fn headers(&self) -> &HeaderMap { &self.headers }
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.headers.get(key).and_then(|v| v.to_str().ok())
+    }
+}
+
+/// Response wrapper providing access to message and metadata
+pub struct ConnectResponse<T> {
+    inner: T,
+    metadata: Metadata,
+}
+
+impl<T> ConnectResponse<T> {
+    pub fn new(inner: T) -> Self {
+        Self { inner, metadata: Metadata::default() }
+    }
+
+    pub fn with_metadata(inner: T, metadata: Metadata) -> Self {
+        Self { inner, metadata }
+    }
+
+    pub fn into_inner(self) -> T { self.inner }
+    pub fn metadata(&self) -> &Metadata { &self.metadata }
+
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> ConnectResponse<U> {
+        ConnectResponse { inner: f(self.inner), metadata: self.metadata }
+    }
+}
+
+impl<T> std::ops::Deref for ConnectResponse<T> {
+    type Target = T;
+    fn deref(&self) -> &T { &self.inner }
+}
+
+/// Wrapper for streaming responses with trailers access
 pub struct StreamBody<S> {
-    stream: S,
+    decoder: S,
 }
 
 impl<S> StreamBody<S> {
-    pub fn new(stream: S) -> Self { Self { stream } }
-    pub fn into_inner(self) -> S { self.stream }
+    pub fn new(decoder: S) -> Self { Self { decoder } }
+    pub fn into_inner(self) -> S { self.decoder }
+}
+
+impl<S, T> StreamBody<FrameDecoder<S, T>> {
+    /// Get trailers after stream is fully consumed.
+    /// Returns None if stream hasn't finished or ended with error.
+    pub fn trailers(&self) -> Option<&Metadata> {
+        self.decoder.trailers()
+    }
 }
 ```
 
@@ -345,13 +388,21 @@ impl ConnectClient {
 ```
 [flags: 1 byte][length: 4 bytes BE][payload: length bytes]
 
-flags:
-  - 0x00: normal message (uncompressed)
-  - 0x01: compressed message
-  - 0x02: end-of-stream (trailers/error)
+flags (bitmask):
+  - 0b0000_0001 (0x01): compressed payload
+  - 0b0000_0010 (0x02): end-of-stream (trailers/error)
+
+Examples:
+  - 0x00: normal message, uncompressed
+  - 0x01: normal message, compressed
+  - 0x02: end-of-stream, uncompressed payload
+  - 0x03: end-of-stream, compressed payload
 ```
 
 ### FrameDecoder
+
+**Design principle**: Errors are yielded as `Some(Err(e))` in the stream, not stored in side-channels.
+This follows Rust idioms where consumers expect errors in the stream itself.
 
 ```rust
 pub struct FrameDecoder<S, T> {
@@ -359,7 +410,8 @@ pub struct FrameDecoder<S, T> {
     buffer: BytesMut,
     use_proto: bool,
     compression: CompressionEncoding,
-    end_stream: Option<EndStreamPayload>,
+    trailers: Option<Metadata>,  // Successful end-stream metadata (not errors)
+    finished: bool,
     _marker: PhantomData<T>,
 }
 
@@ -373,22 +425,22 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // 1. Buffer bytes until we have at least 5 (header)
         // 2. Parse length, buffer until complete frame
-        // 3. Check flags:
-        //    - 0x00/0x01: decode message, handle compression
-        //    - 0x02: parse EndStream, check for error, return None
-        // 4. Return decoded message
+        // 3. Check flags (bitmask):
+        //    - If compressed (0x01): decompress payload
+        //    - If end-stream (0x02): parse EndStream JSON
+        //      - If error present: return Some(Err(connect_error))
+        //      - If success: store trailers, return None
+        //    - Otherwise: decode message, return Some(Ok(message))
+        // 4. Handle partial frames across chunk boundaries (loop until complete)
+        // 5. On unexpected EOF: return Some(Err(Code::DataLoss, "stream closed unexpectedly"))
     }
 }
 
 impl<S, T> FrameDecoder<S, T> {
-    /// Get EndStream payload after stream completes (if any)
-    pub fn end_stream(&self) -> Option<&EndStreamPayload> {
-        self.end_stream.as_ref()
-    }
-
-    /// Check if stream ended with error
-    pub fn error(&self) -> Option<&ConnectError> {
-        self.end_stream.as_ref().and_then(|e| e.error.as_ref())
+    /// Get response trailers/metadata after stream completes successfully.
+    /// Returns None if stream hasn't finished or ended with error.
+    pub fn trailers(&self) -> Option<&Metadata> {
+        self.trailers.as_ref()
     }
 }
 ```
@@ -400,6 +452,7 @@ pub struct FrameEncoder<S, T> {
     stream: S,
     use_proto: bool,
     compression: CompressionConfig,
+    end_stream_sent: bool,
     _marker: PhantomData<T>,
 }
 
@@ -412,10 +465,39 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // 1. Poll inner stream for next message
-        // 2. Encode message (proto or JSON)
-        // 3. Optionally compress
-        // 4. Wrap in envelope frame
-        // 5. Return frame bytes
+        // 2. If message available:
+        //    a. Encode message (proto or JSON)
+        //    b. Optionally compress (set 0x01 flag)
+        //    c. Wrap in envelope frame
+        //    d. Return frame bytes
+        // 3. If inner stream exhausted and !end_stream_sent:
+        //    a. Build EndStream frame (flag 0x02, empty or with metadata)
+        //    b. Set end_stream_sent = true
+        //    c. Return EndStream frame
+        // 4. If end_stream_sent: return None
+    }
+}
+
+impl<S, T> Drop for FrameEncoder<S, T> {
+    fn drop(&mut self) {
+        // Note: Cannot send EndStream in Drop (async context not available).
+        // Callers should ensure stream is fully consumed or use explicit
+        // finish() method before dropping for clean shutdown.
+        if !self.end_stream_sent {
+            tracing::debug!("FrameEncoder dropped without sending EndStream");
+        }
+    }
+}
+
+impl<S, T> FrameEncoder<S, T> {
+    /// Explicitly finish the stream, returning the EndStream frame.
+    /// Call this for clean shutdown if not consuming all items.
+    pub fn finish(&mut self) -> Option<Bytes> {
+        if self.end_stream_sent {
+            return None;
+        }
+        self.end_stream_sent = true;
+        Some(wrap_envelope(&[], FLAG_END_STREAM))
     }
 }
 ```
@@ -453,9 +535,233 @@ where
 - [ ] Implement `call_bidi_stream()`
 - [ ] HTTP/2 requirement validation
 
-### Phase 5: Code Generation (Optional)
-- [ ] Update `connectrpc-axum-build` with `with_connect_client()` method
-- [ ] Generate typed client traits per service
+### Phase 5: Code Generation
+
+Add `client` feature to `connectrpc-axum-build` that generates typed client structs.
+
+#### Feature Flag & Dependencies
+
+```toml
+# connectrpc-axum-build/Cargo.toml
+[dependencies]
+# ... existing deps ...
+connectrpc-axum-client = { path = "../connectrpc-axum-client", optional = true }
+
+[features]
+default = []
+client = ["dep:connectrpc-axum-client"]  # Enables Connect client code generation
+```
+
+The `client` feature brings in `connectrpc-axum-client` as a dependency, which provides:
+- `ConnectClient` - the underlying HTTP client
+- `ClientBuilder` - client configuration builder
+- `ConnectResponse<T>` - response wrapper type
+- `StreamBody<S>` - streaming response wrapper
+- Frame encoding/decoding utilities
+
+#### Builder API
+
+```rust
+// Type-state marker
+pub struct ClientEnabled;
+pub struct ClientDisabled;
+
+impl<C, T, TC> CompileBuilder<C, T, TC, ClientDisabled> {
+    /// Enable Connect client code generation
+    ///
+    /// Generates typed client structs like `HelloWorldServiceClient` with
+    /// methods for each RPC. Requires the `client` feature.
+    #[cfg(feature = "client")]
+    pub fn with_client(self) -> CompileBuilder<C, T, TC, ClientEnabled> { ... }
+}
+```
+
+#### Generated Client Struct
+
+For a service like:
+
+```protobuf
+service HelloWorldService {
+  rpc SayHello(HelloRequest) returns (HelloResponse);
+  rpc SayHelloStream(HelloRequest) returns (stream HelloResponse);
+  rpc SayHelloClientStream(stream HelloRequest) returns (HelloResponse);
+  rpc SayHelloBidi(stream HelloRequest) returns (stream HelloResponse);
+}
+```
+
+Generate:
+
+```rust
+/// Generated Connect client for HelloWorldService
+pub struct HelloWorldServiceClient {
+    client: connectrpc_axum_client::ConnectClient,
+}
+
+impl HelloWorldServiceClient {
+    /// Create a new client with the given base URL
+    pub fn new(base_url: impl Into<String>) -> Self {
+        Self {
+            client: connectrpc_axum_client::ConnectClient::builder(base_url).build(),
+        }
+    }
+
+    /// Create from an existing ConnectClient
+    pub fn from_client(client: connectrpc_axum_client::ConnectClient) -> Self {
+        Self { client }
+    }
+
+    /// Get builder for custom configuration
+    pub fn builder(base_url: impl Into<String>) -> HelloWorldServiceClientBuilder {
+        HelloWorldServiceClientBuilder::new(base_url)
+    }
+
+    /// Unary RPC: SayHello
+    pub async fn say_hello(
+        &self,
+        request: HelloRequest,
+    ) -> Result<connectrpc_axum_client::ConnectResponse<HelloResponse>, connectrpc_axum_core::ConnectError> {
+        self.client
+            .call_unary("hello.v1.HelloWorldService/SayHello", &request)
+            .await
+    }
+
+    /// Server streaming RPC: SayHelloStream
+    pub async fn say_hello_stream(
+        &self,
+        request: HelloRequest,
+    ) -> Result<
+        connectrpc_axum_client::ConnectResponse<
+            connectrpc_axum_client::StreamBody<
+                impl futures::Stream<Item = Result<HelloResponse, connectrpc_axum_core::ConnectError>>
+            >
+        >,
+        connectrpc_axum_core::ConnectError,
+    > {
+        self.client
+            .call_server_stream("hello.v1.HelloWorldService/SayHelloStream", &request)
+            .await
+    }
+
+    /// Client streaming RPC: SayHelloClientStream
+    pub async fn say_hello_client_stream(
+        &self,
+        request: impl futures::Stream<Item = HelloRequest> + Send + 'static,
+    ) -> Result<connectrpc_axum_client::ConnectResponse<HelloResponse>, connectrpc_axum_core::ConnectError> {
+        self.client
+            .call_client_stream("hello.v1.HelloWorldService/SayHelloClientStream", request)
+            .await
+    }
+
+    /// Bidi streaming RPC: SayHelloBidi
+    pub async fn say_hello_bidi(
+        &self,
+        request: impl futures::Stream<Item = HelloRequest> + Send + 'static,
+    ) -> Result<
+        connectrpc_axum_client::ConnectResponse<
+            connectrpc_axum_client::StreamBody<
+                impl futures::Stream<Item = Result<HelloResponse, connectrpc_axum_core::ConnectError>>
+            >
+        >,
+        connectrpc_axum_core::ConnectError,
+    > {
+        self.client
+            .call_bidi_stream("hello.v1.HelloWorldService/SayHelloBidi", request)
+            .await
+    }
+}
+```
+
+#### Generated Client Builder
+
+```rust
+/// Builder for HelloWorldServiceClient with custom configuration
+pub struct HelloWorldServiceClientBuilder {
+    builder: connectrpc_axum_client::ClientBuilder,
+}
+
+impl HelloWorldServiceClientBuilder {
+    pub fn new(base_url: impl Into<String>) -> Self {
+        Self {
+            builder: connectrpc_axum_client::ConnectClient::builder(base_url),
+        }
+    }
+
+    /// Use an existing reqwest::Client
+    pub fn client(mut self, client: reqwest::Client) -> Self {
+        self.builder = self.builder.client(client);
+        self
+    }
+
+    /// Add middleware
+    pub fn with_middleware<M: reqwest_middleware::Middleware + 'static>(mut self, middleware: M) -> Self {
+        self.builder = self.builder.with_middleware(middleware);
+        self
+    }
+
+    /// Use JSON encoding instead of protobuf
+    pub fn use_json(mut self) -> Self {
+        self.builder = self.builder.use_json();
+        self
+    }
+
+    /// Configure compression
+    pub fn compression(mut self, config: connectrpc_axum_core::CompressionConfig) -> Self {
+        self.builder = self.builder.compression(config);
+        self
+    }
+
+    /// Build the client
+    pub fn build(self) -> HelloWorldServiceClient {
+        HelloWorldServiceClient {
+            client: self.builder.build(),
+        }
+    }
+}
+```
+
+#### Usage Example
+
+```rust
+use hello::v1::{HelloWorldServiceClient, HelloRequest};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Simple usage
+    let client = HelloWorldServiceClient::new("http://localhost:3000");
+    let response = client.say_hello(HelloRequest { name: "World".into() }).await?;
+    println!("Response: {:?}", response.into_inner());
+
+    // With custom configuration
+    let client = HelloWorldServiceClient::builder("http://localhost:3000")
+        .use_json()
+        .with_middleware(reqwest_tracing::TracingMiddleware::default())
+        .build();
+
+    // Server streaming
+    let stream_response = client.say_hello_stream(HelloRequest { name: "World".into() }).await?;
+    let mut stream = stream_response.into_inner().into_inner();
+    while let Some(msg) = stream.next().await {
+        println!("Streamed: {:?}", msg?);
+    }
+
+    Ok(())
+}
+```
+
+#### Implementation Tasks
+
+- [ ] Add `client` feature to `connectrpc-axum-build/Cargo.toml` with `connectrpc-axum-client` dependency
+- [ ] Add `ClientEnabled`/`ClientDisabled` type markers
+- [ ] Add `with_client()` method to `CompileBuilder` (gated by `#[cfg(feature = "client")]`)
+- [ ] Create `ConnectClientServiceGenerator` implementing `ServiceGenerator`
+- [ ] Generate client struct with `new()`, `from_client()`, `builder()` methods
+- [ ] Generate typed RPC methods for each service method:
+  - Unary: `async fn method(&self, request: Req) -> Result<ConnectResponse<Res>, ConnectError>`
+  - Server stream: Returns `StreamBody<impl Stream<...>>`
+  - Client stream: Takes `impl Stream<Item = Req>`
+  - Bidi: Takes stream, returns stream
+- [ ] Generate client builder struct with configuration methods
+- [ ] Add integration tests with real server/client roundtrip
 
 ## Dependencies
 
@@ -464,12 +770,13 @@ where
 ```toml
 [dependencies]
 bytes = { workspace = true }
+http = { workspace = true }
 prost = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = "1.0"
 flate2 = { workspace = true }
-tower-http = { workspace = true }  # CompressionLevel re-export
+# Note: No tower-http dependency - define our own CompressionLevel to keep core lightweight
 
 brotli = { workspace = true, optional = true }
 zstd = { workspace = true, optional = true }
@@ -480,6 +787,80 @@ compression-deflate = []
 compression-br = ["dep:brotli"]
 compression-zstd = ["dep:zstd"]
 compression-full = ["compression-deflate", "compression-br", "compression-zstd"]
+```
+
+#### Error Model (in connectrpc-axum-core)
+
+```rust
+use thiserror::Error;
+
+/// Connect protocol status code
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Code {
+    Canceled = 1,
+    Unknown = 2,
+    InvalidArgument = 3,
+    DeadlineExceeded = 4,
+    NotFound = 5,
+    AlreadyExists = 6,
+    PermissionDenied = 7,
+    ResourceExhausted = 8,
+    FailedPrecondition = 9,
+    Aborted = 10,
+    OutOfRange = 11,
+    Unimplemented = 12,
+    Internal = 13,
+    Unavailable = 14,
+    DataLoss = 15,
+    Unauthenticated = 16,
+}
+
+/// Structured error type for Connect protocol errors
+#[derive(Debug, Error)]
+pub enum ConnectError {
+    /// Protocol-level error returned by server (has Code + message + details)
+    #[error("connect error {code:?}: {message}")]
+    Status {
+        code: Code,
+        message: String,
+        details: Vec<ErrorDetail>,
+    },
+
+    /// HTTP transport error (connection failed, timeout, etc.)
+    #[error("transport error: {0}")]
+    Transport(#[from] reqwest::Error),
+
+    /// Failed to encode request message
+    #[error("encode error: {0}")]
+    Encode(#[source] Box<dyn std::error::Error + Send + Sync>),
+
+    /// Failed to decode response message
+    #[error("decode error: {0}")]
+    Decode(#[source] Box<dyn std::error::Error + Send + Sync>),
+
+    /// Protocol violation (invalid frame, unexpected EOF, etc.)
+    #[error("protocol error: {0}")]
+    Protocol(String),
+}
+
+impl ConnectError {
+    /// Create a Status error with the given code and message
+    pub fn new(code: Code, message: impl Into<String>) -> Self {
+        Self::Status {
+            code,
+            message: message.into(),
+            details: vec![],
+        }
+    }
+
+    /// Get the error code if this is a Status error
+    pub fn code(&self) -> Option<Code> {
+        match self {
+            Self::Status { code, .. } => Some(*code),
+            _ => None,
+        }
+    }
+}
 ```
 
 ### connectrpc-axum-client
@@ -513,3 +894,18 @@ compression-full = ["connectrpc-axum-core/compression-full"]
 - [connect-go source](https://github.com/connectrpc/connect-go) - Official Go implementation
 - [Connect Protocol Spec](https://connectrpc.com/docs/protocol)
 - [reqwest-middleware](https://github.com/TrueLayer/reqwest-middleware)
+
+## Review Findings (Addressed)
+
+Based on reviews from Gemini and Codex, the following improvements were incorporated:
+
+| Finding | Resolution |
+|---------|------------|
+| **Error propagation in streams** | FrameDecoder now yields errors as `Some(Err(e))` in the stream, not via side-channel methods. Only successful trailers are stored for post-stream access. |
+| **Frame flags as bitmask** | Flags are now documented as bitmask values (0x01=compressed, 0x02=end-stream) supporting combinations like 0x03 for compressed end-stream. |
+| **Cancellation/drop handling** | FrameEncoder includes `end_stream_sent` tracking, Drop impl with warning, and explicit `finish()` method for clean shutdown. |
+| **Heavy tower-http dependency** | Removed `tower-http` from core crate dependencies. Core defines its own `CompressionLevel` enum instead of re-exporting. |
+| **Structured error model** | Added `ConnectError` enum with clear variants: `Status`, `Transport`, `Encode`, `Decode`, `Protocol` using `thiserror`. |
+| **Trailers/metadata access** | Added `Metadata` struct and `trailers()` method on `StreamBody<FrameDecoder<S, T>>`. `ConnectResponse<T>` includes `metadata()` accessor. |
+| **Response ergonomics** | `ConnectResponse<T>` implements `Deref<Target=T>` for convenient access. |
+| **Type-state breaking change** | `ClientDisabled` is the default, ensuring existing build scripts continue to work. |

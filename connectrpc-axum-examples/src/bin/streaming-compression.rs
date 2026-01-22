@@ -94,6 +94,6 @@ async fn main() -> anyhow::Result<()> {
     println!("Test with:");
     println!("  go test -v -run TestStreamingCompression");
 
-    axum::serve(listener, tower::make::Shared::new(app)).await?;
+    axum::serve(listener, app).await?;
     Ok(())
 }

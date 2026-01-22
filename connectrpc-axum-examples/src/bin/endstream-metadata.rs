@@ -109,6 +109,6 @@ async fn main() -> anyhow::Result<()> {
     println!();
     println!("Run tests: cd go-client && go test -v -run TestEndStreamMetadata");
 
-    axum::serve(listener, tower::make::Shared::new(app)).await?;
+    axum::serve(listener, app).await?;
     Ok(())
 }

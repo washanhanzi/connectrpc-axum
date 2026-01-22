@@ -108,6 +108,36 @@ name = "unary-compression-algos"
 path = "src/bin/unary-compression-algos.rs"
 required-features = ["compression-full"]
 
+# Client test - tests the ConnectRPC client against the Rust server
+[[bin]]
+name = "unary-client"
+path = "src/bin/client/unary-client.rs"
+
+# Typed client example - demonstrates generated typed client usage
+[[bin]]
+name = "typed-client"
+path = "src/bin/client/typed-client.rs"
+
+# Server stream client test - tests server streaming against the Rust server
+[[bin]]
+name = "server-stream-client"
+path = "src/bin/client/server-stream-client.rs"
+
+# Client stream client test - tests client streaming against the Rust server
+[[bin]]
+name = "client-stream-client"
+path = "src/bin/client/client-stream-client.rs"
+
+# Bidi stream client test - tests bidirectional streaming against the Rust server
+[[bin]]
+name = "bidi-stream-client"
+path = "src/bin/client/bidi-stream-client.rs"
+
+# Connect protocol bidi streaming server
+[[bin]]
+name = "connect-bidi-stream"
+path = "src/bin/connect-bidi-stream.rs"
+
 [dependencies]
 # Application dependency for error handling
 anyhow = "1"
@@ -117,6 +147,8 @@ async-stream = "0.3.5"
 axum = "0.8.0"
 # Required: Core ConnectRPC runtime
 connectrpc-axum = { path = "../connectrpc-axum" }
+# ConnectRPC client for testing
+connectrpc-axum-client = { path = "../connectrpc-axum-client" }
 # Required: Used by generated code for async streams
 futures = "0.3.31"
 # Application dependency for HTTP server

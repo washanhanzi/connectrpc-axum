@@ -36,9 +36,10 @@ impl BuildMarker for Disabled {
 /// - `Connect`: Whether to generate Connect service handlers
 /// - `Tonic`: Whether to generate Tonic gRPC server stubs (requires `tonic` feature)
 /// - `TonicClient`: Whether to generate Tonic gRPC client stubs (requires `tonic-client` feature)
+/// - `ConnectClient`: Whether to generate typed Connect RPC client code
 ///
-/// Default state is `CompileBuilder<Enabled, Disabled, Disabled>` (Connect handlers only).
-pub struct CompileBuilder<Connect = Enabled, Tonic = Disabled, TonicClient = Disabled> {
+/// Default state is `CompileBuilder<Enabled, Disabled, Disabled, Disabled>` (Connect handlers only).
+pub struct CompileBuilder<Connect = Enabled, Tonic = Disabled, TonicClient = Disabled, ConnectClient = Disabled> {
     includes_dir: PathBuf,
     prost_config: Option<Box<dyn FnOnce(&mut prost_build::Config)>>,
     #[cfg(feature = "tonic")]
@@ -46,14 +47,14 @@ pub struct CompileBuilder<Connect = Enabled, Tonic = Disabled, TonicClient = Dis
     #[cfg(feature = "tonic-client")]
     tonic_client_config:
         Option<Box<dyn FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder>>,
-    _marker: PhantomData<(Connect, Tonic, TonicClient)>,
+    _marker: PhantomData<(Connect, Tonic, TonicClient, ConnectClient)>,
 }
 
 // ============================================================================
 // Methods available when Connect = Enabled
 // ============================================================================
 
-impl<T, TC> CompileBuilder<Enabled, T, TC> {
+impl<T, TC, CC> CompileBuilder<Enabled, T, TC, CC> {
     /// Skip generating Connect service handlers.
     ///
     /// When called, only message types and serde implementations are generated.
@@ -74,7 +75,7 @@ impl<T, TC> CompileBuilder<Enabled, T, TC> {
     ///     Ok(())
     /// }
     /// ```
-    pub fn no_handlers(self) -> CompileBuilder<Disabled, Disabled, TC> {
+    pub fn no_handlers(self) -> CompileBuilder<Disabled, Disabled, TC, Disabled> {
         CompileBuilder {
             includes_dir: self.includes_dir,
             prost_config: self.prost_config,
@@ -92,12 +93,12 @@ impl<T, TC> CompileBuilder<Enabled, T, TC> {
 // ============================================================================
 
 #[cfg(feature = "tonic")]
-impl<TC> CompileBuilder<Enabled, Disabled, TC> {
+impl<TC, CC> CompileBuilder<Enabled, Disabled, TC, CC> {
     /// Enable generating tonic gRPC server stubs (second pass) + tonic-compatible helpers in first pass.
     ///
     /// **Note:** After calling this, `no_handlers()` is no longer available since
     /// tonic server stubs depend on handler builders.
-    pub fn with_tonic(self) -> CompileBuilder<Enabled, Enabled, TC> {
+    pub fn with_tonic(self) -> CompileBuilder<Enabled, Enabled, TC, CC> {
         CompileBuilder {
             includes_dir: self.includes_dir,
             prost_config: self.prost_config,
@@ -114,7 +115,7 @@ impl<TC> CompileBuilder<Enabled, Disabled, TC> {
 // ============================================================================
 
 #[cfg(feature = "tonic")]
-impl<C, TC> CompileBuilder<C, Enabled, TC> {
+impl<C, TC, CC> CompileBuilder<C, Enabled, TC, CC> {
     /// Customize the tonic prost builder with a configuration closure.
     ///
     /// The closure is applied before the required internal configuration. Internal settings
@@ -158,7 +159,7 @@ impl<C, TC> CompileBuilder<C, Enabled, TC> {
 // Methods available on all builder states
 // ============================================================================
 
-impl<C, T, TC> CompileBuilder<C, T, TC> {
+impl<C, T, TC, CC> CompileBuilder<C, T, TC, CC> {
     /// Fetch and configure the protoc compiler.
     ///
     /// Downloads the specified version of protoc and sets the `PROTOC` environment
@@ -237,7 +238,7 @@ impl<C, T, TC> CompileBuilder<C, T, TC> {
 // ============================================================================
 
 #[cfg(feature = "tonic-client")]
-impl<C, T> CompileBuilder<C, T, Disabled> {
+impl<C, T, CC> CompileBuilder<C, T, Disabled, CC> {
     /// Enable generating tonic gRPC client stubs.
     ///
     /// Generates client code using `tonic-prost-build`. The client code is appended
@@ -255,7 +256,7 @@ impl<C, T> CompileBuilder<C, T, Disabled> {
     ///     Ok(())
     /// }
     /// ```
-    pub fn with_tonic_client(self) -> CompileBuilder<C, T, Enabled> {
+    pub fn with_tonic_client(self) -> CompileBuilder<C, T, Enabled, CC> {
         CompileBuilder {
             includes_dir: self.includes_dir,
             prost_config: self.prost_config,
@@ -272,7 +273,7 @@ impl<C, T> CompileBuilder<C, T, Disabled> {
 // ============================================================================
 
 #[cfg(feature = "tonic-client")]
-impl<C, T> CompileBuilder<C, T, Enabled> {
+impl<C, T, CC> CompileBuilder<C, T, Enabled, CC> {
     /// Customize the tonic prost builder for client generation.
     ///
     /// The closure is applied before internal configuration. Internal settings
@@ -302,16 +303,69 @@ impl<C, T> CompileBuilder<C, T, Enabled> {
 }
 
 // ============================================================================
+// Methods available when ConnectClient = Disabled (enable connect client)
+// ============================================================================
+
+impl<C, T, TC> CompileBuilder<C, T, TC, Disabled> {
+    /// Enable generating typed Connect RPC client code.
+    ///
+    /// Generates client structs with typed methods for each RPC procedure.
+    /// The generated client wraps [`ConnectClient`](connectrpc_axum_client::ConnectClient)
+    /// and provides a more ergonomic API.
+    ///
+    /// This can be used independently of server handlers. Use `no_handlers()` first
+    /// if you only want client code without server handlers.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     connectrpc_axum_build::compile_dir("proto")
+    ///         .with_connect_client()  // Generate typed Connect clients
+    ///         .compile()?;
+    ///     Ok(())
+    /// }
+    /// ```
+    ///
+    /// # Generated Code
+    ///
+    /// For a service like:
+    /// ```protobuf
+    /// service HelloWorldService {
+    ///   rpc SayHello(HelloRequest) returns (HelloResponse);
+    /// }
+    /// ```
+    ///
+    /// This generates:
+    /// - `HELLO_WORLD_SERVICE_SERVICE_NAME` constant
+    /// - `hello_world_service_procedures` module with procedure path constants
+    /// - `HelloWorldServiceClient` struct with typed `say_hello()` method
+    /// - `HelloWorldServiceClientBuilder` for configuration
+    pub fn with_connect_client(self) -> CompileBuilder<C, T, TC, Enabled> {
+        CompileBuilder {
+            includes_dir: self.includes_dir,
+            prost_config: self.prost_config,
+            #[cfg(feature = "tonic")]
+            tonic_config: self.tonic_config,
+            #[cfg(feature = "tonic-client")]
+            tonic_client_config: self.tonic_client_config,
+            _marker: PhantomData,
+        }
+    }
+}
+
+// ============================================================================
 // Compile method - available on all states with BoolMarker bounds
 // ============================================================================
 
-impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker> CompileBuilder<C, T, TC> {
+impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBuilder<C, T, TC, CC> {
     /// Execute code generation.
     pub fn compile(self) -> Result<()> {
         let generate_handlers = C::VALUE;
         let grpc = T::VALUE;
         #[cfg(feature = "tonic-client")]
         let grpc_client = TC::VALUE;
+        let connect_client = CC::VALUE;
         let out_dir = std::env::var("OUT_DIR")
             .map_err(|e| std::io::Error::other(format!("OUT_DIR not set: {e}")))?;
         let descriptor_path = format!("{}/descriptor.bin", out_dir);
@@ -340,8 +394,9 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker> CompileBuilder<C, T, TC> {
         }
 
         // Generate connect (and tonic-compatible wrapper builders if requested) in first pass
-        if generate_handlers {
-            let service_generator = AxumConnectServiceGenerator::with_tonic(grpc);
+        if generate_handlers || connect_client {
+            let service_generator = AxumConnectServiceGenerator::with_tonic(grpc)
+                .with_connect_client(connect_client);
             config.service_generator(Box::new(service_generator));
         }
         config.compile_protos(&proto_files, &[&self.includes_dir])?;
@@ -710,6 +765,16 @@ fn recurse_enum(
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     connectrpc_axum_build::compile_dir("proto")
 ///         .with_tonic()  // Enable Tonic gRPC code generation
+///         .compile()?;
+///     Ok(())
+/// }
+/// ```
+///
+/// With typed Connect client generation:
+/// ```rust,ignore
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     connectrpc_axum_build::compile_dir("proto")
+///         .with_connect_client()  // Enable typed Connect client code generation
 ///         .compile()?;
 ///     Ok(())
 /// }

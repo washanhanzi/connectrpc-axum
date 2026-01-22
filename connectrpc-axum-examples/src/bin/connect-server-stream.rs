@@ -83,6 +83,6 @@ async fn main() -> anyhow::Result<()> {
     println!("    -H 'Content-Type: application/connect+json' \\");
     println!("    -d '{{\"name\": \"Alice\", \"hobbies\": [\"coding\", \"reading\"]}}'");
 
-    axum::serve(listener, tower::make::Shared::new(app)).await?;
+    axum::serve(listener, app).await?;
     Ok(())
 }

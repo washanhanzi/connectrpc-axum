@@ -1,0 +1,28 @@
+[package]
+name = "connectrpc-axum-core"
+version = "0.1.0-alpha.1"
+edition = "2024"
+description = "Core protocol types for connectrpc-axum (shared between client and server)"
+repository = "https://github.com/washanhanzi/connectrpc-axum"
+license = "MIT"
+
+[dependencies]
+base64 = { workspace = true }
+bytes = { workspace = true }
+http = { workspace = true }
+prost = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+flate2 = { workspace = true, optional = true }
+brotli = { workspace = true, optional = true }
+zstd = { workspace = true, optional = true }
+
+[features]
+default = []
+compression-gzip = ["dep:flate2"]
+compression-deflate = ["dep:flate2"]
+compression-br = ["dep:brotli"]
+compression-zstd = ["dep:zstd"]
+compression-full = ["compression-gzip", "compression-deflate", "compression-br", "compression-zstd"]

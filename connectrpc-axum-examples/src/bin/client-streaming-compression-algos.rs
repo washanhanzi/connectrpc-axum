@@ -56,6 +56,6 @@ async fn main() -> anyhow::Result<()> {
     println!("  go test -v -run TestClientStreamingDecompression_Brotli");
     println!("  go test -v -run TestClientStreamingDecompression_Zstd");
 
-    axum::serve(listener, tower::make::Shared::new(app)).await?;
+    axum::serve(listener, app).await?;
     Ok(())
 }

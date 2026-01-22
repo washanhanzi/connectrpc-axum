@@ -3,15 +3,18 @@ resolver = "2"
 members = [
   "connectrpc-axum",
   "connectrpc-axum-build",
+  "connectrpc-axum-client",
+  "connectrpc-axum-core",
   "connectrpc-axum-examples",
 ]
 
 [workspace.package]
-version = "0.0.29"
+version = "0.1.0-alpha.1"
 edition = "2024"
 repository = "https://github.com/washanhanzi/connectrpc-axum"
 
 [workspace.dependencies]
+connectrpc-axum-core = { version = "0.1.0-alpha.1", path = "./connectrpc-axum-core" }
 anyhow = "1.0"
 async-stream = "0.3"
 axum = "0.8"
@@ -47,3 +50,4 @@ tracing = "0.1"
 flate2 = "1.0"
 brotli = "8"
 zstd = "0.13"
+thiserror = "2.0"

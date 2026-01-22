@@ -60,8 +60,8 @@ pub use context::{
     ContextError,
     // Envelope compression for streaming
     EnvelopeCompression,
-    // Built-in codecs
-    GzipCodec,
+    // Identity codec (always available)
+    IdentityCodec,
     // Idempotency
     IdempotencyLevel,
     // Limits
@@ -80,10 +80,12 @@ pub use context::{
     resolve_codec,
 };
 // Feature-gated codec exports
-#[cfg(feature = "compression-br")]
-pub use context::BrotliCodec;
+#[cfg(feature = "compression-gzip")]
+pub use context::GzipCodec;
 #[cfg(feature = "compression-deflate")]
 pub use context::DeflateCodec;
+#[cfg(feature = "compression-br")]
+pub use context::BrotliCodec;
 #[cfg(feature = "compression-zstd")]
 pub use context::ZstdCodec;
 // Re-export from pipeline module
@@ -121,8 +123,8 @@ pub mod prelude {
         ContextError,
         // Compression types
         EnvelopeCompression,
-        // Built-in codecs
-        GzipCodec,
+        // Identity codec (always available)
+        IdentityCodec,
         // Idempotency
         IdempotencyLevel,
         // Limits
@@ -140,10 +142,12 @@ pub mod prelude {
         resolve_codec,
     };
     // Feature-gated codec exports for prelude
-    #[cfg(feature = "compression-br")]
-    pub use crate::context::BrotliCodec;
+    #[cfg(feature = "compression-gzip")]
+    pub use crate::context::GzipCodec;
     #[cfg(feature = "compression-deflate")]
     pub use crate::context::DeflateCodec;
+    #[cfg(feature = "compression-br")]
+    pub use crate::context::BrotliCodec;
     #[cfg(feature = "compression-zstd")]
     pub use crate::context::ZstdCodec;
 

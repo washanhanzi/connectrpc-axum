@@ -30,8 +30,8 @@ pub use envelope_compression::{
     CompressionEncoding,
     CompressionLevel,
     EnvelopeCompression,
-    // Built-in codecs
-    GzipCodec,
+    // Identity codec (always available)
+    IdentityCodec,
     // Functions
     compress_bytes,
     decompress_bytes,
@@ -41,12 +41,23 @@ pub use envelope_compression::{
 };
 
 // Feature-gated codec exports
-#[cfg(feature = "compression-br")]
-pub use envelope_compression::BrotliCodec;
+#[cfg(feature = "compression-gzip")]
+pub use envelope_compression::GzipCodec;
 #[cfg(feature = "compression-deflate")]
 pub use envelope_compression::DeflateCodec;
+#[cfg(feature = "compression-br")]
+pub use envelope_compression::BrotliCodec;
 #[cfg(feature = "compression-zstd")]
 pub use envelope_compression::ZstdCodec;
+
+// Conversion helper (only needed when compression features are enabled)
+#[cfg(any(
+    feature = "compression-gzip",
+    feature = "compression-deflate",
+    feature = "compression-br",
+    feature = "compression-zstd"
+))]
+pub use envelope_compression::to_tower_compression_level;
 
 // Re-export config types (crate-internal)
 pub(crate) use config::ServerConfig;

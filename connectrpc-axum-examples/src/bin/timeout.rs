@@ -65,6 +65,6 @@ async fn main() -> anyhow::Result<()> {
     println!("    -H 'Connect-Timeout-Ms: 100' \\");
     println!("    -d '{{\"name\": \"Alice\"}}'");
 
-    axum::serve(listener, tower::make::Shared::new(app)).await?;
+    axum::serve(listener, app).await?;
     Ok(())
 }
