@@ -31,10 +31,19 @@ export default defineConfig({
 
   themeConfig: {
     nav: [
-      { text: 'Guide', link: '/guide/' }
+      { text: 'Guide', link: '/guide/' },
+      { text: 'Blog', link: '/blog/origin' }
     ],
 
     sidebar: {
+      '/blog/': [
+        {
+          text: 'Blog',
+          items: [
+            { text: 'Origin', link: '/blog/origin' }
+          ]
+        }
+      ],
       '/guide/': [
         {
           text: 'Guide',
