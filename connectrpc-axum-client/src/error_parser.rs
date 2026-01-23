@@ -42,7 +42,7 @@ pub async fn parse_error_response(response: Response) -> ClientError {
     match serde_json::from_slice::<ErrorResponseJson>(&body_bytes) {
         Ok(error_json) => {
             // Parse error code
-            let code = Code::from_str(&error_json.code).unwrap_or_else(|| {
+            let code = error_json.code.parse().unwrap_or_else(|_| {
                 // Fall back to deriving code from HTTP status
                 http_status_to_code(status)
             });

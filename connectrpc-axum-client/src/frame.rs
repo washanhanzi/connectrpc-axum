@@ -313,7 +313,7 @@ fn parse_end_stream(payload: &[u8]) -> Result<(Option<ClientError>, Option<Metad
 
     // Parse error if present
     let error = end_stream.error.map(|e| {
-        let code = Code::from_str(&e.code).unwrap_or(Code::Unknown);
+        let code = e.code.parse().unwrap_or(Code::Unknown);
         let mut err = if let Some(msg) = e.message {
             ClientError::new(code, msg)
         } else {

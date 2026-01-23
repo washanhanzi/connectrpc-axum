@@ -1,11 +1,11 @@
-//! Stream body wrapper for Connect streaming responses.
+//! Streaming response wrapper for Connect streaming responses.
 //!
-//! This module provides [`StreamBody`], a wrapper around streaming response
+//! This module provides [`Streaming`], a wrapper around streaming response
 //! bodies that provides access to trailers after the stream is consumed.
 //!
 //! # Cancellation
 //!
-//! Dropping a [`StreamBody`] cancels the streaming RPC. The underlying HTTP
+//! Dropping a [`Streaming`] cancels the streaming RPC. The underlying HTTP
 //! connection is closed, which signals cancellation to the server via TCP RST
 //! or HTTP/2 RST_STREAM frame.
 //!
@@ -23,14 +23,14 @@ use futures::Stream;
 use crate::frame::FrameDecoder;
 use crate::response::Metadata;
 
-/// Wrapper for streaming response bodies.
+/// Wrapper for streaming response messages.
 ///
-/// Wraps a [`FrameDecoder`] and provides access to trailers after the stream
-/// is fully consumed.
+/// `Streaming<S>` wraps a [`FrameDecoder`] and provides access to trailers after
+/// the stream is fully consumed. This type is analogous to `tonic::Streaming<T>`.
 ///
 /// # Cancellation
 ///
-/// Dropping a `StreamBody` cancels the streaming RPC. The underlying HTTP
+/// Dropping a `Streaming` cancels the streaming RPC. The underlying HTTP
 /// connection is closed, signaling cancellation to the server. This is the
 /// recommended way to cancel a stream when you no longer need more messages.
 ///
@@ -64,13 +64,13 @@ use crate::response::Metadata;
 ///     println!("Trailers: {:?}", trailers);
 /// }
 /// ```
-pub struct StreamBody<S> {
+pub struct Streaming<S> {
     /// The underlying frame decoder.
     inner: S,
 }
 
-impl<S> StreamBody<S> {
-    /// Create a new StreamBody wrapping the given stream.
+impl<S> Streaming<S> {
+    /// Create a new Streaming wrapping the given stream.
     pub fn new(inner: S) -> Self {
         Self { inner }
     }
@@ -91,7 +91,7 @@ impl<S> StreamBody<S> {
     }
 }
 
-impl<S, T> StreamBody<FrameDecoder<S, T>> {
+impl<S, T> Streaming<FrameDecoder<S, T>> {
     /// Get the trailers received in the EndStream frame.
     ///
     /// Returns `None` if the stream hasn't finished or if no trailers were sent.
@@ -110,11 +110,10 @@ impl<S, T> StreamBody<FrameDecoder<S, T>> {
     pub fn is_finished(&self) -> bool {
         self.inner.is_finished()
     }
-
 }
 
 /// Graceful shutdown methods for streaming responses.
-impl<S, T> StreamBody<S>
+impl<S, T> Streaming<S>
 where
     S: Stream<Item = Result<T, ClientError>> + Unpin,
 {
@@ -122,7 +121,7 @@ where
     ///
     /// This method consumes all remaining messages without processing them,
     /// allowing for graceful connection cleanup and reuse. After draining,
-    /// trailers will be available via [`trailers()`](StreamBody::trailers)
+    /// trailers will be available via [`trailers()`](Streaming::trailers)
     /// if the inner stream is a `FrameDecoder`.
     ///
     /// Returns the number of messages that were drained (not including errors).
@@ -217,7 +216,7 @@ where
     }
 }
 
-impl<S, T> Stream for StreamBody<S>
+impl<S, T> Stream for Streaming<S>
 where
     S: Stream<Item = Result<T, ClientError>> + Unpin,
 {
@@ -237,8 +236,8 @@ mod tests {
     use super::*;
     use bytes::Bytes;
     use connectrpc_axum_core::CompressionEncoding;
-    use futures::StreamExt;
     use futures::stream;
+    use futures::StreamExt;
 
     // Helper to create a frame
     fn make_frame(flags: u8, payload: &[u8]) -> Bytes {
@@ -326,7 +325,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_stream_body_wraps_decoder() {
+    async fn test_streaming_wraps_decoder() {
         let frame = make_frame(0x00, br#"{"value":"hello"}"#);
         let end_frame = make_frame(0x02, b"{}");
 
@@ -339,17 +338,17 @@ mod tests {
             false,
             CompressionEncoding::Identity,
         );
-        let mut stream_body = StreamBody::new(decoder);
+        let mut streaming = Streaming::new(decoder);
 
-        let msg = stream_body.next().await.unwrap().unwrap();
+        let msg = streaming.next().await.unwrap().unwrap();
         assert_eq!(msg.value, "hello");
 
-        assert!(stream_body.next().await.is_none());
-        assert!(stream_body.is_finished());
+        assert!(streaming.next().await.is_none());
+        assert!(streaming.is_finished());
     }
 
     #[tokio::test]
-    async fn test_stream_body_trailers() {
+    async fn test_streaming_trailers() {
         let frame = make_frame(0x00, br#"{"value":"test"}"#);
         let end_payload = br#"{"metadata":{"x-custom":["value"]}}"#;
         let end_frame = make_frame(0x02, end_payload);
@@ -363,18 +362,18 @@ mod tests {
             false,
             CompressionEncoding::Identity,
         );
-        let mut stream_body = StreamBody::new(decoder);
+        let mut streaming = Streaming::new(decoder);
 
         // Consume stream
-        while stream_body.next().await.is_some() {}
+        while streaming.next().await.is_some() {}
 
         // Check trailers
-        let trailers = stream_body.trailers().unwrap();
+        let trailers = streaming.trailers().unwrap();
         assert_eq!(trailers.get("x-custom"), Some("value"));
     }
 
     #[tokio::test]
-    async fn test_stream_body_drain() {
+    async fn test_streaming_drain() {
         // Create multiple message frames and end frame
         let frame1 = make_frame(0x00, br#"{"value":"msg1"}"#);
         let frame2 = make_frame(0x00, br#"{"value":"msg2"}"#);
@@ -393,22 +392,22 @@ mod tests {
             false,
             CompressionEncoding::Identity,
         );
-        let mut stream_body = StreamBody::new(decoder);
+        let mut streaming = Streaming::new(decoder);
 
         // Read first message
-        let msg = stream_body.next().await.unwrap().unwrap();
+        let msg = streaming.next().await.unwrap().unwrap();
         assert_eq!(msg.value, "msg1");
 
         // Drain remaining messages (should drain msg2 and msg3)
-        let drained = stream_body.drain().await;
+        let drained = streaming.drain().await;
         assert_eq!(drained, 2);
 
         // Stream should be finished
-        assert!(stream_body.is_finished());
+        assert!(streaming.is_finished());
     }
 
     #[tokio::test]
-    async fn test_stream_body_drain_timeout() {
+    async fn test_streaming_drain_timeout() {
         // Create a frame and end frame
         let frame1 = make_frame(0x00, br#"{"value":"msg1"}"#);
         let end_frame = make_frame(0x02, b"{}");
@@ -423,15 +422,15 @@ mod tests {
             false,
             CompressionEncoding::Identity,
         );
-        let mut stream_body = StreamBody::new(decoder);
+        let mut streaming = Streaming::new(decoder);
 
         // Drain with timeout (should complete quickly since stream is finite)
-        let result = stream_body
+        let result = streaming
             .drain_timeout(std::time::Duration::from_secs(5))
             .await;
         assert_eq!(result, Ok(1)); // One message drained
 
         // Stream should be finished
-        assert!(stream_body.is_finished());
+        assert!(streaming.is_finished());
     }
 }

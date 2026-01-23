@@ -149,7 +149,7 @@ pub mod prelude {
     #[cfg(feature = "compression-zstd-stream")]
     pub use crate::context::ZstdCodec;
 
-    pub use crate::message::error::{Code, ConnectError, ErrorDetail};
+    pub use crate::message::error::{Code, ConnectError, ErrorDetail, Status};
     pub use crate::handler::{ConnectHandler, ConnectHandlerWrapper, get_connect, post_connect};
     pub use crate::layer::{BridgeLayer, BridgeService, ConnectLayer, ConnectService};
     pub use crate::message::{ConnectRequest, ConnectResponse, RequestPipeline, ResponsePipeline, StreamBody, Streaming};

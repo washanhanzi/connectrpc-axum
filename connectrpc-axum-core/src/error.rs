@@ -5,6 +5,8 @@
 //! - [`ErrorDetail`]: Self-describing error details
 //! - [`EnvelopeError`]: Envelope framing errors
 
+use std::str::FromStr;
+
 use serde::{Serialize, Serializer};
 
 /// Connect RPC error codes, matching the codes defined in the Connect protocol.
@@ -83,28 +85,43 @@ impl Code {
             Code::Unavailable | Code::ResourceExhausted | Code::Aborted
         )
     }
+}
 
-    /// Parse a code from its string representation.
-    pub fn from_str(s: &str) -> Option<Self> {
+/// Error returned when parsing a [`Code`] from a string fails.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParseCodeError(());
+
+impl std::fmt::Display for ParseCodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unknown error code")
+    }
+}
+
+impl std::error::Error for ParseCodeError {}
+
+impl FromStr for Code {
+    type Err = ParseCodeError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "ok" => Some(Code::Ok),
-            "canceled" | "cancelled" => Some(Code::Canceled),
-            "unknown" => Some(Code::Unknown),
-            "invalid_argument" => Some(Code::InvalidArgument),
-            "deadline_exceeded" => Some(Code::DeadlineExceeded),
-            "not_found" => Some(Code::NotFound),
-            "already_exists" => Some(Code::AlreadyExists),
-            "permission_denied" => Some(Code::PermissionDenied),
-            "resource_exhausted" => Some(Code::ResourceExhausted),
-            "failed_precondition" => Some(Code::FailedPrecondition),
-            "aborted" => Some(Code::Aborted),
-            "out_of_range" => Some(Code::OutOfRange),
-            "unimplemented" => Some(Code::Unimplemented),
-            "internal" => Some(Code::Internal),
-            "unavailable" => Some(Code::Unavailable),
-            "data_loss" => Some(Code::DataLoss),
-            "unauthenticated" => Some(Code::Unauthenticated),
-            _ => None,
+            "ok" => Ok(Code::Ok),
+            "canceled" | "cancelled" => Ok(Code::Canceled),
+            "unknown" => Ok(Code::Unknown),
+            "invalid_argument" => Ok(Code::InvalidArgument),
+            "deadline_exceeded" => Ok(Code::DeadlineExceeded),
+            "not_found" => Ok(Code::NotFound),
+            "already_exists" => Ok(Code::AlreadyExists),
+            "permission_denied" => Ok(Code::PermissionDenied),
+            "resource_exhausted" => Ok(Code::ResourceExhausted),
+            "failed_precondition" => Ok(Code::FailedPrecondition),
+            "aborted" => Ok(Code::Aborted),
+            "out_of_range" => Ok(Code::OutOfRange),
+            "unimplemented" => Ok(Code::Unimplemented),
+            "internal" => Ok(Code::Internal),
+            "unavailable" => Ok(Code::Unavailable),
+            "data_loss" => Ok(Code::DataLoss),
+            "unauthenticated" => Ok(Code::Unauthenticated),
+            _ => Err(ParseCodeError(())),
         }
     }
 }
@@ -207,6 +224,199 @@ pub struct ErrorResponseBody {
     pub details: Vec<ErrorDetail>,
 }
 
+// ============================================================================
+// Status - Core RPC error type shared between client and server
+// ============================================================================
+
+/// RPC status representing the result of an RPC call.
+///
+/// This is the core error data type shared between client and server.
+/// Contains the error code, optional message, and optional structured details.
+///
+/// # Example
+///
+/// ```
+/// use connectrpc_axum_core::Status;
+///
+/// // Create a status error
+/// let status = Status::not_found("user not found");
+/// assert_eq!(status.code().as_str(), "not_found");
+/// assert_eq!(status.message(), Some("user not found"));
+///
+/// // Add error details
+/// let status = status.add_detail("google.rpc.RetryInfo", vec![1, 2, 3]);
+/// assert_eq!(status.details().len(), 1);
+/// ```
+#[derive(Clone, Debug)]
+pub struct Status {
+    code: Code,
+    message: Option<String>,
+    details: Vec<ErrorDetail>,
+}
+
+impl Status {
+    /// Create a new status with a code and message.
+    pub fn new<S: Into<String>>(code: Code, message: S) -> Self {
+        Self {
+            code,
+            message: Some(message.into()),
+            details: vec![],
+        }
+    }
+
+    /// Create a new status with just a code.
+    pub fn from_code(code: Code) -> Self {
+        Self {
+            code,
+            message: None,
+            details: vec![],
+        }
+    }
+
+    /// Get the error code.
+    pub fn code(&self) -> Code {
+        self.code
+    }
+
+    /// Get the error message.
+    pub fn message(&self) -> Option<&str> {
+        self.message.as_deref()
+    }
+
+    /// Get the error details.
+    pub fn details(&self) -> &[ErrorDetail] {
+        &self.details
+    }
+
+    /// Add an error detail with type URL and protobuf-encoded bytes.
+    pub fn add_detail<S: Into<String>>(mut self, type_url: S, value: Vec<u8>) -> Self {
+        self.details.push(ErrorDetail::new(type_url, value));
+        self
+    }
+
+    /// Add a pre-constructed ErrorDetail.
+    pub fn add_error_detail(mut self, detail: ErrorDetail) -> Self {
+        self.details.push(detail);
+        self
+    }
+
+    /// Returns whether this error indicates a transient condition that may
+    /// be resolved by retrying.
+    ///
+    /// This is a convenience wrapper for [`Code::is_retryable()`].
+    pub fn is_retryable(&self) -> bool {
+        self.code.is_retryable()
+    }
+
+    // Convenience constructors for all error codes
+
+    /// Create a canceled status.
+    pub fn cancelled<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::Canceled, message)
+    }
+
+    /// Create an unknown status.
+    pub fn unknown<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::Unknown, message)
+    }
+
+    /// Create an invalid argument status.
+    pub fn invalid_argument<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::InvalidArgument, message)
+    }
+
+    /// Create a deadline exceeded status.
+    pub fn deadline_exceeded<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::DeadlineExceeded, message)
+    }
+
+    /// Create a not found status.
+    pub fn not_found<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::NotFound, message)
+    }
+
+    /// Create an already exists status.
+    pub fn already_exists<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::AlreadyExists, message)
+    }
+
+    /// Create a permission denied status.
+    pub fn permission_denied<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::PermissionDenied, message)
+    }
+
+    /// Create a resource exhausted status.
+    pub fn resource_exhausted<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::ResourceExhausted, message)
+    }
+
+    /// Create a failed precondition status.
+    pub fn failed_precondition<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::FailedPrecondition, message)
+    }
+
+    /// Create an aborted status.
+    pub fn aborted<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::Aborted, message)
+    }
+
+    /// Create an out of range status.
+    pub fn out_of_range<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::OutOfRange, message)
+    }
+
+    /// Create an unimplemented status.
+    pub fn unimplemented<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::Unimplemented, message)
+    }
+
+    /// Create an internal status.
+    pub fn internal<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::Internal, message)
+    }
+
+    /// Create an unavailable status.
+    pub fn unavailable<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::Unavailable, message)
+    }
+
+    /// Create a data loss status.
+    pub fn data_loss<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::DataLoss, message)
+    }
+
+    /// Create an unauthenticated status.
+    pub fn unauthenticated<S: Into<String>>(message: S) -> Self {
+        Self::new(Code::Unauthenticated, message)
+    }
+}
+
+impl std::fmt::Display for Status {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.code.as_str())?;
+        if let Some(msg) = &self.message {
+            write!(f, ": {}", msg)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for Status {}
+
+impl Serialize for Status {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        ErrorResponseBody {
+            code: self.code,
+            message: self.message.clone(),
+            details: self.details.clone(),
+        }
+        .serialize(serializer)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,11 +430,11 @@ mod tests {
 
     #[test]
     fn test_code_from_str() {
-        assert_eq!(Code::from_str("ok"), Some(Code::Ok));
-        assert_eq!(Code::from_str("invalid_argument"), Some(Code::InvalidArgument));
-        assert_eq!(Code::from_str("canceled"), Some(Code::Canceled));
-        assert_eq!(Code::from_str("cancelled"), Some(Code::Canceled)); // British spelling
-        assert_eq!(Code::from_str("unknown_code"), None);
+        assert_eq!("ok".parse(), Ok(Code::Ok));
+        assert_eq!("invalid_argument".parse(), Ok(Code::InvalidArgument));
+        assert_eq!("canceled".parse(), Ok(Code::Canceled));
+        assert_eq!("cancelled".parse(), Ok(Code::Canceled)); // British spelling
+        assert_eq!("unknown_code".parse::<Code>(), Err(ParseCodeError(())));
     }
 
     #[test]
@@ -289,5 +499,89 @@ mod tests {
 
         let err = EnvelopeError::Compression("gzip failed".into());
         assert_eq!(err.to_string(), "compression failed: gzip failed");
+    }
+
+    // ========================================================================
+    // Status tests
+    // ========================================================================
+
+    #[test]
+    fn test_status_new() {
+        let status = Status::new(Code::NotFound, "resource not found");
+        assert_eq!(status.code(), Code::NotFound);
+        assert_eq!(status.message(), Some("resource not found"));
+        assert!(status.details().is_empty());
+    }
+
+    #[test]
+    fn test_status_from_code() {
+        let status = Status::from_code(Code::Internal);
+        assert_eq!(status.code(), Code::Internal);
+        assert!(status.message().is_none());
+    }
+
+    #[test]
+    fn test_status_convenience_constructors() {
+        assert_eq!(Status::cancelled("msg").code(), Code::Canceled);
+        assert_eq!(Status::unknown("msg").code(), Code::Unknown);
+        assert_eq!(Status::invalid_argument("msg").code(), Code::InvalidArgument);
+        assert_eq!(Status::deadline_exceeded("msg").code(), Code::DeadlineExceeded);
+        assert_eq!(Status::not_found("msg").code(), Code::NotFound);
+        assert_eq!(Status::already_exists("msg").code(), Code::AlreadyExists);
+        assert_eq!(Status::permission_denied("msg").code(), Code::PermissionDenied);
+        assert_eq!(Status::resource_exhausted("msg").code(), Code::ResourceExhausted);
+        assert_eq!(Status::failed_precondition("msg").code(), Code::FailedPrecondition);
+        assert_eq!(Status::aborted("msg").code(), Code::Aborted);
+        assert_eq!(Status::out_of_range("msg").code(), Code::OutOfRange);
+        assert_eq!(Status::unimplemented("msg").code(), Code::Unimplemented);
+        assert_eq!(Status::internal("msg").code(), Code::Internal);
+        assert_eq!(Status::unavailable("msg").code(), Code::Unavailable);
+        assert_eq!(Status::data_loss("msg").code(), Code::DataLoss);
+        assert_eq!(Status::unauthenticated("msg").code(), Code::Unauthenticated);
+    }
+
+    #[test]
+    fn test_status_add_detail() {
+        let status = Status::new(Code::Internal, "error")
+            .add_detail("test.Type1", vec![1, 2, 3])
+            .add_detail("test.Type2", vec![4, 5, 6]);
+
+        assert_eq!(status.details().len(), 2);
+        assert_eq!(status.details()[0].type_url(), "test.Type1");
+        assert_eq!(status.details()[0].value(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn test_status_is_retryable() {
+        assert!(Status::unavailable("service down").is_retryable());
+        assert!(Status::resource_exhausted("rate limited").is_retryable());
+        assert!(Status::aborted("retry please").is_retryable());
+
+        assert!(!Status::not_found("missing").is_retryable());
+        assert!(!Status::invalid_argument("bad input").is_retryable());
+        assert!(!Status::internal("server error").is_retryable());
+    }
+
+    #[test]
+    fn test_status_display() {
+        let status = Status::not_found("resource missing");
+        assert_eq!(status.to_string(), "not_found: resource missing");
+
+        let status = Status::from_code(Code::Internal);
+        assert_eq!(status.to_string(), "internal");
+    }
+
+    #[test]
+    fn test_status_serialize() {
+        let status = Status::new(Code::NotFound, "not found")
+            .add_detail("google.rpc.RetryInfo", vec![1, 2, 3]);
+
+        let json = serde_json::to_string(&status).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed["code"], "not_found");
+        assert_eq!(parsed["message"], "not found");
+        assert!(parsed["details"].is_array());
+        assert_eq!(parsed["details"][0]["type"], "google.rpc.RetryInfo");
     }
 }

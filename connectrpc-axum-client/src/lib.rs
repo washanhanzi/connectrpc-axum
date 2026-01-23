@@ -12,7 +12,6 @@
 //! - Both protobuf and JSON encoding support
 //! - Request compression (gzip, brotli, zstd)
 //! - Response decompression
-//! - Middleware support via `reqwest-middleware`
 //!
 //! ## Example
 //!
@@ -100,7 +99,7 @@
 //!
 //! ### Dropping the Stream
 //!
-//! The simplest way to cancel a stream is to drop it. When a [`StreamBody`] is
+//! The simplest way to cancel a stream is to drop it. When a [`Streaming`] is
 //! dropped, the underlying HTTP connection is closed, which signals cancellation
 //! to the server via TCP RST or HTTP/2 RST_STREAM.
 //!
@@ -183,7 +182,7 @@
 //! ### Graceful Shutdown
 //!
 //! For graceful stream shutdown that allows connection reuse, use the
-//! [`drain()`](StreamBody::drain) or [`drain_timeout()`](StreamBody::drain_timeout)
+//! [`drain()`](Streaming::drain) or [`drain_timeout()`](Streaming::drain_timeout)
 //! methods instead of dropping the stream:
 //!
 //! ```ignore
@@ -250,110 +249,7 @@
 //! connectrpc-axum-client = { version = "0.1", features = ["compression-full", "tracing"] }
 //! ```
 //!
-//! ## Middleware
-//!
-//! The client supports middleware via [`reqwest-middleware`](https://docs.rs/reqwest-middleware).
-//! This enables cross-cutting concerns like authentication, logging, retries, and metrics.
-//!
-//! ### Authentication
-//!
-//! Add authentication headers to all requests:
-//!
-//! ```ignore
-//! use reqwest::{Request, Response};
-//! use reqwest_middleware::{Middleware, Next, Result};
-//! use http::Extensions;
-//!
-//! struct BearerAuthMiddleware {
-//!     token: String,
-//! }
-//!
-//! #[async_trait::async_trait]
-//! impl Middleware for BearerAuthMiddleware {
-//!     async fn handle(
-//!         &self,
-//!         mut req: Request,
-//!         extensions: &mut Extensions,
-//!         next: Next<'_>,
-//!     ) -> Result<Response> {
-//!         req.headers_mut().insert(
-//!             http::header::AUTHORIZATION,
-//!             format!("Bearer {}", self.token).parse().unwrap(),
-//!         );
-//!         next.run(req, extensions).await
-//!     }
-//! }
-//!
-//! let client = ConnectClient::builder("http://localhost:3000")
-//!     .with_middleware(BearerAuthMiddleware {
-//!         token: "my-secret-token".to_string(),
-//!     })
-//!     .build()?;
-//! ```
-//!
-//! ### Logging
-//!
-//! Log all RPC calls with request/response details:
-//!
-//! ```ignore
-//! use reqwest::{Request, Response};
-//! use reqwest_middleware::{Middleware, Next, Result};
-//! use http::Extensions;
-//!
-//! struct LoggingMiddleware;
-//!
-//! #[async_trait::async_trait]
-//! impl Middleware for LoggingMiddleware {
-//!     async fn handle(
-//!         &self,
-//!         req: Request,
-//!         extensions: &mut Extensions,
-//!         next: Next<'_>,
-//!     ) -> Result<Response> {
-//!         let method = req.url().path().to_string();
-//!         let start = std::time::Instant::now();
-//!
-//!         let response = next.run(req, extensions).await;
-//!
-//!         let duration = start.elapsed();
-//!         match &response {
-//!             Ok(resp) => {
-//!                 println!("{} -> {} ({:?})", method, resp.status(), duration);
-//!             }
-//!             Err(e) => {
-//!                 println!("{} -> ERROR: {} ({:?})", method, e, duration);
-//!             }
-//!         }
-//!
-//!         response
-//!     }
-//! }
-//!
-//! let client = ConnectClient::builder("http://localhost:3000")
-//!     .with_middleware(LoggingMiddleware)
-//!     .build()?;
-//! ```
-//!
-//! ### Retry with reqwest-retry
-//!
-//! Use the [`reqwest-retry`](https://docs.rs/reqwest-retry) crate for automatic retries:
-//!
-//! ```ignore
-//! use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
-//!
-//! let retry_policy = ExponentialBackoff::builder()
-//!     .retry_bounds(
-//!         std::time::Duration::from_millis(100),
-//!         std::time::Duration::from_secs(5),
-//!     )
-//!     .build_with_max_retries(3);
-//!
-//! let client = ConnectClient::builder("http://localhost:3000")
-//!     .with_middleware(RetryTransientMiddleware::new_with_policy(retry_policy))
-//!     .build()?;
-//! ```
-//!
-//! ### Error-Based Retry Logic
+//! ## Retry Logic
 //!
 //! Use [`Code::is_retryable()`] or [`ClientError::is_retryable()`] to determine
 //! if an error is transient and safe to retry:
@@ -393,52 +289,9 @@
 //!
 //! Transport errors (connection failures) are also considered retryable.
 //!
-//! ### Multiple Middleware
+//! ## Per-Call Options
 //!
-//! Middleware is applied in the order added. Outer middleware runs first on request,
-//! last on response (onion model):
-//!
-//! ```ignore
-//! let client = ConnectClient::builder("http://localhost:3000")
-//!     .with_middleware(LoggingMiddleware)        // Logs first
-//!     .with_middleware(RetryMiddleware::new())   // Retries happen inside logging
-//!     .with_middleware(AuthMiddleware::new())    // Auth added last, closest to wire
-//!     .build()?;
-//! ```
-//!
-//! ### Custom Headers
-//!
-//! Add custom headers (request ID, tracing context, etc.):
-//!
-//! ```ignore
-//! use reqwest::{Request, Response};
-//! use reqwest_middleware::{Middleware, Next, Result};
-//! use http::Extensions;
-//! use uuid::Uuid;
-//!
-//! struct RequestIdMiddleware;
-//!
-//! #[async_trait::async_trait]
-//! impl Middleware for RequestIdMiddleware {
-//!     async fn handle(
-//!         &self,
-//!         mut req: Request,
-//!         extensions: &mut Extensions,
-//!         next: Next<'_>,
-//!     ) -> Result<Response> {
-//!         let request_id = Uuid::new_v4().to_string();
-//!         req.headers_mut().insert(
-//!             "X-Request-Id",
-//!             request_id.parse().unwrap(),
-//!         );
-//!         next.run(req, extensions).await
-//!     }
-//! }
-//! ```
-//!
-//! ### Per-Call Options
-//!
-//! For per-call customization, use [`CallOptions`] instead of middleware:
+//! For per-call customization, use [`CallOptions`]:
 //!
 //! ```ignore
 //! use connectrpc_axum_client::CallOptions;
@@ -655,7 +508,7 @@ mod error_parser;
 mod frame;
 mod options;
 mod response;
-mod stream_body;
+mod streaming;
 
 pub use builder::{ClientBuildError, ClientBuilder};
 pub use client::ConnectClient;
@@ -663,10 +516,10 @@ pub use error::ClientError;
 pub use frame::{FrameDecoder, FrameEncoder};
 pub use options::CallOptions;
 pub use response::{ConnectResponse, Metadata};
-pub use stream_body::StreamBody;
+pub use streaming::Streaming;
 
 // Re-export core types that users need
-pub use connectrpc_axum_core::{Code, CompressionConfig, CompressionEncoding, CompressionLevel, ErrorDetail};
+pub use connectrpc_axum_core::{Code, CompressionConfig, CompressionEncoding, CompressionLevel, ErrorDetail, Status};
 
 // Re-export reqwest::Client for generated client builders
 pub use reqwest::Client as HttpClient;

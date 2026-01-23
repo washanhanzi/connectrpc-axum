@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use crate::context::RequestProtocol;
 
 // Re-export core types
-pub use connectrpc_axum_core::{Code, ErrorDetail};
+pub use connectrpc_axum_core::{Code, ErrorDetail, Status};
 
 // ============================================================================
 // ConnectError - Server-side error with HTTP response generation
@@ -23,11 +23,12 @@ pub use connectrpc_axum_core::{Code, ErrorDetail};
 
 /// An error that captures the key pieces of information for Connect RPC:
 /// a code, an optional message, metadata (HTTP headers), and optional error details.
+///
+/// This type wraps the core [`Status`] type and adds server-specific functionality
+/// like HTTP response generation and metadata headers.
 #[derive(Clone, Debug)]
 pub struct ConnectError {
-    code: Code,
-    message: Option<String>,
-    details: Vec<ErrorDetail>,
+    inner: Status,
     meta: Option<HeaderMap>,
 }
 
@@ -35,9 +36,7 @@ impl ConnectError {
     /// Create a new error with a code and message.
     pub fn new<S: Into<String>>(code: Code, message: S) -> Self {
         Self {
-            code,
-            message: Some(message.into()),
-            details: vec![],
+            inner: Status::new(code, message),
             meta: None,
         }
     }
@@ -45,9 +44,7 @@ impl ConnectError {
     /// Create a new error with just a code.
     pub fn from_code(code: Code) -> Self {
         Self {
-            code,
-            message: None,
-            details: vec![],
+            inner: Status::from_code(code),
             meta: None,
         }
     }
@@ -55,9 +52,7 @@ impl ConnectError {
     /// Create an unimplemented error.
     pub fn new_unimplemented() -> Self {
         Self {
-            code: Code::Unimplemented,
-            message: Some("The requested service has not been implemented.".to_string()),
-            details: vec![],
+            inner: Status::unimplemented("The requested service has not been implemented."),
             meta: None,
         }
     }
@@ -114,29 +109,39 @@ impl ConnectError {
 
     /// Get the error code.
     pub fn code(&self) -> Code {
-        self.code
+        self.inner.code()
     }
 
     /// Get the error message.
     pub fn message(&self) -> Option<&str> {
-        self.message.as_deref()
+        self.inner.message()
     }
 
     /// Get the error details.
     pub fn details(&self) -> &[ErrorDetail] {
-        &self.details
+        self.inner.details()
     }
 
     /// Add an error detail with type URL and protobuf-encoded bytes.
     pub fn add_detail<S: Into<String>>(mut self, type_url: S, value: Vec<u8>) -> Self {
-        self.details.push(ErrorDetail::new(type_url, value));
+        self.inner = self.inner.add_detail(type_url, value);
         self
     }
 
     /// Add a pre-constructed ErrorDetail.
     pub fn add_error_detail(mut self, detail: ErrorDetail) -> Self {
-        self.details.push(detail);
+        self.inner = self.inner.add_error_detail(detail);
         self
+    }
+
+    /// Get a reference to the inner Status.
+    pub fn status(&self) -> &Status {
+        &self.inner
+    }
+
+    /// Convert into the inner Status.
+    pub fn into_status(self) -> Status {
+        self.inner
     }
 
     /// Get the metadata headers, if any.
@@ -206,12 +211,8 @@ impl ConnectError {
         // For unary protocols, use HTTP status codes
         let status_code = self.http_status_code();
 
-        // Create the error response body
-        let error_body = ErrorResponseBody {
-            code: self.code,
-            message: self.message,
-            details: self.details,
-        };
+        // Create the error response body by serializing the inner Status
+        let error_body = &self.inner;
 
         // Start with the base response
         let mut response = (status_code, Json(error_body)).into_response();
@@ -243,7 +244,7 @@ impl IntoResponse for ConnectError {
 impl ConnectError {
     /// Convert error code to HTTP status code (for unary responses only)
     fn http_status_code(&self) -> StatusCode {
-        match self.code {
+        match self.inner.code() {
             Code::Ok => StatusCode::OK,
             // 499 Client Closed Request (nginx extension) - client canceled the operation
             Code::Canceled => StatusCode::from_u16(499).unwrap(),
@@ -308,6 +309,15 @@ impl ConnectError {
 // Conversions
 // ============================================================================
 
+impl From<Status> for ConnectError {
+    fn from(status: Status) -> Self {
+        ConnectError {
+            inner: status,
+            meta: None,
+        }
+    }
+}
+
 impl From<std::convert::Infallible> for ConnectError {
     fn from(infallible: std::convert::Infallible) -> Self {
         match infallible {}
@@ -346,28 +356,13 @@ pub fn code_from_status(status: StatusCode) -> Code {
 // Serialization
 // ============================================================================
 
-/// The JSON body structure for error responses.
-#[derive(Serialize)]
-struct ErrorResponseBody {
-    code: Code,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    message: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    details: Vec<ErrorDetail>,
-}
-
 impl Serialize for ConnectError {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        // Serialize only the parts that should go in the JSON body
-        ErrorResponseBody {
-            code: self.code,
-            message: self.message.clone(),
-            details: self.details.clone(),
-        }
-        .serialize(serializer)
+        // Delegate to inner Status serialization
+        self.inner.serialize(serializer)
     }
 }
 
@@ -669,6 +664,24 @@ mod tests {
         let err = ConnectError::from_code(Code::Internal);
         assert!(matches!(err.code(), Code::Internal));
         assert!(err.message().is_none());
+    }
+
+    #[test]
+    fn test_connect_error_from_status() {
+        let status = Status::not_found("user not found");
+        let err: ConnectError = status.into();
+
+        assert_eq!(err.code(), Code::NotFound);
+        assert_eq!(err.message(), Some("user not found"));
+    }
+
+    #[test]
+    fn test_connect_error_status_accessors() {
+        let err = ConnectError::new(Code::NotFound, "missing");
+        assert_eq!(err.status().code(), Code::NotFound);
+
+        let status = err.into_status();
+        assert_eq!(status.code(), Code::NotFound);
     }
 
     #[test]

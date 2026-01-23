@@ -2,7 +2,7 @@
 //!
 //! This module provides [`ClientError`], the error type for Connect RPC client operations.
 
-use connectrpc_axum_core::{Code, EnvelopeError, ErrorDetail};
+use connectrpc_axum_core::{Code, EnvelopeError, ErrorDetail, Status};
 
 /// Client-side Connect protocol error variants.
 ///
@@ -10,13 +10,12 @@ use connectrpc_axum_core::{Code, EnvelopeError, ErrorDetail};
 /// during client-side RPC communication.
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum ClientError {
-    /// A status error from the RPC handler with code, message, and optional details.
-    #[error("{message:?}")]
-    Status {
-        code: Code,
-        message: Option<String>,
-        details: Vec<ErrorDetail>,
-    },
+    /// RPC status error from the server.
+    ///
+    /// This variant wraps the core [`Status`] type which contains
+    /// the error code, message, and optional details.
+    #[error("{0}")]
+    Rpc(Status),
 
     /// Transport-level error (connection failed, timeout, etc.).
     #[error("transport error: {0}")]
@@ -38,31 +37,23 @@ pub enum ClientError {
 impl ClientError {
     /// Create a new status error with a code and message.
     pub fn new<S: Into<String>>(code: Code, message: S) -> Self {
-        ClientError::Status {
-            code,
-            message: Some(message.into()),
-            details: vec![],
-        }
+        ClientError::Rpc(Status::new(code, message))
     }
 
     /// Create a new status error with just a code.
     pub fn from_code(code: Code) -> Self {
-        ClientError::Status {
-            code,
-            message: None,
-            details: vec![],
-        }
+        ClientError::Rpc(Status::from_code(code))
     }
 
     /// Get the error code.
     ///
-    /// For non-Status variants, returns an appropriate code:
+    /// For non-Rpc variants, returns an appropriate code:
     /// - Transport: `Unavailable`
     /// - Encode/Decode: `Internal`
     /// - Protocol: `InvalidArgument`
     pub fn code(&self) -> Code {
         match self {
-            ClientError::Status { code, .. } => *code,
+            ClientError::Rpc(status) => status.code(),
             ClientError::Transport(_) => Code::Unavailable,
             ClientError::Encode(_) | ClientError::Decode(_) => Code::Internal,
             ClientError::Protocol(_) => Code::InvalidArgument,
@@ -72,7 +63,7 @@ impl ClientError {
     /// Get the error message.
     pub fn message(&self) -> Option<&str> {
         match self {
-            ClientError::Status { message, .. } => message.as_deref(),
+            ClientError::Rpc(status) => status.message(),
             ClientError::Transport(msg)
             | ClientError::Encode(msg)
             | ClientError::Decode(msg)
@@ -80,75 +71,91 @@ impl ClientError {
         }
     }
 
-    /// Get the error details (only for Status variant).
+    /// Get the error details (only for Rpc variant).
     pub fn details(&self) -> &[ErrorDetail] {
         match self {
-            ClientError::Status { details, .. } => details,
+            ClientError::Rpc(status) => status.details(),
             _ => &[],
         }
     }
 
     /// Add an error detail with type URL and protobuf-encoded bytes.
-    pub fn add_detail<S: Into<String>>(mut self, type_url: S, value: Vec<u8>) -> Self {
-        if let ClientError::Status { details, .. } = &mut self {
-            details.push(ErrorDetail::new(type_url, value));
+    pub fn add_detail<S: Into<String>>(self, type_url: S, value: Vec<u8>) -> Self {
+        match self {
+            ClientError::Rpc(status) => ClientError::Rpc(status.add_detail(type_url, value)),
+            other => other,
         }
-        self
     }
 
     /// Add a pre-constructed ErrorDetail.
-    pub fn add_error_detail(mut self, detail: ErrorDetail) -> Self {
-        if let ClientError::Status { details, .. } = &mut self {
-            details.push(detail);
+    pub fn add_error_detail(self, detail: ErrorDetail) -> Self {
+        match self {
+            ClientError::Rpc(status) => ClientError::Rpc(status.add_error_detail(detail)),
+            other => other,
         }
-        self
+    }
+
+    /// Get the inner Status if this is an Rpc error.
+    pub fn status(&self) -> Option<&Status> {
+        match self {
+            ClientError::Rpc(status) => Some(status),
+            _ => None,
+        }
+    }
+
+    /// Convert into the inner Status if this is an Rpc error.
+    pub fn into_status(self) -> Option<Status> {
+        match self {
+            ClientError::Rpc(status) => Some(status),
+            _ => None,
+        }
     }
 
     // Convenience constructors
 
     /// Create an unimplemented error.
     pub fn unimplemented<S: Into<String>>(message: S) -> Self {
-        Self::new(Code::Unimplemented, message)
+        ClientError::Rpc(Status::unimplemented(message))
     }
 
     /// Create an invalid argument error.
     pub fn invalid_argument<S: Into<String>>(message: S) -> Self {
-        Self::new(Code::InvalidArgument, message)
+        ClientError::Rpc(Status::invalid_argument(message))
     }
 
     /// Create a not found error.
     pub fn not_found<S: Into<String>>(message: S) -> Self {
-        Self::new(Code::NotFound, message)
+        ClientError::Rpc(Status::not_found(message))
     }
 
     /// Create a permission denied error.
     pub fn permission_denied<S: Into<String>>(message: S) -> Self {
-        Self::new(Code::PermissionDenied, message)
+        ClientError::Rpc(Status::permission_denied(message))
     }
 
     /// Create an unauthenticated error.
     pub fn unauthenticated<S: Into<String>>(message: S) -> Self {
-        Self::new(Code::Unauthenticated, message)
+        ClientError::Rpc(Status::unauthenticated(message))
     }
 
     /// Create an internal error.
     pub fn internal<S: Into<String>>(message: S) -> Self {
-        Self::new(Code::Internal, message)
+        ClientError::Rpc(Status::internal(message))
     }
 
     /// Create an unavailable error.
     pub fn unavailable<S: Into<String>>(message: S) -> Self {
-        Self::new(Code::Unavailable, message)
+        ClientError::Rpc(Status::unavailable(message))
     }
 
     /// Create a resource exhausted error.
     pub fn resource_exhausted<S: Into<String>>(message: S) -> Self {
-        Self::new(Code::ResourceExhausted, message)
+        ClientError::Rpc(Status::resource_exhausted(message))
     }
 
     /// Create a data loss error.
     pub fn data_loss<S: Into<String>>(message: S) -> Self {
-        Self::new(Code::DataLoss, message)
+        ClientError::Rpc(Status::data_loss(message))
     }
 
     /// Returns whether this error indicates a transient condition that may
@@ -173,6 +180,12 @@ impl ClientError {
     /// ```
     pub fn is_retryable(&self) -> bool {
         self.code().is_retryable()
+    }
+}
+
+impl From<Status> for ClientError {
+    fn from(status: Status) -> Self {
+        ClientError::Rpc(status)
     }
 }
 
@@ -264,5 +277,43 @@ mod tests {
         assert!(!ClientError::Encode("bad encoding".into()).is_retryable());
         assert!(!ClientError::Decode("bad decoding".into()).is_retryable());
         assert!(!ClientError::Protocol("bad frame".into()).is_retryable());
+    }
+
+    #[test]
+    fn test_client_error_from_status() {
+        let status = Status::not_found("resource missing");
+        let err: ClientError = status.into();
+
+        assert_eq!(err.code(), Code::NotFound);
+        assert_eq!(err.message(), Some("resource missing"));
+    }
+
+    #[test]
+    fn test_client_error_status_accessors() {
+        let err = ClientError::new(Code::NotFound, "missing");
+        assert!(err.status().is_some());
+        assert_eq!(err.status().unwrap().code(), Code::NotFound);
+
+        let err = ClientError::Transport("network error".into());
+        assert!(err.status().is_none());
+
+        let err = ClientError::new(Code::Internal, "error");
+        let status = err.into_status();
+        assert!(status.is_some());
+        assert_eq!(status.unwrap().code(), Code::Internal);
+    }
+
+    #[test]
+    fn test_client_error_rpc_variant_pattern_matching() {
+        let err = ClientError::new(Code::NotFound, "user not found");
+
+        // Users can pattern match on the Rpc variant
+        match err {
+            ClientError::Rpc(status) => {
+                assert_eq!(status.code(), Code::NotFound);
+                assert_eq!(status.message(), Some("user not found"));
+            }
+            _ => panic!("expected Rpc variant"),
+        }
     }
 }

@@ -1053,7 +1053,7 @@ fn generate_connect_client(
                             request: &#request_type,
                         ) -> Result<
                             connectrpc_axum_client::ConnectResponse<
-                                connectrpc_axum_client::StreamBody<
+                                connectrpc_axum_client::Streaming<
                                     connectrpc_axum_client::FrameDecoder<
                                         impl ::futures::Stream<Item = Result<connectrpc_axum_client::Bytes, connectrpc_axum_client::ReqwestError>> + Unpin,
                                         #response_type
@@ -1112,7 +1112,7 @@ fn generate_connect_client(
                             request: S,
                         ) -> Result<
                             connectrpc_axum_client::ConnectResponse<
-                                connectrpc_axum_client::StreamBody<
+                                connectrpc_axum_client::Streaming<
                                     connectrpc_axum_client::FrameDecoder<
                                         impl ::futures::Stream<Item = Result<connectrpc_axum_client::Bytes, connectrpc_axum_client::ReqwestError>> + Unpin,
                                         #response_type

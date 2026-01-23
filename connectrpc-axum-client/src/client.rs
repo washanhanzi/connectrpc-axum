@@ -4,23 +4,23 @@
 
 use bytes::Bytes;
 
+use connectrpc_axum_core::{CompressionConfig, CompressionEncoding};
 #[cfg(feature = "tracing")]
 use tracing::info_span;
-use connectrpc_axum_core::{CompressionConfig, CompressionEncoding};
 
 use crate::ClientError;
 use futures::{Stream, StreamExt};
 use prost::Message;
-use reqwest_middleware::ClientWithMiddleware;
+use reqwest::Client;
 use serde::{Serialize, de::DeserializeOwned};
 use std::time::Duration;
 
 use crate::builder::ClientBuilder;
 use crate::error_parser::parse_error_response;
 use crate::frame::{FrameDecoder, FrameEncoder};
-use crate::options::{duration_to_timeout_header, CallOptions};
+use crate::options::{CallOptions, duration_to_timeout_header};
 use crate::response::{ConnectResponse, Metadata};
-use crate::stream_body::StreamBody;
+use crate::streaming::Streaming;
 
 /// Header name for Connect protocol version.
 const CONNECT_PROTOCOL_VERSION_HEADER: &str = "connect-protocol-version";
@@ -51,8 +51,8 @@ const CONNECT_TIMEOUT_HEADER: &str = "connect-timeout-ms";
 /// ```
 #[derive(Debug, Clone)]
 pub struct ConnectClient {
-    /// HTTP client with middleware support.
-    http: ClientWithMiddleware,
+    /// HTTP client.
+    http: Client,
     /// Base URL for the service.
     base_url: String,
     /// Use protobuf encoding (true) or JSON encoding (false).
@@ -79,7 +79,7 @@ impl ConnectClient {
     ///
     /// This is called by [`ClientBuilder::build`]. Prefer using the builder API.
     pub(crate) fn new(
-        http: ClientWithMiddleware,
+        http: Client,
         base_url: String,
         use_proto: bool,
         compression: CompressionConfig,
@@ -111,11 +111,7 @@ impl ConnectClient {
     /// Get the encoding name (for tracing/debugging).
     #[cfg_attr(not(feature = "tracing"), allow(dead_code))]
     fn encoding_name(&self) -> &'static str {
-        if self.use_proto {
-            "proto"
-        } else {
-            "json"
-        }
+        if self.use_proto { "proto" } else { "json" }
     }
 
     /// Get the content type for unary requests.
@@ -156,7 +152,8 @@ impl ConnectClient {
         T: Message + DeserializeOwned + Default,
     {
         if self.use_proto {
-            T::decode(bytes).map_err(|e| ClientError::Decode(format!("protobuf decoding failed: {}", e)))
+            T::decode(bytes)
+                .map_err(|e| ClientError::Decode(format!("protobuf decoding failed: {}", e)))
         } else {
             serde_json::from_slice(bytes)
                 .map_err(|e| ClientError::Decode(format!("JSON decoding failed: {}", e)))
@@ -175,7 +172,10 @@ impl ConnectClient {
         }
 
         // Get codec for the encoding
-        let Some(codec) = self.request_encoding.codec_with_level(self.compression.level) else {
+        let Some(codec) = self
+            .request_encoding
+            .codec_with_level(self.compression.level)
+        else {
             return Ok((body, false));
         };
 
@@ -254,8 +254,10 @@ impl ConnectClient {
 
         // Add Content-Encoding if compressed
         if compressed {
-            req_builder =
-                req_builder.header(reqwest::header::CONTENT_ENCODING, self.request_encoding.as_str());
+            req_builder = req_builder.header(
+                reqwest::header::CONTENT_ENCODING,
+                self.request_encoding.as_str(),
+            );
         }
 
         // Add Accept-Encoding if configured
@@ -264,10 +266,10 @@ impl ConnectClient {
         }
 
         // Add Connect-Timeout-Ms header if timeout is configured
-        if let Some(timeout) = self.default_timeout {
-            if let Some(timeout_ms) = duration_to_timeout_header(timeout) {
-                req_builder = req_builder.header(CONNECT_TIMEOUT_HEADER, timeout_ms);
-            }
+        if let Some(timeout) = self.default_timeout
+            && let Some(timeout_ms) = duration_to_timeout_header(timeout)
+        {
+            req_builder = req_builder.header(CONNECT_TIMEOUT_HEADER, timeout_ms);
         }
 
         // Set body
@@ -293,8 +295,8 @@ impl ConnectClient {
             .get(reqwest::header::CONTENT_ENCODING)
             .and_then(|v| v.to_str().ok());
 
-        let response_encoding = CompressionEncoding::from_header(content_encoding)
-            .ok_or_else(|| {
+        let response_encoding =
+            CompressionEncoding::from_header(content_encoding).ok_or_else(|| {
                 ClientError::Protocol(format!(
                     "unsupported response encoding: {:?}",
                     content_encoding
@@ -390,8 +392,10 @@ impl ConnectClient {
 
         // Add Content-Encoding if compressed
         if compressed {
-            req_builder =
-                req_builder.header(reqwest::header::CONTENT_ENCODING, self.request_encoding.as_str());
+            req_builder = req_builder.header(
+                reqwest::header::CONTENT_ENCODING,
+                self.request_encoding.as_str(),
+            );
         }
 
         // Add Accept-Encoding if configured
@@ -435,8 +439,8 @@ impl ConnectClient {
             .get(reqwest::header::CONTENT_ENCODING)
             .and_then(|v| v.to_str().ok());
 
-        let response_encoding = CompressionEncoding::from_header(content_encoding)
-            .ok_or_else(|| {
+        let response_encoding =
+            CompressionEncoding::from_header(content_encoding).ok_or_else(|| {
                 ClientError::Protocol(format!(
                     "unsupported response encoding: {:?}",
                     content_encoding
@@ -478,7 +482,7 @@ impl ConnectClient {
     ///
     /// # Returns
     ///
-    /// Returns a [`ConnectResponse`] containing a [`StreamBody`] that yields
+    /// Returns a [`ConnectResponse`] containing a [`Streaming`] that yields
     /// response messages. After the stream is consumed, trailers are available
     /// via `stream.trailers()`.
     ///
@@ -521,7 +525,17 @@ impl ConnectClient {
         &self,
         procedure: &str,
         request: &Req,
-    ) -> Result<ConnectResponse<StreamBody<FrameDecoder<impl futures::Stream<Item = Result<Bytes, reqwest::Error>> + Unpin, Res>>>, ClientError>
+    ) -> Result<
+        ConnectResponse<
+            Streaming<
+                FrameDecoder<
+                    impl futures::Stream<Item = Result<Bytes, reqwest::Error>> + Unpin,
+                    Res,
+                >,
+            >,
+        >,
+        ClientError,
+    >
     where
         Req: Message + Serialize,
         Res: Message + DeserializeOwned + Default,
@@ -554,8 +568,10 @@ impl ConnectClient {
 
         // Add Content-Encoding if compressed
         if compressed {
-            req_builder =
-                req_builder.header(reqwest::header::CONTENT_ENCODING, self.request_encoding.as_str());
+            req_builder = req_builder.header(
+                reqwest::header::CONTENT_ENCODING,
+                self.request_encoding.as_str(),
+            );
         }
 
         // Add Accept-Encoding if configured
@@ -594,8 +610,8 @@ impl ConnectClient {
             .get("connect-content-encoding")
             .and_then(|v| v.to_str().ok());
 
-        let response_encoding = CompressionEncoding::from_header(content_encoding)
-            .ok_or_else(|| {
+        let response_encoding =
+            CompressionEncoding::from_header(content_encoding).ok_or_else(|| {
                 ClientError::Protocol(format!(
                     "unsupported response encoding: {:?}",
                     content_encoding
@@ -608,8 +624,8 @@ impl ConnectClient {
         // 9. Wrap with FrameDecoder
         let decoder = FrameDecoder::new(byte_stream, self.use_proto, response_encoding);
 
-        // 10. Wrap with StreamBody
-        let stream_body = StreamBody::new(decoder);
+        // 10. Wrap with Streaming
+        let stream_body = Streaming::new(decoder);
 
         // 11. Extract metadata from initial response headers
         let metadata = Metadata::new(headers);
@@ -643,7 +659,9 @@ impl ConnectClient {
         options: CallOptions,
     ) -> Result<
         ConnectResponse<
-            StreamBody<FrameDecoder<impl Stream<Item = Result<Bytes, reqwest::Error>> + Unpin, Res>>,
+            Streaming<
+                FrameDecoder<impl Stream<Item = Result<Bytes, reqwest::Error>> + Unpin, Res>,
+            >,
         >,
         ClientError,
     >
@@ -679,8 +697,10 @@ impl ConnectClient {
 
         // Add Content-Encoding if compressed
         if compressed {
-            req_builder =
-                req_builder.header(reqwest::header::CONTENT_ENCODING, self.request_encoding.as_str());
+            req_builder = req_builder.header(
+                reqwest::header::CONTENT_ENCODING,
+                self.request_encoding.as_str(),
+            );
         }
 
         // Add Accept-Encoding if configured
@@ -724,8 +744,8 @@ impl ConnectClient {
             .get("connect-content-encoding")
             .and_then(|v| v.to_str().ok());
 
-        let response_encoding = CompressionEncoding::from_header(content_encoding)
-            .ok_or_else(|| {
+        let response_encoding =
+            CompressionEncoding::from_header(content_encoding).ok_or_else(|| {
                 ClientError::Protocol(format!(
                     "unsupported response encoding: {:?}",
                     content_encoding
@@ -738,8 +758,8 @@ impl ConnectClient {
         // 9. Wrap with FrameDecoder
         let decoder = FrameDecoder::new(byte_stream, self.use_proto, response_encoding);
 
-        // 10. Wrap with StreamBody
-        let stream_body = StreamBody::new(decoder);
+        // 10. Wrap with Streaming
+        let stream_body = Streaming::new(decoder);
 
         // 11. Extract metadata from initial response headers
         let metadata = Metadata::new(headers);
@@ -832,10 +852,8 @@ impl ConnectClient {
 
         // Add Content-Encoding if compression is configured
         if !self.request_encoding.is_identity() && !self.compression.is_disabled() {
-            req_builder = req_builder.header(
-                "connect-content-encoding",
-                self.request_encoding.as_str(),
-            );
+            req_builder =
+                req_builder.header("connect-content-encoding", self.request_encoding.as_str());
         }
 
         // Add Accept-Encoding if configured
@@ -872,25 +890,24 @@ impl ConnectClient {
             .get("connect-content-encoding")
             .and_then(|v| v.to_str().ok());
 
-        let response_encoding = CompressionEncoding::from_header(content_encoding).ok_or_else(
-            || {
+        let response_encoding =
+            CompressionEncoding::from_header(content_encoding).ok_or_else(|| {
                 ClientError::Protocol(format!(
                     "unsupported response encoding: {:?}",
                     content_encoding
                 ))
-            },
-        )?;
+            })?;
 
         // 8. Get the streaming body and decode the single response message
         let byte_stream = response.bytes_stream();
-        let mut decoder = FrameDecoder::<_, Res>::new(byte_stream, self.use_proto, response_encoding);
+        let mut decoder =
+            FrameDecoder::<_, Res>::new(byte_stream, self.use_proto, response_encoding);
 
         // 9. Get the single response message
         use futures::StreamExt;
-        let message = decoder
-            .next()
-            .await
-            .ok_or_else(|| ClientError::Protocol("expected response message but stream ended".into()))??;
+        let message = decoder.next().await.ok_or_else(|| {
+            ClientError::Protocol("expected response message but stream ended".into())
+        })??;
 
         // 10. Consume the EndStream frame to complete the stream
         // The decoder will return None after processing EndStream
@@ -972,10 +989,8 @@ impl ConnectClient {
 
         // Add Content-Encoding if compression is configured
         if !self.request_encoding.is_identity() && !self.compression.is_disabled() {
-            req_builder = req_builder.header(
-                "connect-content-encoding",
-                self.request_encoding.as_str(),
-            );
+            req_builder =
+                req_builder.header("connect-content-encoding", self.request_encoding.as_str());
         }
 
         // Add Accept-Encoding if configured
@@ -1018,18 +1033,18 @@ impl ConnectClient {
             .get("connect-content-encoding")
             .and_then(|v| v.to_str().ok());
 
-        let response_encoding = CompressionEncoding::from_header(content_encoding).ok_or_else(
-            || {
+        let response_encoding =
+            CompressionEncoding::from_header(content_encoding).ok_or_else(|| {
                 ClientError::Protocol(format!(
                     "unsupported response encoding: {:?}",
                     content_encoding
                 ))
-            },
-        )?;
+            })?;
 
         // 8. Get the streaming body and decode the single response message
         let byte_stream = response.bytes_stream();
-        let mut decoder = FrameDecoder::<_, Res>::new(byte_stream, self.use_proto, response_encoding);
+        let mut decoder =
+            FrameDecoder::<_, Res>::new(byte_stream, self.use_proto, response_encoding);
 
         // 9. Get the single response message
         let message = match decoder.next().await {
@@ -1038,7 +1053,7 @@ impl ConnectClient {
             None => {
                 return Err(ClientError::Protocol(
                     "expected response message but stream ended".to_string(),
-                ))
+                ));
             }
         };
 
@@ -1065,7 +1080,7 @@ impl ConnectClient {
     ///
     /// # Returns
     ///
-    /// Returns a [`ConnectResponse`] containing a [`StreamBody`] that yields
+    /// Returns a [`ConnectResponse`] containing a [`Streaming`] that yields
     /// response messages. After the stream is consumed, trailers are available
     /// via `stream.trailers()`.
     ///
@@ -1120,7 +1135,12 @@ impl ConnectClient {
         request: S,
     ) -> Result<
         ConnectResponse<
-            StreamBody<FrameDecoder<impl futures::Stream<Item = Result<Bytes, reqwest::Error>> + Unpin, Res>>,
+            Streaming<
+                FrameDecoder<
+                    impl futures::Stream<Item = Result<Bytes, reqwest::Error>> + Unpin,
+                    Res,
+                >,
+            >,
         >,
         ClientError,
     >
@@ -1166,10 +1186,8 @@ impl ConnectClient {
 
         // Add Content-Encoding if compression is configured
         if !self.request_encoding.is_identity() && !self.compression.is_disabled() {
-            req_builder = req_builder.header(
-                "connect-content-encoding",
-                self.request_encoding.as_str(),
-            );
+            req_builder =
+                req_builder.header("connect-content-encoding", self.request_encoding.as_str());
         }
 
         // Add Accept-Encoding if configured
@@ -1206,14 +1224,13 @@ impl ConnectClient {
             .get("connect-content-encoding")
             .and_then(|v| v.to_str().ok());
 
-        let response_encoding = CompressionEncoding::from_header(content_encoding).ok_or_else(
-            || {
+        let response_encoding =
+            CompressionEncoding::from_header(content_encoding).ok_or_else(|| {
                 ClientError::Protocol(format!(
                     "unsupported response encoding: {:?}",
                     content_encoding
                 ))
-            },
-        )?;
+            })?;
 
         // 8. Get the streaming body
         let byte_stream = response.bytes_stream();
@@ -1221,8 +1238,8 @@ impl ConnectClient {
         // 9. Wrap with FrameDecoder
         let decoder = FrameDecoder::new(byte_stream, self.use_proto, response_encoding);
 
-        // 10. Wrap with StreamBody
-        let stream_body = StreamBody::new(decoder);
+        // 10. Wrap with Streaming
+        let stream_body = Streaming::new(decoder);
 
         // 11. Extract metadata from initial response headers
         let metadata = Metadata::new(headers);
@@ -1261,7 +1278,12 @@ impl ConnectClient {
         options: CallOptions,
     ) -> Result<
         ConnectResponse<
-            StreamBody<FrameDecoder<impl futures::Stream<Item = Result<Bytes, reqwest::Error>> + Unpin, Res>>,
+            Streaming<
+                FrameDecoder<
+                    impl futures::Stream<Item = Result<Bytes, reqwest::Error>> + Unpin,
+                    Res,
+                >,
+            >,
         >,
         ClientError,
     >
@@ -1303,10 +1325,8 @@ impl ConnectClient {
 
         // Add Content-Encoding if compression is configured
         if !self.request_encoding.is_identity() && !self.compression.is_disabled() {
-            req_builder = req_builder.header(
-                "connect-content-encoding",
-                self.request_encoding.as_str(),
-            );
+            req_builder =
+                req_builder.header("connect-content-encoding", self.request_encoding.as_str());
         }
 
         // Add Accept-Encoding if configured
@@ -1349,14 +1369,13 @@ impl ConnectClient {
             .get("connect-content-encoding")
             .and_then(|v| v.to_str().ok());
 
-        let response_encoding = CompressionEncoding::from_header(content_encoding).ok_or_else(
-            || {
+        let response_encoding =
+            CompressionEncoding::from_header(content_encoding).ok_or_else(|| {
                 ClientError::Protocol(format!(
                     "unsupported response encoding: {:?}",
                     content_encoding
                 ))
-            },
-        )?;
+            })?;
 
         // 8. Get the streaming body
         let byte_stream = response.bytes_stream();
@@ -1364,8 +1383,8 @@ impl ConnectClient {
         // 9. Wrap with FrameDecoder
         let decoder = FrameDecoder::new(byte_stream, self.use_proto, response_encoding);
 
-        // 10. Wrap with StreamBody
-        let stream_body = StreamBody::new(decoder);
+        // 10. Wrap with Streaming
+        let stream_body = Streaming::new(decoder);
 
         // 11. Extract metadata from initial response headers
         let metadata = Metadata::new(headers);

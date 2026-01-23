@@ -5,8 +5,6 @@
 use crate::client::ConnectClient;
 use connectrpc_axum_core::{CompressionConfig, CompressionEncoding};
 use reqwest::Client;
-use reqwest_middleware::{ClientBuilder as MiddlewareClientBuilder, ClientWithMiddleware, Middleware};
-use std::sync::Arc;
 use std::time::Duration;
 
 /// Builder for creating a [`ConnectClient`].
@@ -26,8 +24,6 @@ pub struct ClientBuilder {
     base_url: String,
     /// Optional pre-configured reqwest client.
     client: Option<Client>,
-    /// Middleware to add to the client.
-    middleware: Vec<Arc<dyn Middleware>>,
     /// Use protobuf encoding (true) or JSON encoding (false).
     use_proto: bool,
     /// Compression configuration for outgoing requests.
@@ -49,7 +45,6 @@ impl std::fmt::Debug for ClientBuilder {
         f.debug_struct("ClientBuilder")
             .field("base_url", &self.base_url)
             .field("client", &self.client.is_some())
-            .field("middleware_count", &self.middleware.len())
             .field("use_proto", &self.use_proto)
             .field("compression", &self.compression)
             .field("request_encoding", &self.request_encoding)
@@ -76,7 +71,6 @@ impl ClientBuilder {
         Self {
             base_url: base_url.into(),
             client: None,
-            middleware: Vec::new(),
             use_proto: false, // Default to JSON for broader compatibility
             compression: None,
             request_encoding: CompressionEncoding::Identity,
@@ -105,25 +99,6 @@ impl ClientBuilder {
     /// ```
     pub fn client(mut self, client: Client) -> Self {
         self.client = Some(client);
-        self
-    }
-
-    /// Add middleware to the client.
-    ///
-    /// Middleware is applied in the order it's added.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use reqwest_middleware::Middleware;
-    ///
-    /// let client = ClientBuilder::new("http://localhost:3000")
-    ///     .with_middleware(MyRetryMiddleware::new())
-    ///     .with_middleware(MyLoggingMiddleware::new())
-    ///     .build()?;
-    /// ```
-    pub fn with_middleware<M: Middleware>(mut self, middleware: M) -> Self {
-        self.middleware.push(Arc::new(middleware));
         self
     }
 
@@ -312,22 +287,11 @@ impl ClientBuilder {
             }
         };
 
-        // Apply middleware
-        let http: ClientWithMiddleware = if self.middleware.is_empty() {
-            MiddlewareClientBuilder::new(base_client).build()
-        } else {
-            let mut builder = MiddlewareClientBuilder::new(base_client);
-            for mw in self.middleware {
-                builder = builder.with_arc(mw);
-            }
-            builder.build()
-        };
-
         // Normalize base URL (remove trailing slash)
         let base_url = self.base_url.trim_end_matches('/').to_string();
 
         Ok(ConnectClient::new(
-            http,
+            base_client,
             base_url,
             self.use_proto,
             self.compression.unwrap_or_default(),
@@ -355,7 +319,6 @@ mod tests {
         let builder = ClientBuilder::new("http://localhost:3000");
         assert!(!builder.use_proto);
         assert!(builder.client.is_none());
-        assert!(builder.middleware.is_empty());
     }
 
     #[test]
