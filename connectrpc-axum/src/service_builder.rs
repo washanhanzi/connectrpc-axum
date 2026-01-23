@@ -49,33 +49,33 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 
 #[cfg(any(
-    feature = "compression-gzip",
-    feature = "compression-deflate",
-    feature = "compression-br",
-    feature = "compression-zstd"
+    feature = "compression-gzip-unary",
+    feature = "compression-deflate-unary",
+    feature = "compression-br-unary",
+    feature = "compression-zstd-unary"
 ))]
 use tower_http::compression::CompressionLayer;
 #[cfg(any(
-    feature = "compression-gzip",
-    feature = "compression-deflate",
-    feature = "compression-br",
-    feature = "compression-zstd"
+    feature = "compression-gzip-unary",
+    feature = "compression-deflate-unary",
+    feature = "compression-br-unary",
+    feature = "compression-zstd-unary"
 ))]
 use tower_http::compression::predicate::SizeAbove;
 #[cfg(any(
-    feature = "compression-gzip",
-    feature = "compression-deflate",
-    feature = "compression-br",
-    feature = "compression-zstd"
+    feature = "compression-gzip-unary",
+    feature = "compression-deflate-unary",
+    feature = "compression-br-unary",
+    feature = "compression-zstd-unary"
 ))]
 use tower_http::decompression::RequestDecompressionLayer;
 
 use crate::context::{CompressionConfig, MessageLimits};
 #[cfg(any(
-    feature = "compression-gzip",
-    feature = "compression-deflate",
-    feature = "compression-br",
-    feature = "compression-zstd"
+    feature = "compression-gzip-unary",
+    feature = "compression-deflate-unary",
+    feature = "compression-br-unary",
+    feature = "compression-zstd-unary"
 ))]
 use crate::context::to_tower_compression_level;
 use crate::layer::{BridgeLayer, ConnectLayer};
@@ -101,17 +101,17 @@ struct BuiltLayers {
     timeout: Option<Duration>,
     limits: Option<MessageLimits>,
     #[cfg(any(
-        feature = "compression-gzip",
-        feature = "compression-deflate",
-        feature = "compression-br",
-        feature = "compression-zstd"
+        feature = "compression-gzip-unary",
+        feature = "compression-deflate-unary",
+        feature = "compression-br-unary",
+        feature = "compression-zstd-unary"
     ))]
     compression_layer: Option<CompressionLayer<SizeAbove>>,
     #[cfg(any(
-        feature = "compression-gzip",
-        feature = "compression-deflate",
-        feature = "compression-br",
-        feature = "compression-zstd"
+        feature = "compression-gzip-unary",
+        feature = "compression-deflate-unary",
+        feature = "compression-br-unary",
+        feature = "compression-zstd-unary"
     ))]
     decompression_layer: Option<RequestDecompressionLayer>,
 }
@@ -558,10 +558,10 @@ where
     ///
     /// Only available when at least one compression feature is enabled.
     #[cfg(any(
-        feature = "compression-gzip",
-        feature = "compression-deflate",
-        feature = "compression-br",
-        feature = "compression-zstd"
+        feature = "compression-gzip-unary",
+        feature = "compression-deflate-unary",
+        feature = "compression-br-unary",
+        feature = "compression-zstd-unary"
     ))]
     fn build_compression_layer(
         &self,
@@ -572,13 +572,13 @@ where
         let layer = CompressionLayer::new()
             .quality(to_tower_compression_level(compression.level));
 
-        #[cfg(feature = "compression-gzip")]
+        #[cfg(feature = "compression-gzip-unary")]
         let layer = layer.gzip(true);
-        #[cfg(feature = "compression-deflate")]
+        #[cfg(feature = "compression-deflate-unary")]
         let layer = layer.deflate(true);
-        #[cfg(feature = "compression-br")]
+        #[cfg(feature = "compression-br-unary")]
         let layer = layer.br(true);
-        #[cfg(feature = "compression-zstd")]
+        #[cfg(feature = "compression-zstd-unary")]
         let layer = layer.zstd(true);
 
         // compress_when must be called last as it changes the type
@@ -589,21 +589,21 @@ where
     ///
     /// Only available when at least one compression feature is enabled.
     #[cfg(any(
-        feature = "compression-gzip",
-        feature = "compression-deflate",
-        feature = "compression-br",
-        feature = "compression-zstd"
+        feature = "compression-gzip-unary",
+        feature = "compression-deflate-unary",
+        feature = "compression-br-unary",
+        feature = "compression-zstd-unary"
     ))]
     fn build_request_decompression_layer(&self) -> RequestDecompressionLayer {
         let layer = RequestDecompressionLayer::new();
 
-        #[cfg(feature = "compression-gzip")]
+        #[cfg(feature = "compression-gzip-unary")]
         let layer = layer.gzip(true);
-        #[cfg(feature = "compression-deflate")]
+        #[cfg(feature = "compression-deflate-unary")]
         let layer = layer.deflate(true);
-        #[cfg(feature = "compression-br")]
+        #[cfg(feature = "compression-br-unary")]
         let layer = layer.br(true);
-        #[cfg(feature = "compression-zstd")]
+        #[cfg(feature = "compression-zstd-unary")]
         let layer = layer.zstd(true);
 
         layer
@@ -611,10 +611,10 @@ where
 
     /// Builds the layers needed for router construction.
     #[cfg(any(
-        feature = "compression-gzip",
-        feature = "compression-deflate",
-        feature = "compression-br",
-        feature = "compression-zstd"
+        feature = "compression-gzip-unary",
+        feature = "compression-deflate-unary",
+        feature = "compression-br-unary",
+        feature = "compression-zstd-unary"
     ))]
     fn build_layers(&self) -> BuiltLayers {
         let connect_layer = self.build_connect_layer();
@@ -642,10 +642,10 @@ where
 
     /// Builds the layers needed for router construction (no compression features).
     #[cfg(not(any(
-        feature = "compression-gzip",
-        feature = "compression-deflate",
-        feature = "compression-br",
-        feature = "compression-zstd"
+        feature = "compression-gzip-unary",
+        feature = "compression-deflate-unary",
+        feature = "compression-br-unary",
+        feature = "compression-zstd-unary"
     )))]
     fn build_layers(&self) -> BuiltLayers {
         let connect_layer = self.build_connect_layer();
@@ -721,10 +721,10 @@ where
 
     // Apply compression layers if enabled
     #[cfg(any(
-        feature = "compression-gzip",
-        feature = "compression-deflate",
-        feature = "compression-br",
-        feature = "compression-zstd"
+        feature = "compression-gzip-unary",
+        feature = "compression-deflate-unary",
+        feature = "compression-br-unary",
+        feature = "compression-zstd-unary"
     ))]
     if let (Some(comp), Some(decomp)) = (&layers.compression_layer, &layers.decompression_layer) {
         router = router.layer(comp.clone()).layer(decomp.clone());
@@ -752,19 +752,19 @@ where
     S: Clone + Send + Sync + 'static,
 {
     #[cfg(any(
-        feature = "compression-gzip",
-        feature = "compression-deflate",
-        feature = "compression-br",
-        feature = "compression-zstd"
+        feature = "compression-gzip-unary",
+        feature = "compression-deflate-unary",
+        feature = "compression-br-unary",
+        feature = "compression-zstd-unary"
     ))]
     if let Some(layer) = &layers.compression_layer {
         router = router.layer(layer.clone());
     }
     #[cfg(any(
-        feature = "compression-gzip",
-        feature = "compression-deflate",
-        feature = "compression-br",
-        feature = "compression-zstd"
+        feature = "compression-gzip-unary",
+        feature = "compression-deflate-unary",
+        feature = "compression-br-unary",
+        feature = "compression-zstd-unary"
     ))]
     if let Some(layer) = &layers.decompression_layer {
         router = router.layer(layer.clone());

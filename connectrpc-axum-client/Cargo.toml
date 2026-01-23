@@ -48,11 +48,11 @@ tracing = { workspace = true, optional = true }
 
 [features]
 default = []
-compression-gzip = ["dep:flate2", "connectrpc-axum-core/compression-gzip"]
-compression-deflate = ["dep:flate2", "connectrpc-axum-core/compression-deflate"]
-compression-br = ["dep:brotli", "connectrpc-axum-core/compression-br"]
-compression-zstd = ["dep:zstd", "connectrpc-axum-core/compression-zstd"]
-compression-full = ["compression-gzip", "compression-deflate", "compression-br", "compression-zstd"]
+compression-gzip-stream = ["dep:flate2", "connectrpc-axum-core/compression-gzip-stream"]
+compression-deflate-stream = ["dep:flate2", "connectrpc-axum-core/compression-deflate-stream"]
+compression-br-stream = ["dep:brotli", "connectrpc-axum-core/compression-br-stream"]
+compression-zstd-stream = ["dep:zstd", "connectrpc-axum-core/compression-zstd-stream"]
+compression-full-stream = ["compression-gzip-stream", "compression-deflate-stream", "compression-br-stream", "compression-zstd-stream"]
 # Enable tracing instrumentation for RPC calls
 tracing = ["dep:tracing"]
 

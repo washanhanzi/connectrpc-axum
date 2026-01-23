@@ -43,32 +43,23 @@ zstd = { workspace = true, optional = true }
 default = []
 tonic = ["dep:tokio-stream", "dep:tonic", "dep:tonic-prost"]
 
-# Compression algorithm features
-# Each feature enables both tower-http layer compression and envelope streaming compression
-compression-gzip = [
-    "tower-http/compression-gzip",
-    "tower-http/decompression-gzip",
-    "dep:flate2",
-    "connectrpc-axum-core/compression-gzip",
-]
-compression-deflate = [
-    "tower-http/compression-deflate",
-    "tower-http/decompression-deflate",
-    "dep:flate2",
-    "connectrpc-axum-core/compression-deflate",
-]
-compression-br = [
-    "tower-http/compression-br",
-    "tower-http/decompression-br",
-    "dep:brotli",
-    "connectrpc-axum-core/compression-br",
-]
-compression-zstd = [
-    "tower-http/compression-zstd",
-    "tower-http/decompression-zstd",
-    "dep:zstd",
-    "connectrpc-axum-core/compression-zstd",
-]
+# Unary-only (tower-http layers for HTTP body compression)
+compression-gzip-unary = ["tower-http/compression-gzip", "tower-http/decompression-gzip", "dep:flate2"]
+compression-deflate-unary = ["tower-http/compression-deflate", "tower-http/decompression-deflate", "dep:flate2"]
+compression-br-unary = ["tower-http/compression-br", "tower-http/decompression-br", "dep:brotli"]
+compression-zstd-unary = ["tower-http/compression-zstd", "tower-http/decompression-zstd", "dep:zstd"]
 
-# Enable all compression algorithms
+# Stream-only (envelope codecs for per-message compression)
+compression-gzip-stream = ["dep:flate2", "connectrpc-axum-core/compression-gzip-stream"]
+compression-deflate-stream = ["dep:flate2", "connectrpc-axum-core/compression-deflate-stream"]
+compression-br-stream = ["dep:brotli", "connectrpc-axum-core/compression-br-stream"]
+compression-zstd-stream = ["dep:zstd", "connectrpc-axum-core/compression-zstd-stream"]
+
+# Umbrella features (both unary and stream)
+compression-gzip = ["compression-gzip-unary", "compression-gzip-stream"]
+compression-deflate = ["compression-deflate-unary", "compression-deflate-stream"]
+compression-br = ["compression-br-unary", "compression-br-stream"]
+compression-zstd = ["compression-zstd-unary", "compression-zstd-stream"]
+
+# Full compression
 compression-full = ["compression-gzip", "compression-deflate", "compression-br", "compression-zstd"]

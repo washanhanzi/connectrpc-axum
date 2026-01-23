@@ -952,7 +952,7 @@ mod tests {
         assert!(err.message().unwrap().contains("connect must be \"v1\""));
     }
 
-    #[cfg(feature = "compression-gzip")]
+    #[cfg(feature = "compression-gzip-stream")]
     #[test]
     fn test_get_valid_compression_gzip() {
         let req = Request::builder()

@@ -372,7 +372,7 @@ mod tests {
         assert!(!builder.use_proto);
     }
 
-    #[cfg(feature = "compression-gzip")]
+    #[cfg(feature = "compression-gzip-stream")]
     #[test]
     fn test_builder_accept_encoding() {
         let builder = ClientBuilder::new("http://localhost:3000")
@@ -380,7 +380,7 @@ mod tests {
         assert_eq!(builder.accept_encoding, Some(CompressionEncoding::Gzip));
     }
 
-    #[cfg(feature = "compression-gzip")]
+    #[cfg(feature = "compression-gzip-stream")]
     #[test]
     fn test_builder_compression() {
         let config = CompressionConfig::new(512);

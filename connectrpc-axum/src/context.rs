@@ -41,21 +41,21 @@ pub use envelope_compression::{
 };
 
 // Feature-gated codec exports
-#[cfg(feature = "compression-gzip")]
+#[cfg(feature = "compression-gzip-stream")]
 pub use envelope_compression::GzipCodec;
-#[cfg(feature = "compression-deflate")]
+#[cfg(feature = "compression-deflate-stream")]
 pub use envelope_compression::DeflateCodec;
-#[cfg(feature = "compression-br")]
+#[cfg(feature = "compression-br-stream")]
 pub use envelope_compression::BrotliCodec;
-#[cfg(feature = "compression-zstd")]
+#[cfg(feature = "compression-zstd-stream")]
 pub use envelope_compression::ZstdCodec;
 
 // Conversion helper (only needed when compression features are enabled)
 #[cfg(any(
-    feature = "compression-gzip",
-    feature = "compression-deflate",
-    feature = "compression-br",
-    feature = "compression-zstd"
+    feature = "compression-gzip-unary",
+    feature = "compression-deflate-unary",
+    feature = "compression-br-unary",
+    feature = "compression-zstd-unary"
 ))]
 pub use envelope_compression::to_tower_compression_level;
 

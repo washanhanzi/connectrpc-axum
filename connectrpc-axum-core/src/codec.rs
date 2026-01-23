@@ -12,18 +12,18 @@ use std::io;
 use std::sync::Arc;
 
 #[cfg(any(
-    feature = "compression-gzip",
-    feature = "compression-deflate",
-    feature = "compression-br",
-    feature = "compression-zstd"
+    feature = "compression-gzip-stream",
+    feature = "compression-deflate-stream",
+    feature = "compression-br-stream",
+    feature = "compression-zstd-stream"
 ))]
 use std::io::{Read, Write};
 
-#[cfg(feature = "compression-gzip")]
+#[cfg(feature = "compression-gzip-stream")]
 use flate2::Compression as GzipLevel;
-#[cfg(feature = "compression-gzip")]
+#[cfg(feature = "compression-gzip-stream")]
 use flate2::read::GzDecoder;
-#[cfg(feature = "compression-gzip")]
+#[cfg(feature = "compression-gzip-stream")]
 use flate2::write::GzEncoder;
 
 /// Codec trait for per-message (envelope) compression.
@@ -100,21 +100,21 @@ impl std::fmt::Debug for BoxedCodec {
 /// Gzip codec using flate2.
 ///
 /// Requires the `compression-gzip` feature.
-#[cfg(feature = "compression-gzip")]
+#[cfg(feature = "compression-gzip-stream")]
 #[derive(Debug, Clone, Copy)]
 pub struct GzipCodec {
     /// Compression level (0-9). Default is 6.
     pub level: u32,
 }
 
-#[cfg(feature = "compression-gzip")]
+#[cfg(feature = "compression-gzip-stream")]
 impl Default for GzipCodec {
     fn default() -> Self {
         Self { level: 6 }
     }
 }
 
-#[cfg(feature = "compression-gzip")]
+#[cfg(feature = "compression-gzip-stream")]
 impl GzipCodec {
     /// Create a new GzipCodec with the specified compression level.
     ///
@@ -126,7 +126,7 @@ impl GzipCodec {
     }
 }
 
-#[cfg(feature = "compression-gzip")]
+#[cfg(feature = "compression-gzip-stream")]
 impl Codec for GzipCodec {
     fn name(&self) -> &'static str {
         "gzip"
@@ -172,21 +172,21 @@ impl Codec for IdentityCodec {
 /// not raw DEFLATE (RFC 1951).
 ///
 /// Requires the `compression-deflate` feature.
-#[cfg(feature = "compression-deflate")]
+#[cfg(feature = "compression-deflate-stream")]
 #[derive(Debug, Clone, Copy)]
 pub struct DeflateCodec {
     /// Compression level (0-9). Default is 6.
     pub level: u32,
 }
 
-#[cfg(feature = "compression-deflate")]
+#[cfg(feature = "compression-deflate-stream")]
 impl Default for DeflateCodec {
     fn default() -> Self {
         Self { level: 6 }
     }
 }
 
-#[cfg(feature = "compression-deflate")]
+#[cfg(feature = "compression-deflate-stream")]
 impl DeflateCodec {
     /// Create a new DeflateCodec with the specified compression level.
     ///
@@ -198,7 +198,7 @@ impl DeflateCodec {
     }
 }
 
-#[cfg(feature = "compression-deflate")]
+#[cfg(feature = "compression-deflate-stream")]
 impl Codec for DeflateCodec {
     fn name(&self) -> &'static str {
         "deflate"
@@ -223,21 +223,21 @@ impl Codec for DeflateCodec {
 /// Brotli codec.
 ///
 /// Requires the `compression-br` feature.
-#[cfg(feature = "compression-br")]
+#[cfg(feature = "compression-br-stream")]
 #[derive(Debug, Clone, Copy)]
 pub struct BrotliCodec {
     /// Compression quality (0-11). Default is 4.
     pub quality: u32,
 }
 
-#[cfg(feature = "compression-br")]
+#[cfg(feature = "compression-br-stream")]
 impl Default for BrotliCodec {
     fn default() -> Self {
         Self { quality: 4 }
     }
 }
 
-#[cfg(feature = "compression-br")]
+#[cfg(feature = "compression-br-stream")]
 impl BrotliCodec {
     /// Create a new BrotliCodec with the specified quality level.
     ///
@@ -249,7 +249,7 @@ impl BrotliCodec {
     }
 }
 
-#[cfg(feature = "compression-br")]
+#[cfg(feature = "compression-br-stream")]
 impl Codec for BrotliCodec {
     fn name(&self) -> &'static str {
         "br"
@@ -276,21 +276,21 @@ impl Codec for BrotliCodec {
 /// Zstd codec.
 ///
 /// Requires the `compression-zstd` feature.
-#[cfg(feature = "compression-zstd")]
+#[cfg(feature = "compression-zstd-stream")]
 #[derive(Debug, Clone, Copy)]
 pub struct ZstdCodec {
     /// Compression level (1-22). Default is 3.
     pub level: i32,
 }
 
-#[cfg(feature = "compression-zstd")]
+#[cfg(feature = "compression-zstd-stream")]
 impl Default for ZstdCodec {
     fn default() -> Self {
         Self { level: 3 }
     }
 }
 
-#[cfg(feature = "compression-zstd")]
+#[cfg(feature = "compression-zstd-stream")]
 impl ZstdCodec {
     /// Create a new ZstdCodec with the specified compression level.
     ///
@@ -302,7 +302,7 @@ impl ZstdCodec {
     }
 }
 
-#[cfg(feature = "compression-zstd")]
+#[cfg(feature = "compression-zstd-stream")]
 impl Codec for ZstdCodec {
     fn name(&self) -> &'static str {
         "zstd"
@@ -346,7 +346,7 @@ pub fn decompress_bytes(bytes: Bytes, codec: Option<&BoxedCodec>) -> io::Result<
 mod tests {
     use super::*;
 
-    #[cfg(feature = "compression-gzip")]
+    #[cfg(feature = "compression-gzip-stream")]
     #[test]
     fn test_gzip_codec_compress_decompress() {
         let codec = GzipCodec::default();
@@ -360,7 +360,7 @@ mod tests {
         assert_eq!(&decompressed[..], &original[..]);
     }
 
-    #[cfg(feature = "compression-gzip")]
+    #[cfg(feature = "compression-gzip-stream")]
     #[test]
     fn test_gzip_codec_with_level() {
         let codec = GzipCodec::with_level(9);
@@ -385,7 +385,7 @@ mod tests {
         assert_eq!(&decompressed[..], &original[..]);
     }
 
-    #[cfg(feature = "compression-gzip")]
+    #[cfg(feature = "compression-gzip-stream")]
     #[test]
     fn test_boxed_codec() {
         let codec = BoxedCodec::new(GzipCodec::default());
@@ -399,7 +399,7 @@ mod tests {
         assert_eq!(&decompressed[..], &original[..]);
     }
 
-    #[cfg(feature = "compression-gzip")]
+    #[cfg(feature = "compression-gzip-stream")]
     #[test]
     fn test_compress_decompress_bytes_with_codec() {
         let codec = BoxedCodec::new(GzipCodec::default());
@@ -423,7 +423,7 @@ mod tests {
         assert_eq!(decompressed, original);
     }
 
-    #[cfg(feature = "compression-gzip")]
+    #[cfg(feature = "compression-gzip-stream")]
     #[test]
     fn test_decompress_invalid_gzip() {
         let codec = BoxedCodec::new(GzipCodec::default());
@@ -432,7 +432,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[cfg(feature = "compression-gzip")]
+    #[cfg(feature = "compression-gzip-stream")]
     #[test]
     fn test_boxed_codec_debug() {
         let codec = BoxedCodec::new(GzipCodec::default());
@@ -441,7 +441,7 @@ mod tests {
         assert!(debug_str.contains("gzip"));
     }
 
-    #[cfg(feature = "compression-br")]
+    #[cfg(feature = "compression-br-stream")]
     #[test]
     fn test_brotli_codec_compress_decompress() {
         let codec = BrotliCodec::default();
@@ -455,7 +455,7 @@ mod tests {
         assert_eq!(&decompressed[..], &original[..]);
     }
 
-    #[cfg(feature = "compression-br")]
+    #[cfg(feature = "compression-br-stream")]
     #[test]
     fn test_brotli_codec_with_quality() {
         let codec = BrotliCodec::with_quality(11);
@@ -467,7 +467,7 @@ mod tests {
         assert_eq!(&decompressed[..], &original[..]);
     }
 
-    #[cfg(feature = "compression-zstd")]
+    #[cfg(feature = "compression-zstd-stream")]
     #[test]
     fn test_zstd_codec_compress_decompress() {
         let codec = ZstdCodec::default();
@@ -481,7 +481,7 @@ mod tests {
         assert_eq!(&decompressed[..], &original[..]);
     }
 
-    #[cfg(feature = "compression-zstd")]
+    #[cfg(feature = "compression-zstd-stream")]
     #[test]
     fn test_zstd_codec_with_level() {
         let codec = ZstdCodec::with_level(19);

@@ -33,10 +33,10 @@ pub use connectrpc_axum_core::{
 ///
 /// This is needed because tower-http's CompressionLayer uses its own type.
 #[cfg(any(
-    feature = "compression-gzip",
-    feature = "compression-deflate",
-    feature = "compression-br",
-    feature = "compression-zstd"
+    feature = "compression-gzip-unary",
+    feature = "compression-deflate-unary",
+    feature = "compression-br-unary",
+    feature = "compression-zstd-unary"
 ))]
 pub fn to_tower_compression_level(level: CompressionLevel) -> tower_http::CompressionLevel {
     match level {
@@ -47,16 +47,16 @@ pub fn to_tower_compression_level(level: CompressionLevel) -> tower_http::Compre
     }
 }
 
-#[cfg(feature = "compression-gzip")]
+#[cfg(feature = "compression-gzip-stream")]
 pub use connectrpc_axum_core::GzipCodec;
 
-#[cfg(feature = "compression-deflate")]
+#[cfg(feature = "compression-deflate-stream")]
 pub use connectrpc_axum_core::DeflateCodec;
 
-#[cfg(feature = "compression-br")]
+#[cfg(feature = "compression-br-stream")]
 pub use connectrpc_axum_core::BrotliCodec;
 
-#[cfg(feature = "compression-zstd")]
+#[cfg(feature = "compression-zstd-stream")]
 pub use connectrpc_axum_core::ZstdCodec;
 
 // ============================================================================
@@ -136,13 +136,13 @@ pub fn parse_envelope_compression<B>(
 pub fn resolve_codec(name: &str) -> Result<Option<BoxedCodec>, ConnectError> {
     match name {
         "" | "identity" => Ok(None),
-        #[cfg(feature = "compression-gzip")]
+        #[cfg(feature = "compression-gzip-stream")]
         "gzip" => Ok(Some(BoxedCodec::new(GzipCodec::default()))),
-        #[cfg(feature = "compression-deflate")]
+        #[cfg(feature = "compression-deflate-stream")]
         "deflate" => Ok(Some(BoxedCodec::new(DeflateCodec::default()))),
-        #[cfg(feature = "compression-br")]
+        #[cfg(feature = "compression-br-stream")]
         "br" => Ok(Some(BoxedCodec::new(BrotliCodec::default()))),
-        #[cfg(feature = "compression-zstd")]
+        #[cfg(feature = "compression-zstd-stream")]
         "zstd" => Ok(Some(BoxedCodec::new(ZstdCodec::default()))),
         other => Err(ConnectError::new(
             Code::Unimplemented,
@@ -179,7 +179,7 @@ mod tests {
         assert_eq!(CompressionEncoding::from_header(Some("lz4")), None);
     }
 
-    #[cfg(feature = "compression-gzip")]
+    #[cfg(feature = "compression-gzip-stream")]
     #[test]
     fn test_compression_encoding_from_header_gzip() {
         assert_eq!(
@@ -193,13 +193,13 @@ mod tests {
         assert_eq!(CompressionEncoding::Identity.as_str(), "identity");
     }
 
-    #[cfg(feature = "compression-gzip")]
+    #[cfg(feature = "compression-gzip-stream")]
     #[test]
     fn test_compression_encoding_as_str_gzip() {
         assert_eq!(CompressionEncoding::Gzip.as_str(), "gzip");
     }
 
-    #[cfg(feature = "compression-gzip")]
+    #[cfg(feature = "compression-gzip-stream")]
     #[test]
     fn test_compression_encoding_codec() {
         // Identity returns None
@@ -223,7 +223,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "compression-gzip")]
+    #[cfg(feature = "compression-gzip-stream")]
     #[test]
     fn test_negotiate_response_encoding_gzip() {
         assert_eq!(
@@ -232,7 +232,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "compression-gzip")]
+    #[cfg(feature = "compression-gzip-stream")]
     #[test]
     fn test_negotiate_response_encoding_q_values() {
         // q=0 means "not acceptable" - should be skipped
@@ -256,7 +256,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "compression-gzip")]
+    #[cfg(feature = "compression-gzip-stream")]
     #[test]
     fn test_gzip_codec_compress_decompress() {
         let codec = GzipCodec::default();
@@ -280,7 +280,7 @@ mod tests {
         assert!(resolve_codec("lz4").is_err());
     }
 
-    #[cfg(feature = "compression-gzip")]
+    #[cfg(feature = "compression-gzip-stream")]
     #[test]
     fn test_resolve_codec_gzip() {
         let codec = resolve_codec("gzip").unwrap();
@@ -307,7 +307,7 @@ mod tests {
         assert_eq!(config.min_bytes, usize::MAX);
     }
 
-    #[cfg(feature = "compression-br")]
+    #[cfg(feature = "compression-br-stream")]
     #[test]
     fn test_brotli_codec_compress_decompress() {
         let codec = BrotliCodec::default();
@@ -321,7 +321,7 @@ mod tests {
         assert_eq!(&decompressed[..], &original[..]);
     }
 
-    #[cfg(feature = "compression-zstd")]
+    #[cfg(feature = "compression-zstd-stream")]
     #[test]
     fn test_zstd_codec_compress_decompress() {
         let codec = ZstdCodec::default();

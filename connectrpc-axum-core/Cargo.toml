@@ -21,8 +21,8 @@ zstd = { workspace = true, optional = true }
 
 [features]
 default = []
-compression-gzip = ["dep:flate2"]
-compression-deflate = ["dep:flate2"]
-compression-br = ["dep:brotli"]
-compression-zstd = ["dep:zstd"]
-compression-full = ["compression-gzip", "compression-deflate", "compression-br", "compression-zstd"]
+compression-gzip-stream = ["dep:flate2"]
+compression-deflate-stream = ["dep:flate2"]
+compression-br-stream = ["dep:brotli"]
+compression-zstd-stream = ["dep:zstd"]
+compression-full-stream = ["compression-gzip-stream", "compression-deflate-stream", "compression-br-stream", "compression-zstd-stream"]

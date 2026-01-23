@@ -78,13 +78,13 @@ pub use context::{
     resolve_codec,
 };
 // Feature-gated codec exports
-#[cfg(feature = "compression-gzip")]
+#[cfg(feature = "compression-gzip-stream")]
 pub use context::GzipCodec;
-#[cfg(feature = "compression-deflate")]
+#[cfg(feature = "compression-deflate-stream")]
 pub use context::DeflateCodec;
-#[cfg(feature = "compression-br")]
+#[cfg(feature = "compression-br-stream")]
 pub use context::BrotliCodec;
-#[cfg(feature = "compression-zstd")]
+#[cfg(feature = "compression-zstd-stream")]
 pub use context::ZstdCodec;
 // Re-export from message module
 pub use handler::{ConnectHandler, ConnectHandlerWrapper, get_connect, post_connect};
@@ -140,13 +140,13 @@ pub mod prelude {
         resolve_codec,
     };
     // Feature-gated codec exports for prelude
-    #[cfg(feature = "compression-gzip")]
+    #[cfg(feature = "compression-gzip-stream")]
     pub use crate::context::GzipCodec;
-    #[cfg(feature = "compression-deflate")]
+    #[cfg(feature = "compression-deflate-stream")]
     pub use crate::context::DeflateCodec;
-    #[cfg(feature = "compression-br")]
+    #[cfg(feature = "compression-br-stream")]
     pub use crate::context::BrotliCodec;
-    #[cfg(feature = "compression-zstd")]
+    #[cfg(feature = "compression-zstd-stream")]
     pub use crate::context::ZstdCodec;
 
     pub use crate::message::error::{Code, ConnectError, ErrorDetail};

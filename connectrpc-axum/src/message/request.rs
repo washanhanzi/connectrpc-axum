@@ -525,7 +525,7 @@ where
 
     // 2. Decompress if compression is specified
     let bytes = match params.compression.as_deref() {
-        #[cfg(feature = "compression-gzip")]
+        #[cfg(feature = "compression-gzip-stream")]
         Some("gzip") => decompress_bytes(bytes.into(), CompressionEncoding::Gzip)?,
         Some("identity") | Some("") | None => bytes.into(),
         Some(other) => {
