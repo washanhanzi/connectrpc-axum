@@ -14,7 +14,7 @@ use std::{
 use tower::{Layer, Service};
 
 use crate::context::protocol::detect_protocol;
-use crate::error::{Code, ConnectError};
+use crate::message::error::{Code, ConnectError};
 
 /// Layer that bridges Tower compression with Connect protocol requirements.
 ///

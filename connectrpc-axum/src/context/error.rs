@@ -2,7 +2,7 @@
 
 use crate::context::RequestProtocol;
 use crate::context::protocol::SUPPORTED_CONTENT_TYPES;
-use crate::error::{Code, ConnectError};
+use crate::message::error::{Code, ConnectError};
 use axum::body::Body;
 use axum::http::StatusCode;
 use axum::response::Response;

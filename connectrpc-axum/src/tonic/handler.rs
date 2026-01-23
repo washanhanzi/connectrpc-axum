@@ -14,8 +14,8 @@ use std::{future::Future, pin::Pin};
 
 use crate::{
     context::ConnectContext,
-    error::ConnectError,
     handler::{handle_extractor_rejection, validate_streaming_protocol},
+    message::error::ConnectError,
     message::{ConnectRequest, ConnectResponse, StreamBody, Streaming},
 };
 use prost::Message;
@@ -318,7 +318,7 @@ macro_rules! impl_into_factory_with_extractors {
                         Box::pin(async move {
                             // Extractors require RequestContext - error if middleware not applied
                             let ctx = ctx.ok_or_else(|| ConnectError::new(
-                                crate::error::Code::Internal,
+                                crate::message::error::Code::Internal,
                                 "middleware required for handlers with extractor",
                             ))?;
                             let mut parts = ctx.into_parts();
@@ -363,7 +363,7 @@ macro_rules! impl_into_stream_factory_with_extractors {
                         Box::pin(async move {
                             // Extractors require RequestContext - error if middleware not applied
                             let ctx = ctx.ok_or_else(|| ConnectError::new(
-                                crate::error::Code::Internal,
+                                crate::message::error::Code::Internal,
                                 "middleware required for handlers with extractor",
                             ))?;
                             let mut parts = ctx.into_parts();
@@ -410,7 +410,7 @@ macro_rules! impl_into_client_stream_factory_with_extractors {
                         let state = state.clone();
                         Box::pin(async move {
                             let ctx = ctx.ok_or_else(|| ConnectError::new(
-                                crate::error::Code::Internal,
+                                crate::message::error::Code::Internal,
                                 "middleware required for handlers with extractor",
                             ))?;
                             let mut parts = ctx.into_parts();
@@ -454,7 +454,7 @@ macro_rules! impl_into_bidi_stream_factory_with_extractors {
                         let state = state.clone();
                         Box::pin(async move {
                             let ctx = ctx.ok_or_else(|| ConnectError::new(
-                                crate::error::Code::Internal,
+                                crate::message::error::Code::Internal,
                                 "middleware required for handlers with extractor",
                             ))?;
                             let mut parts = ctx.into_parts();

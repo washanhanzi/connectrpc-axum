@@ -1,11 +1,13 @@
 //! Error response parsing for Connect protocol.
 //!
-//! Parses JSON error responses from Connect servers into [`ConnectError`].
+//! Parses JSON error responses from Connect servers into [`ClientError`].
 
 use base64::Engine;
-use connectrpc_axum_core::{Code, ConnectError, ErrorDetail};
+use connectrpc_axum_core::{Code, ErrorDetail};
 use reqwest::Response;
 use serde::Deserialize;
+
+use crate::ClientError;
 
 /// Parse an error response from the server.
 ///
@@ -22,14 +24,14 @@ use serde::Deserialize;
 ///
 /// If the response body cannot be parsed as a Connect error, falls back to
 /// creating an error based on the HTTP status code.
-pub async fn parse_error_response(response: Response) -> ConnectError {
+pub async fn parse_error_response(response: Response) -> ClientError {
     let status = response.status();
 
     // Try to read the response body
     let body_bytes = match response.bytes().await {
         Ok(bytes) => bytes,
         Err(e) => {
-            return ConnectError::Transport(format!(
+            return ClientError::Transport(format!(
                 "failed to read error response body: {}",
                 e
             ));
@@ -45,11 +47,11 @@ pub async fn parse_error_response(response: Response) -> ConnectError {
                 http_status_to_code(status)
             });
 
-            // Build ConnectError
+            // Build ClientError
             let mut err = if let Some(message) = error_json.message {
-                ConnectError::new(code, message)
+                ClientError::new(code, message)
             } else {
-                ConnectError::from_code(code)
+                ClientError::from_code(code)
             };
 
             // Parse details
@@ -70,7 +72,7 @@ pub async fn parse_error_response(response: Response) -> ConnectError {
                 // Try to use body as message if it's valid UTF-8
                 std::str::from_utf8(&body_bytes).unwrap_or("Unknown error")
             };
-            ConnectError::new(code, message)
+            ClientError::new(code, message)
         }
     }
 }

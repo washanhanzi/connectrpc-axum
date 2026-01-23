@@ -11,8 +11,7 @@ use crate::{
         ConnectContext, RequestProtocol, validate_streaming_content_type,
         validate_unary_content_type,
     },
-    error::ConnectError,
-    message::{ConnectRequest, ConnectResponse, StreamBody, Streaming},
+    message::{ConnectError, ConnectRequest, ConnectResponse, StreamBody, Streaming},
 };
 use futures::Stream;
 use prost::Message;

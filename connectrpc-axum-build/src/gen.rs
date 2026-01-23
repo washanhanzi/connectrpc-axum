@@ -1035,7 +1035,7 @@ fn generate_connect_client(
                         pub async fn #method_name(
                             &self,
                             request: &#request_type,
-                        ) -> Result<connectrpc_axum_client::ConnectResponse<#response_type>, connectrpc_axum_client::ConnectError> {
+                        ) -> Result<connectrpc_axum_client::ConnectResponse<#response_type>, connectrpc_axum_client::ClientError> {
                             self.inner.call_unary(#path, request).await
                         }
                     }
@@ -1060,7 +1060,7 @@ fn generate_connect_client(
                                     >
                                 >
                             >,
-                            connectrpc_axum_client::ConnectError
+                            connectrpc_axum_client::ClientError
                         > {
                             self.inner.call_server_stream(#path, request).await
                         }
@@ -1083,7 +1083,7 @@ fn generate_connect_client(
                         pub async fn #method_name<S>(
                             &self,
                             request: S,
-                        ) -> Result<connectrpc_axum_client::ConnectResponse<#response_type>, connectrpc_axum_client::ConnectError>
+                        ) -> Result<connectrpc_axum_client::ConnectResponse<#response_type>, connectrpc_axum_client::ClientError>
                         where
                             S: ::futures::Stream<Item = #request_type> + Send + Unpin + 'static,
                         {
@@ -1119,7 +1119,7 @@ fn generate_connect_client(
                                     >
                                 >
                             >,
-                            connectrpc_axum_client::ConnectError
+                            connectrpc_axum_client::ClientError
                         >
                         where
                             S: ::futures::Stream<Item = #request_type> + Send + Unpin + 'static,

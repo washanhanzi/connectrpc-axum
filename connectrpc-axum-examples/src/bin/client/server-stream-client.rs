@@ -12,7 +12,7 @@
 //!   # Or specify a custom server URL:
 //!   cargo run --bin server-stream-client --no-default-features -- http://localhost:8080
 
-use connectrpc_axum_client::{Code, ConnectClient, ConnectError};
+use connectrpc_axum_client::{Code, ConnectClient, ClientError};
 use connectrpc_axum_examples::{HelloRequest, HelloResponse};
 use futures::StreamExt;
 use std::env;
@@ -171,7 +171,7 @@ async fn main() -> anyhow::Result<()> {
             .await;
 
         match result {
-            Err(ConnectError::Transport(_)) => {
+            Err(ClientError::Transport(_)) => {
                 println!("  PASS: Got expected Transport error");
             }
             Err(other) => {
@@ -206,7 +206,7 @@ async fn main() -> anyhow::Result<()> {
         let stream = response.into_inner();
 
         // Collect all results
-        let results: Vec<Result<HelloResponse, ConnectError>> = stream.collect().await;
+        let results: Vec<Result<HelloResponse, ClientError>> = stream.collect().await;
         let messages: Result<Vec<_>, _> = results.into_iter().collect();
         let messages = messages?;
 

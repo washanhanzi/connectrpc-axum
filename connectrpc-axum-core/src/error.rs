@@ -3,7 +3,7 @@
 //! This module provides the core error types used by the Connect protocol:
 //! - [`Code`]: Protocol status codes
 //! - [`ErrorDetail`]: Self-describing error details
-//! - [`ConnectError`]: Protocol error type
+//! - [`EnvelopeError`]: Envelope framing errors
 
 use serde::{Serialize, Serializer};
 
@@ -174,176 +174,27 @@ impl Serialize for ErrorDetail {
     }
 }
 
-/// Connect protocol error variants.
+/// Envelope framing errors.
 ///
-/// This enum represents the different types of errors that can occur
-/// during RPC communication.
+/// This error type is used for errors that occur during envelope parsing
+/// and decompression in the Connect streaming protocol.
 #[derive(Clone, Debug, thiserror::Error)]
-pub enum ConnectError {
-    /// A status error from the RPC handler with code, message, and optional details.
-    #[error("{message:?}")]
-    Status {
-        code: Code,
-        message: Option<String>,
-        details: Vec<ErrorDetail>,
-    },
+pub enum EnvelopeError {
+    /// Incomplete envelope header.
+    #[error("incomplete envelope header: expected {expected} bytes, got {actual}")]
+    IncompleteHeader { expected: usize, actual: usize },
 
-    /// Transport-level error (connection failed, timeout, etc.).
-    #[error("transport error: {0}")]
-    Transport(String),
+    /// Invalid frame flags.
+    #[error("invalid frame flags: 0x{0:02x}")]
+    InvalidFlags(u8),
 
-    /// Message encoding error.
-    #[error("encode error: {0}")]
-    Encode(String),
+    /// Decompression failed.
+    #[error("decompression failed: {0}")]
+    Decompression(String),
 
-    /// Message decoding error.
-    #[error("decode error: {0}")]
-    Decode(String),
-
-    /// Protocol error (malformed frames, unexpected data, etc.).
-    #[error("protocol error: {0}")]
-    Protocol(String),
-}
-
-impl ConnectError {
-    /// Create a new status error with a code and message.
-    pub fn new<S: Into<String>>(code: Code, message: S) -> Self {
-        ConnectError::Status {
-            code,
-            message: Some(message.into()),
-            details: vec![],
-        }
-    }
-
-    /// Create a new status error with just a code.
-    pub fn from_code(code: Code) -> Self {
-        ConnectError::Status {
-            code,
-            message: None,
-            details: vec![],
-        }
-    }
-
-    /// Get the error code.
-    ///
-    /// For non-Status variants, returns an appropriate code:
-    /// - Transport: `Unavailable`
-    /// - Encode/Decode: `Internal`
-    /// - Protocol: `InvalidArgument`
-    pub fn code(&self) -> Code {
-        match self {
-            ConnectError::Status { code, .. } => *code,
-            ConnectError::Transport(_) => Code::Unavailable,
-            ConnectError::Encode(_) | ConnectError::Decode(_) => Code::Internal,
-            ConnectError::Protocol(_) => Code::InvalidArgument,
-        }
-    }
-
-    /// Get the error message.
-    pub fn message(&self) -> Option<&str> {
-        match self {
-            ConnectError::Status { message, .. } => message.as_deref(),
-            ConnectError::Transport(msg)
-            | ConnectError::Encode(msg)
-            | ConnectError::Decode(msg)
-            | ConnectError::Protocol(msg) => Some(msg),
-        }
-    }
-
-    /// Get the error details (only for Status variant).
-    pub fn details(&self) -> &[ErrorDetail] {
-        match self {
-            ConnectError::Status { details, .. } => details,
-            _ => &[],
-        }
-    }
-
-    /// Add an error detail with type URL and protobuf-encoded bytes.
-    pub fn add_detail<S: Into<String>>(mut self, type_url: S, value: Vec<u8>) -> Self {
-        if let ConnectError::Status { details, .. } = &mut self {
-            details.push(ErrorDetail::new(type_url, value));
-        }
-        self
-    }
-
-    /// Add a pre-constructed ErrorDetail.
-    pub fn add_error_detail(mut self, detail: ErrorDetail) -> Self {
-        if let ConnectError::Status { details, .. } = &mut self {
-            details.push(detail);
-        }
-        self
-    }
-
-    // Convenience constructors
-
-    /// Create an unimplemented error.
-    pub fn unimplemented<S: Into<String>>(message: S) -> Self {
-        Self::new(Code::Unimplemented, message)
-    }
-
-    /// Create an invalid argument error.
-    pub fn invalid_argument<S: Into<String>>(message: S) -> Self {
-        Self::new(Code::InvalidArgument, message)
-    }
-
-    /// Create a not found error.
-    pub fn not_found<S: Into<String>>(message: S) -> Self {
-        Self::new(Code::NotFound, message)
-    }
-
-    /// Create a permission denied error.
-    pub fn permission_denied<S: Into<String>>(message: S) -> Self {
-        Self::new(Code::PermissionDenied, message)
-    }
-
-    /// Create an unauthenticated error.
-    pub fn unauthenticated<S: Into<String>>(message: S) -> Self {
-        Self::new(Code::Unauthenticated, message)
-    }
-
-    /// Create an internal error.
-    pub fn internal<S: Into<String>>(message: S) -> Self {
-        Self::new(Code::Internal, message)
-    }
-
-    /// Create an unavailable error.
-    pub fn unavailable<S: Into<String>>(message: S) -> Self {
-        Self::new(Code::Unavailable, message)
-    }
-
-    /// Create a resource exhausted error.
-    pub fn resource_exhausted<S: Into<String>>(message: S) -> Self {
-        Self::new(Code::ResourceExhausted, message)
-    }
-
-    /// Create a data loss error.
-    pub fn data_loss<S: Into<String>>(message: S) -> Self {
-        Self::new(Code::DataLoss, message)
-    }
-
-    /// Returns whether this error indicates a transient condition that may
-    /// be resolved by retrying.
-    ///
-    /// This is a convenience wrapper for [`Code::is_retryable()`].
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use connectrpc_axum_core::{Code, ConnectError};
-    ///
-    /// let err = ConnectError::unavailable("service overloaded");
-    /// assert!(err.is_retryable());
-    ///
-    /// let err = ConnectError::not_found("resource missing");
-    /// assert!(!err.is_retryable());
-    ///
-    /// // Transport errors are also retryable (they map to Unavailable)
-    /// let err = ConnectError::Transport("connection reset".into());
-    /// assert!(err.is_retryable());
-    /// ```
-    pub fn is_retryable(&self) -> bool {
-        self.code().is_retryable()
-    }
+    /// Compression failed.
+    #[error("compression failed: {0}")]
+    Compression(String),
 }
 
 /// JSON body structure for error responses.
@@ -354,16 +205,6 @@ pub struct ErrorResponseBody {
     pub message: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub details: Vec<ErrorDetail>,
-}
-
-impl From<&ConnectError> for ErrorResponseBody {
-    fn from(err: &ConnectError) -> Self {
-        ErrorResponseBody {
-            code: err.code(),
-            message: err.message().map(String::from),
-            details: err.details().to_vec(),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -384,49 +225,6 @@ mod tests {
         assert_eq!(Code::from_str("canceled"), Some(Code::Canceled));
         assert_eq!(Code::from_str("cancelled"), Some(Code::Canceled)); // British spelling
         assert_eq!(Code::from_str("unknown_code"), None);
-    }
-
-    #[test]
-    fn test_connect_error_new() {
-        let err = ConnectError::new(Code::NotFound, "resource not found");
-        assert_eq!(err.code(), Code::NotFound);
-        assert_eq!(err.message(), Some("resource not found"));
-        assert!(err.details().is_empty());
-    }
-
-    #[test]
-    fn test_connect_error_from_code() {
-        let err = ConnectError::from_code(Code::Internal);
-        assert_eq!(err.code(), Code::Internal);
-        assert!(err.message().is_none());
-    }
-
-    #[test]
-    fn test_connect_error_variants_code() {
-        let status = ConnectError::new(Code::NotFound, "not found");
-        assert_eq!(status.code(), Code::NotFound);
-
-        let transport = ConnectError::Transport("connection refused".into());
-        assert_eq!(transport.code(), Code::Unavailable);
-
-        let encode = ConnectError::Encode("serialization failed".into());
-        assert_eq!(encode.code(), Code::Internal);
-
-        let decode = ConnectError::Decode("deserialization failed".into());
-        assert_eq!(decode.code(), Code::Internal);
-
-        let protocol = ConnectError::Protocol("invalid frame".into());
-        assert_eq!(protocol.code(), Code::InvalidArgument);
-    }
-
-    #[test]
-    fn test_connect_error_add_detail() {
-        let err = ConnectError::new(Code::Internal, "error")
-            .add_detail("test.Type", vec![1, 2, 3]);
-
-        assert_eq!(err.details().len(), 1);
-        assert_eq!(err.details()[0].type_url(), "test.Type");
-        assert_eq!(err.details()[0].value(), &[1, 2, 3]);
     }
 
     #[test]
@@ -473,23 +271,23 @@ mod tests {
     }
 
     #[test]
-    fn test_connect_error_is_retryable() {
-        // Status errors with retryable codes
-        assert!(ConnectError::unavailable("service down").is_retryable());
-        assert!(ConnectError::resource_exhausted("rate limited").is_retryable());
-        assert!(ConnectError::new(Code::Aborted, "retry please").is_retryable());
+    fn test_envelope_error_display() {
+        let err = EnvelopeError::IncompleteHeader {
+            expected: 5,
+            actual: 3,
+        };
+        assert_eq!(
+            err.to_string(),
+            "incomplete envelope header: expected 5 bytes, got 3"
+        );
 
-        // Status errors with non-retryable codes
-        assert!(!ConnectError::not_found("missing").is_retryable());
-        assert!(!ConnectError::invalid_argument("bad input").is_retryable());
-        assert!(!ConnectError::internal("server error").is_retryable());
+        let err = EnvelopeError::InvalidFlags(0xFF);
+        assert_eq!(err.to_string(), "invalid frame flags: 0xff");
 
-        // Transport errors are retryable (map to Unavailable)
-        assert!(ConnectError::Transport("connection reset".into()).is_retryable());
+        let err = EnvelopeError::Decompression("gzip failed".into());
+        assert_eq!(err.to_string(), "decompression failed: gzip failed");
 
-        // Encode/Decode/Protocol errors are not retryable
-        assert!(!ConnectError::Encode("bad encoding".into()).is_retryable());
-        assert!(!ConnectError::Decode("bad decoding".into()).is_retryable());
-        assert!(!ConnectError::Protocol("bad frame".into()).is_retryable());
+        let err = EnvelopeError::Compression("gzip failed".into());
+        assert_eq!(err.to_string(), "compression failed: gzip failed");
     }
 }

@@ -6,7 +6,7 @@
 use crate::context::error::ProtocolNegotiationError;
 use crate::context::protocol::{can_handle_content_type, can_handle_get_encoding, detect_protocol};
 use crate::context::{CompressionConfig, ConnectContext, MessageLimits, ServerConfig};
-use crate::error::{Code, ConnectError};
+use crate::message::error::{Code, ConnectError};
 use axum::http::{Method, Request};
 use axum::response::Response;
 use std::time::Duration;

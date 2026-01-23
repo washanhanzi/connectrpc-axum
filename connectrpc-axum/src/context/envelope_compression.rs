@@ -13,7 +13,7 @@
 //! - **Streaming RPCs**: Use `Connect-Content-Encoding`/`Connect-Accept-Encoding` headers.
 //!   Each message envelope is individually compressed. This module handles that.
 
-use crate::error::{Code, ConnectError};
+use crate::message::error::{Code, ConnectError};
 
 // Re-export core types
 pub use connectrpc_axum_core::{

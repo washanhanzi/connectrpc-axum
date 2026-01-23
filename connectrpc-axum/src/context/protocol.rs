@@ -6,7 +6,7 @@
 //! - Validation functions for protocol version and content-type
 
 use crate::context::envelope_compression::resolve_codec;
-use crate::error::{Code, ConnectError};
+use crate::message::error::{Code, ConnectError};
 use axum::http::{Method, Request, header};
 
 // ============================================================================

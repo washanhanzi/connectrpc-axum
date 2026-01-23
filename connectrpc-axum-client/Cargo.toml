@@ -30,7 +30,7 @@ http = { workspace = true }
 
 # Async
 futures = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["macros", "time"] }
 
 # Compression (re-use from core via features)
 flate2 = { workspace = true, optional = true }

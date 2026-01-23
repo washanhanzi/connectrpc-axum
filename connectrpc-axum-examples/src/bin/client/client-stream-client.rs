@@ -12,7 +12,7 @@
 //!   # Or specify a custom server URL:
 //!   cargo run --bin client-stream-client --no-default-features -- http://localhost:8080
 
-use connectrpc_axum_client::{ConnectClient, ConnectError, ConnectResponse as ClientResponse};
+use connectrpc_axum_client::{ConnectClient, ClientError, ConnectResponse as ClientResponse};
 use connectrpc_axum_examples::{EchoRequest, EchoResponse};
 use futures::stream;
 use std::env;
@@ -178,12 +178,12 @@ async fn main() -> anyhow::Result<()> {
 
         let request_stream = stream::iter(messages);
 
-        let result: Result<ClientResponse<EchoResponse>, ConnectError> = client
+        let result: Result<ClientResponse<EchoResponse>, ClientError> = client
             .call_client_stream("echo.EchoService/EchoClientStream", request_stream)
             .await;
 
         match result {
-            Err(ConnectError::Transport(_)) => {
+            Err(ClientError::Transport(_)) => {
                 println!("  PASS: Got expected Transport error");
             }
             other => {

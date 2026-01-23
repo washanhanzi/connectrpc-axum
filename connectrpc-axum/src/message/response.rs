@@ -1,13 +1,20 @@
 //! Response types for Connect.
+//!
+//! This module provides response encoding primitives for Connect RPC.
+//!
+//! ## Primitive Functions
+//!
+//! - [`encode_proto`]: Encode protobuf message to bytes
+//! - [`encode_json`]: Encode JSON message to bytes
+//! - [`compress_bytes`]: Compress bytes if beneficial
+//! - [`wrap_envelope`]: Wrap payload in a Connect streaming frame
+//! - [`set_connect_content_encoding`]: Set Connect-Content-Encoding header
 use crate::context::{CompressionConfig, CompressionEncoding, ConnectContext};
-use crate::error::{
-    ConnectError, internal_error_end_stream_frame, internal_error_response,
-    internal_error_streaming_response,
+use crate::message::error::{
+    Code, ConnectError, build_end_stream_frame, internal_error_end_stream_frame,
+    internal_error_response, internal_error_streaming_response,
 };
-use crate::pipeline::{
-    build_end_stream_frame, compress_bytes, encode_json, encode_proto,
-    set_connect_content_encoding, wrap_envelope,
-};
+use crate::message::request::envelope_flags;
 use axum::{
     body::{Body, Bytes},
     http::{HeaderValue, StatusCode, header},
@@ -16,6 +23,96 @@ use axum::{
 use futures::Stream;
 use prost::Message;
 use serde::Serialize;
+
+// ============================================================================
+// Primitive Encode Functions
+// ============================================================================
+
+/// Encode a protobuf message to bytes.
+pub fn encode_proto<T>(message: &T) -> Vec<u8>
+where
+    T: Message,
+{
+    message.encode_to_vec()
+}
+
+/// Encode a message to JSON bytes.
+///
+/// Returns `Internal` error if serialization fails.
+pub fn encode_json<T>(message: &T) -> Result<Vec<u8>, ConnectError>
+where
+    T: Serialize,
+{
+    serde_json::to_vec(message).map_err(|e| {
+        ConnectError::new(
+            Code::Internal,
+            format!("failed to encode JSON message: {e}"),
+        )
+    })
+}
+
+/// Compress bytes if beneficial.
+///
+/// Returns a tuple of (data, was_compressed).
+/// Compression is applied only if:
+/// - encoding is not Identity
+/// - data length >= min_bytes threshold
+///
+/// Returns an error if compression fails (matching connect-go behavior).
+pub fn compress_bytes(
+    data: Bytes,
+    encoding: CompressionEncoding,
+    config: &CompressionConfig,
+) -> Result<(Bytes, bool), ConnectError> {
+    let Some(codec) = encoding.codec_with_level(config.level) else {
+        return Ok((data, false));
+    };
+
+    if data.len() < config.min_bytes {
+        return Ok((data, false));
+    }
+
+    match codec.compress(&data) {
+        Ok(compressed) => Ok((compressed, true)),
+        Err(e) => Err(ConnectError::new(Code::Internal, format!("compress: {e}"))),
+    }
+}
+
+/// Wrap payload in a Connect streaming frame envelope.
+///
+/// Frame format: `[flags:1][length:4][payload]`
+///
+/// # Arguments
+/// - `payload`: The message bytes to wrap
+/// - `compressed`: Whether the payload is compressed (sets flag 0x01)
+pub fn wrap_envelope(payload: &[u8], compressed: bool) -> Vec<u8> {
+    let flags = if compressed {
+        envelope_flags::COMPRESSED
+    } else {
+        envelope_flags::MESSAGE
+    };
+
+    let mut frame = Vec::with_capacity(5 + payload.len());
+    frame.push(flags);
+    frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    frame.extend_from_slice(payload);
+    frame
+}
+
+/// Set Connect-Content-Encoding header for streaming responses.
+///
+/// For streaming responses, the Connect protocol uses `connect-content-encoding`
+/// instead of the standard `content-encoding` header.
+/// Only adds the header if encoding is not Identity.
+pub fn set_connect_content_encoding(
+    mut builder: axum::http::response::Builder,
+    encoding: CompressionEncoding,
+) -> axum::http::response::Builder {
+    if encoding != CompressionEncoding::Identity {
+        builder = builder.header("connect-content-encoding", encoding.as_str());
+    }
+    builder
+}
 
 /// Response wrapper for Connect RPC handlers.
 ///
@@ -59,7 +156,7 @@ where
         if let Some(max) = ctx.limits.get_send_max_bytes() {
             if body.len() > max {
                 let msg = format!("message size {} exceeds sendMaxBytes {}", body.len(), max);
-                let err = ConnectError::new(crate::error::Code::ResourceExhausted, msg);
+                let err = ConnectError::new(crate::message::error::Code::ResourceExhausted, msg);
                 return err.into_response_with_protocol(ctx.protocol);
             }
         }
@@ -123,7 +220,7 @@ where
                 } else {
                     format!("message size {} exceeds sendMaxBytes {}", data.len(), max)
                 };
-                let err = ConnectError::new(crate::error::Code::ResourceExhausted, msg);
+                let err = ConnectError::new(crate::message::error::Code::ResourceExhausted, msg);
                 // For streaming protocols, errors are returned as EndStream frames
                 return err.into_response_with_protocol(ctx.protocol);
             }
@@ -213,7 +310,7 @@ where
         config: &CompressionConfig,
         send_max_bytes: Option<usize>,
     ) -> Response {
-        use crate::error::Code;
+        use crate::message::error::Code;
         use futures::StreamExt;
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -324,3 +421,56 @@ where
 }
 
 // Note: IntoResponse for Result<ConnectResponse<T>, ConnectError> is implemented by Axum's default implementation
+
+// ============================================================================
+// ResponsePipeline
+// ============================================================================
+
+use crate::context::error::ContextError;
+use crate::message::request::get_context_or_default;
+
+/// Response pipeline - encodes outgoing response messages.
+///
+/// Handles: protocol encoding, compression, HTTP response building.
+pub struct ResponsePipeline;
+
+impl ResponsePipeline {
+    /// Encode response message to HTTP response.
+    ///
+    /// Reads Context from request extensions.
+    pub fn encode<T>(req: &axum::http::Request<Body>, message: &T) -> Result<Response<Body>, ContextError>
+    where
+        T: Message + Serialize,
+    {
+        // Get context (with fallback to default if layer is missing)
+        let ctx = get_context_or_default(req);
+
+        Self::encode_with_context(&ctx, message)
+    }
+
+    /// Encode with explicit context (when request not available).
+    ///
+    /// Note: For unary RPCs, compression is handled by Tower's CompressionLayer.
+    /// This function only encodes the message, not compresses it.
+    pub fn encode_with_context<T>(
+        ctx: &ConnectContext,
+        message: &T,
+    ) -> Result<Response<Body>, ContextError>
+    where
+        T: Message + Serialize,
+    {
+        // 1. Encode based on protocol
+        let body: Bytes = if ctx.protocol.is_proto() {
+            Bytes::from(encode_proto(message))
+        } else {
+            Bytes::from(encode_json(message).map_err(|e| ContextError::new(ctx.protocol, e))?)
+        };
+
+        // 2. Build HTTP response (compression handled by Tower's CompressionLayer)
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, ctx.protocol.response_content_type())
+            .body(Body::from(body))
+            .map_err(|e| ContextError::internal(ctx.protocol, e.to_string()))
+    }
+}

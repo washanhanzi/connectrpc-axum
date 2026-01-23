@@ -157,7 +157,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 7: Connection error (to verify error handling)
     println!("Test 7: Connection error handling...");
     {
-        use connectrpc_axum_client::ConnectError;
+        use connectrpc_axum_client::ClientError;
 
         let client = ConnectClient::builder("http://127.0.0.1:1")
             .use_json()
@@ -169,12 +169,12 @@ async fn main() -> anyhow::Result<()> {
             greeting_type: None,
         };
 
-        let result: Result<ClientResponse<HelloResponse>, ConnectError> = client
+        let result: Result<ClientResponse<HelloResponse>, ClientError> = client
             .call_unary("hello.HelloWorldService/SayHello", &request)
             .await;
 
         match result {
-            Err(ConnectError::Transport(_)) => {
+            Err(ClientError::Transport(_)) => {
                 println!("  PASS: Got expected Transport error");
             }
             other => {

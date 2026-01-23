@@ -355,18 +355,18 @@
 //!
 //! ### Error-Based Retry Logic
 //!
-//! Use [`Code::is_retryable()`] or [`ConnectError::is_retryable()`] to determine
+//! Use [`Code::is_retryable()`] or [`ClientError::is_retryable()`] to determine
 //! if an error is transient and safe to retry:
 //!
 //! ```ignore
-//! use connectrpc_axum_client::{ConnectClient, Code, ConnectError};
+//! use connectrpc_axum_client::{ConnectClient, Code, ClientError};
 //!
 //! async fn call_with_retry<Req, Res>(
 //!     client: &ConnectClient,
 //!     procedure: &str,
 //!     request: &Req,
 //!     max_retries: u32,
-//! ) -> Result<Res, ConnectError>
+//! ) -> Result<Res, ClientError>
 //! where
 //!     Req: prost::Message,
 //!     Res: prost::Message + Default,
@@ -650,6 +650,7 @@
 
 mod builder;
 mod client;
+mod error;
 mod error_parser;
 mod frame;
 mod options;
@@ -658,15 +659,14 @@ mod stream_body;
 
 pub use builder::{ClientBuildError, ClientBuilder};
 pub use client::ConnectClient;
+pub use error::ClientError;
 pub use frame::{FrameDecoder, FrameEncoder};
 pub use options::CallOptions;
 pub use response::{ConnectResponse, Metadata};
 pub use stream_body::StreamBody;
 
 // Re-export core types that users need
-pub use connectrpc_axum_core::{
-    Code, CompressionConfig, CompressionEncoding, CompressionLevel, ConnectError, ErrorDetail,
-};
+pub use connectrpc_axum_core::{Code, CompressionConfig, CompressionEncoding, CompressionLevel, ErrorDetail};
 
 // Re-export reqwest::Client for generated client builders
 pub use reqwest::Client as HttpClient;

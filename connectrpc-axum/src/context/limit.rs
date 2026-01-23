@@ -12,7 +12,7 @@
 //!   Prevents the server from accidentally sending oversized responses that could
 //!   overwhelm clients or violate protocol constraints.
 
-use crate::error::{Code, ConnectError};
+use crate::message::error::{Code, ConnectError};
 
 /// Configuration for message size limits.
 ///

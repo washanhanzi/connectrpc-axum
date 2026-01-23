@@ -17,7 +17,7 @@
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use connectrpc_axum_core::ConnectError;
+use crate::ClientError;
 use futures::Stream;
 
 use crate::frame::FrameDecoder;
@@ -116,7 +116,7 @@ impl<S, T> StreamBody<FrameDecoder<S, T>> {
 /// Graceful shutdown methods for streaming responses.
 impl<S, T> StreamBody<S>
 where
-    S: Stream<Item = Result<T, ConnectError>> + Unpin,
+    S: Stream<Item = Result<T, ClientError>> + Unpin,
 {
     /// Gracefully drain all remaining messages from the stream.
     ///
@@ -219,9 +219,9 @@ where
 
 impl<S, T> Stream for StreamBody<S>
 where
-    S: Stream<Item = Result<T, ConnectError>> + Unpin,
+    S: Stream<Item = Result<T, ClientError>> + Unpin,
 {
-    type Item = Result<T, ConnectError>;
+    type Item = Result<T, ClientError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         Pin::new(&mut self.inner).poll_next(cx)

@@ -1,25 +1,322 @@
 //! Extractor for Connect requests.
-use crate::context::{CompressionEncoding, MessageLimits};
-use crate::error::{Code, ConnectError};
-use crate::pipeline::{
-    RequestPipeline, decode_json, decode_proto, get_context_or_default, process_envelope_payload,
-    read_body, read_frame_bytes,
-};
-
-#[cfg(feature = "compression-gzip")]
-use crate::pipeline::decompress_bytes;
+//!
+//! This module provides request extraction and decoding primitives for Connect RPC.
+//!
+//! ## Primitive Functions
+//!
+//! - [`read_body`]: Read HTTP body with size limit
+//! - [`read_frame_bytes`]: Validate frame size against limits
+//! - [`decompress_bytes`]: Decompress bytes based on encoding
+//! - [`decode_proto`]: Decode protobuf message
+//! - [`decode_json`]: Decode JSON message
+//! - [`process_envelope_payload`]: Validate envelope flags and decompress payload
+use crate::context::{CompressionEncoding, ConnectContext, MessageLimits, detect_protocol};
+use crate::message::error::{Code, ConnectError};
 use axum::{
     body::Body,
     extract::{FromRequest, Request},
     http::Method,
 };
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use futures::Stream;
 use http_body_util::BodyExt;
 use prost::Message;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+// ============================================================================
+// Primitive Decode Functions
+// ============================================================================
+
+/// Read HTTP body bytes with a size limit.
+///
+/// Returns `ResourceExhausted` error if the body exceeds `max_size`.
+pub async fn read_body(body: Body, max_size: usize) -> Result<Bytes, ConnectError> {
+    axum::body::to_bytes(body, max_size).await.map_err(|e| {
+        ConnectError::new(
+            Code::ResourceExhausted,
+            format!("failed to read request body: {e}"),
+        )
+    })
+}
+
+/// Validate frame size against limits.
+///
+/// Returns `ResourceExhausted` error if bytes exceed `max_size`.
+pub fn read_frame_bytes(bytes: Bytes, max_size: usize) -> Result<Bytes, ConnectError> {
+    if bytes.len() > max_size {
+        return Err(ConnectError::new(
+            Code::ResourceExhausted,
+            format!(
+                "message size {} bytes exceeds maximum allowed size of {} bytes",
+                bytes.len(),
+                max_size
+            ),
+        ));
+    }
+    Ok(bytes)
+}
+
+/// Decompress bytes based on compression encoding.
+///
+/// Returns the original bytes unchanged (zero-copy) if encoding is `Identity`.
+/// Returns `InvalidArgument` error if decompression fails.
+pub fn decompress_bytes(
+    bytes: Bytes,
+    encoding: CompressionEncoding,
+) -> Result<Bytes, ConnectError> {
+    let Some(codec) = encoding.codec() else {
+        return Ok(bytes); // identity: zero-copy passthrough
+    };
+
+    codec
+        .decompress(&bytes)
+        .map_err(|e| ConnectError::new(Code::InvalidArgument, format!("decompression failed: {e}")))
+}
+
+/// Decode a protobuf message from bytes.
+///
+/// Returns `InvalidArgument` error if decoding fails.
+pub fn decode_proto<T>(bytes: &[u8]) -> Result<T, ConnectError>
+where
+    T: Message + Default,
+{
+    T::decode(bytes).map_err(|e| {
+        ConnectError::new(
+            Code::InvalidArgument,
+            format!("failed to decode protobuf message: {e}"),
+        )
+    })
+}
+
+/// Decode a JSON message from bytes.
+///
+/// Returns `InvalidArgument` error if decoding fails.
+pub fn decode_json<T>(bytes: &[u8]) -> Result<T, ConnectError>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_slice(bytes).map_err(|e| {
+        ConnectError::new(
+            Code::InvalidArgument,
+            format!("failed to decode JSON message: {e}"),
+        )
+    })
+}
+
+/// Connect streaming envelope flags.
+pub mod envelope_flags {
+    /// Regular message (uncompressed).
+    pub const MESSAGE: u8 = 0x00;
+    /// Compressed message.
+    pub const COMPRESSED: u8 = 0x01;
+    /// End of stream.
+    pub const END_STREAM: u8 = 0x02;
+}
+
+/// Process envelope payload based on flags, with optional decompression.
+///
+/// Given the flags byte and payload bytes from an envelope, validates the flags
+/// and decompresses the payload if needed.
+///
+/// # Returns
+/// - `Ok(Some(payload))` for message frames (flags 0x00 or 0x01)
+/// - `Ok(None)` for end-stream frames (flag 0x02)
+/// - `Err` for invalid/unknown flags
+///
+/// # Arguments
+/// - `flags`: The envelope flags byte
+/// - `payload`: The raw payload bytes from the envelope
+/// - `encoding`: Compression encoding to use for decompression (from `Connect-Content-Encoding`)
+pub fn process_envelope_payload(
+    flags: u8,
+    payload: Bytes,
+    encoding: CompressionEncoding,
+) -> Result<Option<Bytes>, ConnectError> {
+    // EndStream frame (flags = 0x02) signals end of stream
+    if flags == envelope_flags::END_STREAM {
+        return Ok(None);
+    }
+
+    // Validate message flags: 0x00 = uncompressed, 0x01 = compressed
+    let is_compressed = flags == envelope_flags::COMPRESSED;
+    if flags != envelope_flags::MESSAGE && !is_compressed {
+        return Err(ConnectError::new(
+            Code::InvalidArgument,
+            format!("invalid Connect frame flags: 0x{:02x}", flags),
+        ));
+    }
+
+    // Decompress if needed
+    let payload = if is_compressed {
+        decompress_bytes(payload, encoding)?
+    } else {
+        payload
+    };
+
+    Ok(Some(payload))
+}
+
+// ============================================================================
+// Context fallback helper
+// ============================================================================
+
+// Flag to ensure we only log the missing layer warning once per process
+static WARNED_MISSING_LAYER: AtomicBool = AtomicBool::new(false);
+
+/// Get context from request extensions, or create a default one if missing.
+///
+/// If the `ConnectLayer` middleware was not applied, this will:
+/// 1. Detect the protocol from request headers (Content-Type or query params)
+/// 2. Create a default context with no compression and default limits
+/// 3. Log a warning (once per process) about the missing layer
+pub fn get_context_or_default<B>(req: &axum::http::Request<B>) -> ConnectContext {
+    if let Some(ctx) = req.extensions().get::<ConnectContext>() {
+        return ctx.clone();
+    }
+
+    // Log warning once per process to avoid log spam
+    if !WARNED_MISSING_LAYER.swap(true, Ordering::Relaxed) {
+        tracing::warn!(
+            target: "connectrpc_axum",
+            "ConnectLayer middleware not found in request extensions. \
+             Using default context with protocol detected from headers. \
+             For production use, add ConnectLayer to your router: \
+             `.layer(ConnectLayer::new())`"
+        );
+    }
+
+    // Create default context by detecting protocol from headers
+    let protocol = detect_protocol(req);
+    ConnectContext {
+        protocol,
+        ..Default::default()
+    }
+}
+
+// ============================================================================
+// RequestPipeline
+// ============================================================================
+
+use crate::context::error::ContextError;
+
+/// Request pipeline - decodes incoming request messages.
+///
+/// Handles: body reading, decompression, size limits, protocol decoding.
+pub struct RequestPipeline;
+
+impl RequestPipeline {
+    /// Decode request message from HTTP request.
+    ///
+    /// Reads Context from extensions, reads body, decompresses, decodes.
+    /// This is a convenience method that composes the primitive functions.
+    pub async fn decode<T>(req: axum::http::Request<Body>) -> Result<T, ContextError>
+    where
+        T: Message + DeserializeOwned + Default,
+    {
+        let ctx = get_context_or_default(&req);
+        let max_size = ctx.limits.receive_max_bytes_or_max();
+        let body = read_body(req.into_body(), max_size)
+            .await
+            .map_err(|e| ContextError::new(ctx.protocol, e))?;
+
+        Self::decode_bytes(&ctx, body)
+    }
+
+    /// Decode from raw bytes (for use when body is already read).
+    ///
+    /// Note: For unary RPCs, decompression and size checking are handled by
+    /// Tower's DecompressionLayer and BridgeLayer respectively.
+    pub fn decode_bytes<T>(ctx: &ConnectContext, body: Bytes) -> Result<T, ContextError>
+    where
+        T: Message + DeserializeOwned + Default,
+    {
+        Self::decode_message(ctx, &body)
+    }
+
+    /// Decode from enveloped bytes (for streaming-style unary requests).
+    ///
+    /// Used when Content-Type is `application/connect+json` or `application/connect+proto`.
+    /// These use envelope framing even for unary requests.
+    ///
+    /// Handles per-envelope compression: frames with flag 0x01 are decompressed
+    /// using the encoding from the `Connect-Content-Encoding` header.
+    pub fn decode_enveloped_bytes<T>(ctx: &ConnectContext, body: Bytes) -> Result<T, ContextError>
+    where
+        T: Message + DeserializeOwned + Default,
+    {
+        // Parse envelope header: [flags:1][length:4][payload:length]
+        if body.len() < 5 {
+            return Err(ContextError::new(
+                ctx.protocol,
+                ConnectError::new(Code::InvalidArgument, "protocol error: incomplete envelope"),
+            ));
+        }
+
+        let flags = body[0];
+        let length = u32::from_be_bytes([body[1], body[2], body[3], body[4]]) as usize;
+
+        // Validate frame length
+        let expected_len = 5 + length;
+        if body.len() > expected_len {
+            return Err(ContextError::new(
+                ctx.protocol,
+                ConnectError::new(
+                    Code::InvalidArgument,
+                    format!(
+                        "frame has {} unexpected trailing bytes",
+                        body.len() - expected_len
+                    ),
+                ),
+            ));
+        } else if body.len() < expected_len {
+            return Err(ContextError::new(
+                ctx.protocol,
+                ConnectError::new(
+                    Code::InvalidArgument,
+                    format!(
+                        "incomplete frame: expected {} bytes, got {}",
+                        expected_len,
+                        body.len()
+                    ),
+                ),
+            ));
+        }
+
+        // Extract payload and process (validate flags + decompress)
+        let raw_payload = body.slice(5..expected_len);
+        let encoding = ctx
+            .compression
+            .envelope
+            .map(|e| e.request)
+            .unwrap_or(CompressionEncoding::Identity);
+
+        let payload = process_envelope_payload(flags, raw_payload, encoding)
+            .map_err(|e| ContextError::new(ctx.protocol, e))?
+            .ok_or_else(|| {
+                ContextError::new(
+                    ctx.protocol,
+                    ConnectError::new(Code::InvalidArgument, "unexpected EndStreamResponse in request"),
+                )
+            })?;
+
+        Self::decode_message(ctx, &payload)
+    }
+
+    /// Helper: decode message based on protocol.
+    fn decode_message<T>(ctx: &ConnectContext, bytes: &[u8]) -> Result<T, ContextError>
+    where
+        T: Message + DeserializeOwned + Default,
+    {
+        if ctx.protocol.is_proto() {
+            decode_proto(bytes).map_err(|e| ContextError::new(ctx.protocol, e))
+        } else {
+            decode_json(bytes).map_err(|e| ContextError::new(ctx.protocol, e))
+        }
+    }
+}
 
 /// Connect request wrapper for extracting messages from HTTP requests.
 ///

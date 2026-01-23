@@ -12,7 +12,7 @@ use bytes::Bytes;
 
 use crate::codec::BoxedCodec;
 use crate::compression::CompressionEncoding;
-use crate::error::{Code, ConnectError};
+use crate::error::EnvelopeError;
 
 /// Connect streaming envelope flags.
 pub mod envelope_flags {
@@ -54,13 +54,12 @@ pub fn wrap_envelope(payload: &[u8], compressed: bool) -> Vec<u8> {
 ///
 /// # Errors
 /// Returns an error if there aren't enough bytes for the header.
-pub fn parse_envelope_header(data: &[u8]) -> Result<(u8, u32), ConnectError> {
+pub fn parse_envelope_header(data: &[u8]) -> Result<(u8, u32), EnvelopeError> {
     if data.len() < ENVELOPE_HEADER_SIZE {
-        return Err(ConnectError::Protocol(format!(
-            "incomplete envelope header: expected {} bytes, got {}",
-            ENVELOPE_HEADER_SIZE,
-            data.len()
-        )));
+        return Err(EnvelopeError::IncompleteHeader {
+            expected: ENVELOPE_HEADER_SIZE,
+            actual: data.len(),
+        });
     }
 
     let flags = data[0];
@@ -87,7 +86,7 @@ pub fn process_envelope_payload(
     flags: u8,
     payload: Bytes,
     encoding: CompressionEncoding,
-) -> Result<Option<Bytes>, ConnectError> {
+) -> Result<Option<Bytes>, EnvelopeError> {
     // EndStream frame (flags = 0x02) signals end of stream
     if flags == envelope_flags::END_STREAM {
         return Ok(None);
@@ -96,10 +95,7 @@ pub fn process_envelope_payload(
     // Validate message flags: 0x00 = uncompressed, 0x01 = compressed
     let is_compressed = flags == envelope_flags::COMPRESSED;
     if flags != envelope_flags::MESSAGE && !is_compressed {
-        return Err(ConnectError::Protocol(format!(
-            "invalid Connect frame flags: 0x{:02x}",
-            flags
-        )));
+        return Err(EnvelopeError::InvalidFlags(flags));
     }
 
     // Decompress if needed
@@ -113,14 +109,17 @@ pub fn process_envelope_payload(
 }
 
 /// Decompress payload bytes based on encoding.
-fn decompress_payload(payload: Bytes, encoding: CompressionEncoding) -> Result<Bytes, ConnectError> {
+fn decompress_payload(
+    payload: Bytes,
+    encoding: CompressionEncoding,
+) -> Result<Bytes, EnvelopeError> {
     let Some(codec) = encoding.codec() else {
         return Ok(payload); // identity: passthrough
     };
 
-    codec.decompress(&payload).map_err(|e| {
-        ConnectError::new(Code::InvalidArgument, format!("decompression failed: {e}"))
-    })
+    codec
+        .decompress(&payload)
+        .map_err(|e| EnvelopeError::Decompression(e.to_string()))
 }
 
 /// Compress payload bytes based on encoding.
@@ -129,14 +128,14 @@ fn decompress_payload(payload: Bytes, encoding: CompressionEncoding) -> Result<B
 pub fn compress_payload(
     payload: Bytes,
     codec: Option<&BoxedCodec>,
-) -> Result<(Bytes, bool), ConnectError> {
+) -> Result<(Bytes, bool), EnvelopeError> {
     let Some(codec) = codec else {
         return Ok((payload, false)); // identity
     };
 
     let compressed = codec
         .compress(&payload)
-        .map_err(|e| ConnectError::new(Code::Internal, format!("compression failed: {e}")))?;
+        .map_err(|e| EnvelopeError::Compression(e.to_string()))?;
 
     Ok((compressed, true))
 }
@@ -213,8 +212,7 @@ mod tests {
     #[test]
     fn test_process_envelope_payload_invalid_flags() {
         let payload = Bytes::from_static(b"hello");
-        let result =
-            process_envelope_payload(0xFF, payload, CompressionEncoding::Identity);
+        let result = process_envelope_payload(0xFF, payload, CompressionEncoding::Identity);
 
         assert!(result.is_err());
     }

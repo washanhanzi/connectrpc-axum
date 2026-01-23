@@ -14,9 +14,11 @@ use base64::Engine;
 use bytes::{Bytes, BytesMut};
 use connectrpc_axum_core::{
     compress_payload, envelope_flags, parse_envelope_header, process_envelope_payload,
-    wrap_envelope, Code, CompressionConfig, CompressionEncoding, ConnectError, ErrorDetail,
+    wrap_envelope, Code, CompressionConfig, CompressionEncoding, ErrorDetail,
     ENVELOPE_HEADER_SIZE,
 };
+
+use crate::ClientError;
 use futures::Stream;
 use prost::Message;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -74,7 +76,7 @@ pub struct FrameDecoder<S, T> {
     /// Whether the stream has finished (received EndStream or error).
     finished: bool,
     /// Error from the EndStream frame, if any.
-    end_stream_error: Option<ConnectError>,
+    end_stream_error: Option<ClientError>,
     /// Type marker for the message type.
     _marker: PhantomData<T>,
 }
@@ -118,16 +120,16 @@ impl<S, T> FrameDecoder<S, T> {
     }
 
     /// Decode a message from bytes.
-    fn decode_message(&self, bytes: &[u8]) -> Result<T, ConnectError>
+    fn decode_message(&self, bytes: &[u8]) -> Result<T, ClientError>
     where
         T: Message + DeserializeOwned + Default,
     {
         if self.use_proto {
             T::decode(bytes)
-                .map_err(|e| ConnectError::Decode(format!("protobuf decoding failed: {}", e)))
+                .map_err(|e| ClientError::Decode(format!("protobuf decoding failed: {}", e)))
         } else {
             serde_json::from_slice(bytes)
-                .map_err(|e| ConnectError::Decode(format!("JSON decoding failed: {}", e)))
+                .map_err(|e| ClientError::Decode(format!("JSON decoding failed: {}", e)))
         }
     }
 
@@ -137,7 +139,7 @@ impl<S, T> FrameDecoder<S, T> {
     /// - `Ok(Some(frame))` if a complete frame was parsed
     /// - `Ok(None)` if more data is needed
     /// - `Err(e)` if there was a parsing error
-    fn try_parse_frame(&mut self) -> Result<Option<DecodedFrame<T>>, ConnectError>
+    fn try_parse_frame(&mut self) -> Result<Option<DecodedFrame<T>>, ClientError>
     where
         T: Message + DeserializeOwned + Default,
     {
@@ -177,7 +179,7 @@ impl<S, T> FrameDecoder<S, T> {
 
         // Process message frame (validate flags, decompress)
         let decompressed = process_envelope_payload(flags, payload, self.encoding)?
-            .ok_or_else(|| ConnectError::Protocol("unexpected None from message frame".into()))?;
+            .ok_or_else(|| ClientError::Protocol("unexpected None from message frame".into()))?;
 
         // Decode message
         let message = self.decode_message(&decompressed)?;
@@ -193,7 +195,7 @@ where
     S: Stream<Item = Result<Bytes, reqwest::Error>> + Unpin,
     T: Message + DeserializeOwned + Default,
 {
-    type Item = Result<T, ConnectError>;
+    type Item = Result<T, ClientError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
@@ -239,7 +241,7 @@ where
                 }
                 Poll::Ready(Some(Err(e))) => {
                     this.finished = true;
-                    return Poll::Ready(Some(Err(ConnectError::Transport(format!(
+                    return Poll::Ready(Some(Err(ClientError::Transport(format!(
                         "stream error: {}",
                         e
                     )))));
@@ -248,7 +250,7 @@ where
                     // Stream ended unexpectedly
                     this.finished = true;
                     if !this.buffer.is_empty() {
-                        return Poll::Ready(Some(Err(ConnectError::new(
+                        return Poll::Ready(Some(Err(ClientError::new(
                             Code::DataLoss,
                             format!(
                                 "stream ended with {} bytes of incomplete data",
@@ -257,7 +259,7 @@ where
                         ))));
                     }
                     // Stream ended cleanly but without EndStream frame - protocol error
-                    return Poll::Ready(Some(Err(ConnectError::Protocol(
+                    return Poll::Ready(Some(Err(ClientError::Protocol(
                         "stream ended without EndStream frame".into(),
                     ))));
                 }
@@ -300,22 +302,22 @@ struct EndStreamErrorDetail {
 /// Parse an EndStream frame payload.
 ///
 /// Returns `(error, trailers)` where both are optional.
-fn parse_end_stream(payload: &[u8]) -> Result<(Option<ConnectError>, Option<Metadata>), ConnectError> {
+fn parse_end_stream(payload: &[u8]) -> Result<(Option<ClientError>, Option<Metadata>), ClientError> {
     // Empty payload is valid (no error, no trailers)
     if payload.is_empty() || payload == b"{}" {
         return Ok((None, None));
     }
 
     let end_stream: EndStreamJson = serde_json::from_slice(payload)
-        .map_err(|e| ConnectError::Protocol(format!("invalid EndStream JSON: {}", e)))?;
+        .map_err(|e| ClientError::Protocol(format!("invalid EndStream JSON: {}", e)))?;
 
     // Parse error if present
     let error = end_stream.error.map(|e| {
         let code = Code::from_str(&e.code).unwrap_or(Code::Unknown);
         let mut err = if let Some(msg) = e.message {
-            ConnectError::new(code, msg)
+            ClientError::new(code, msg)
         } else {
-            ConnectError::from_code(code)
+            ClientError::from_code(code)
         };
 
         // Parse error details
@@ -462,7 +464,7 @@ impl<S, T> FrameEncoder<S, T> {
     }
 
     /// Encode a message to bytes.
-    fn encode_message(&self, msg: &T) -> Result<Bytes, ConnectError>
+    fn encode_message(&self, msg: &T) -> Result<Bytes, ClientError>
     where
         T: Message + Serialize,
     {
@@ -471,12 +473,12 @@ impl<S, T> FrameEncoder<S, T> {
         } else {
             serde_json::to_vec(msg)
                 .map(Bytes::from)
-                .map_err(|e| ConnectError::Encode(format!("JSON encoding failed: {}", e)))
+                .map_err(|e| ClientError::Encode(format!("JSON encoding failed: {}", e)))
         }
     }
 
     /// Encode a message into a framed envelope.
-    fn encode_frame(&self, msg: &T) -> Result<Bytes, ConnectError>
+    fn encode_frame(&self, msg: &T) -> Result<Bytes, ClientError>
     where
         T: Message + Serialize,
     {
@@ -523,7 +525,7 @@ where
     S: Stream<Item = T> + Unpin,
     T: Message + Serialize,
 {
-    type Item = Result<Bytes, ConnectError>;
+    type Item = Result<Bytes, ClientError>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();

@@ -6,7 +6,9 @@ use bytes::Bytes;
 
 #[cfg(feature = "tracing")]
 use tracing::info_span;
-use connectrpc_axum_core::{CompressionConfig, CompressionEncoding, ConnectError};
+use connectrpc_axum_core::{CompressionConfig, CompressionEncoding};
+
+use crate::ClientError;
 use futures::{Stream, StreamExt};
 use prost::Message;
 use reqwest_middleware::ClientWithMiddleware;
@@ -135,7 +137,7 @@ impl ConnectClient {
     }
 
     /// Encode a message for sending.
-    fn encode_message<T>(&self, msg: &T) -> Result<Bytes, ConnectError>
+    fn encode_message<T>(&self, msg: &T) -> Result<Bytes, ClientError>
     where
         T: Message + Serialize,
     {
@@ -144,25 +146,25 @@ impl ConnectClient {
         } else {
             serde_json::to_vec(msg)
                 .map(Bytes::from)
-                .map_err(|e| ConnectError::Encode(format!("JSON encoding failed: {}", e)))
+                .map_err(|e| ClientError::Encode(format!("JSON encoding failed: {}", e)))
         }
     }
 
     /// Decode a message from response bytes.
-    fn decode_message<T>(&self, bytes: &[u8]) -> Result<T, ConnectError>
+    fn decode_message<T>(&self, bytes: &[u8]) -> Result<T, ClientError>
     where
         T: Message + DeserializeOwned + Default,
     {
         if self.use_proto {
-            T::decode(bytes).map_err(|e| ConnectError::Decode(format!("protobuf decoding failed: {}", e)))
+            T::decode(bytes).map_err(|e| ClientError::Decode(format!("protobuf decoding failed: {}", e)))
         } else {
             serde_json::from_slice(bytes)
-                .map_err(|e| ConnectError::Decode(format!("JSON decoding failed: {}", e)))
+                .map_err(|e| ClientError::Decode(format!("JSON decoding failed: {}", e)))
         }
     }
 
     /// Compress request body if configured.
-    fn maybe_compress(&self, body: Bytes) -> Result<(Bytes, bool), ConnectError> {
+    fn maybe_compress(&self, body: Bytes) -> Result<(Bytes, bool), ClientError> {
         // Check if compression is enabled and body meets threshold
         if self.request_encoding.is_identity() || self.compression.is_disabled() {
             return Ok((body, false));
@@ -180,7 +182,7 @@ impl ConnectClient {
         // Compress
         let compressed = codec
             .compress(&body)
-            .map_err(|e| ConnectError::Encode(format!("compression failed: {}", e)))?;
+            .map_err(|e| ClientError::Encode(format!("compression failed: {}", e)))?;
 
         Ok((compressed, true))
     }
@@ -199,7 +201,7 @@ impl ConnectClient {
     ///
     /// # Errors
     ///
-    /// Returns a [`ConnectError`] if:
+    /// Returns a [`ClientError`] if:
     /// - The request cannot be encoded
     /// - The HTTP request fails
     /// - The server returns an error response
@@ -219,7 +221,7 @@ impl ConnectClient {
         &self,
         procedure: &str,
         request: &Req,
-    ) -> Result<ConnectResponse<Res>, ConnectError>
+    ) -> Result<ConnectResponse<Res>, ClientError>
     where
         Req: Message + Serialize,
         Res: Message + DeserializeOwned + Default,
@@ -275,7 +277,7 @@ impl ConnectClient {
         let response = req_builder
             .send()
             .await
-            .map_err(|e| ConnectError::Transport(format!("request failed: {}", e)))?;
+            .map_err(|e| ClientError::Transport(format!("request failed: {}", e)))?;
 
         // 6. Check response status
         let status = response.status();
@@ -293,7 +295,7 @@ impl ConnectClient {
 
         let response_encoding = CompressionEncoding::from_header(content_encoding)
             .ok_or_else(|| {
-                ConnectError::Protocol(format!(
+                ClientError::Protocol(format!(
                     "unsupported response encoding: {:?}",
                     content_encoding
                 ))
@@ -303,13 +305,13 @@ impl ConnectClient {
         let body_bytes = response
             .bytes()
             .await
-            .map_err(|e| ConnectError::Transport(format!("failed to read response body: {}", e)))?;
+            .map_err(|e| ClientError::Transport(format!("failed to read response body: {}", e)))?;
 
         // 9. Decompress if needed
         let body_bytes = if let Some(codec) = response_encoding.codec() {
             codec
                 .decompress(&body_bytes)
-                .map_err(|e| ConnectError::Decode(format!("decompression failed: {}", e)))?
+                .map_err(|e| ClientError::Decode(format!("decompression failed: {}", e)))?
         } else {
             body_bytes
         };
@@ -355,7 +357,7 @@ impl ConnectClient {
         procedure: &str,
         request: &Req,
         options: CallOptions,
-    ) -> Result<ConnectResponse<Res>, ConnectError>
+    ) -> Result<ConnectResponse<Res>, ClientError>
     where
         Req: Message + Serialize,
         Res: Message + DeserializeOwned + Default,
@@ -417,7 +419,7 @@ impl ConnectClient {
         let response = req_builder
             .send()
             .await
-            .map_err(|e| ConnectError::Transport(format!("request failed: {}", e)))?;
+            .map_err(|e| ClientError::Transport(format!("request failed: {}", e)))?;
 
         // 6. Check response status
         let status = response.status();
@@ -435,7 +437,7 @@ impl ConnectClient {
 
         let response_encoding = CompressionEncoding::from_header(content_encoding)
             .ok_or_else(|| {
-                ConnectError::Protocol(format!(
+                ClientError::Protocol(format!(
                     "unsupported response encoding: {:?}",
                     content_encoding
                 ))
@@ -445,13 +447,13 @@ impl ConnectClient {
         let body_bytes = response
             .bytes()
             .await
-            .map_err(|e| ConnectError::Transport(format!("failed to read response body: {}", e)))?;
+            .map_err(|e| ClientError::Transport(format!("failed to read response body: {}", e)))?;
 
         // 9. Decompress if needed
         let body_bytes = if let Some(codec) = response_encoding.codec() {
             codec
                 .decompress(&body_bytes)
-                .map_err(|e| ConnectError::Decode(format!("decompression failed: {}", e)))?
+                .map_err(|e| ClientError::Decode(format!("decompression failed: {}", e)))?
         } else {
             body_bytes
         };
@@ -482,7 +484,7 @@ impl ConnectClient {
     ///
     /// # Errors
     ///
-    /// Returns a [`ConnectError`] if:
+    /// Returns a [`ClientError`] if:
     /// - The request cannot be encoded
     /// - The HTTP request fails
     /// - The server returns an error status immediately
@@ -519,7 +521,7 @@ impl ConnectClient {
         &self,
         procedure: &str,
         request: &Req,
-    ) -> Result<ConnectResponse<StreamBody<FrameDecoder<impl futures::Stream<Item = Result<Bytes, reqwest::Error>> + Unpin, Res>>>, ConnectError>
+    ) -> Result<ConnectResponse<StreamBody<FrameDecoder<impl futures::Stream<Item = Result<Bytes, reqwest::Error>> + Unpin, Res>>>, ClientError>
     where
         Req: Message + Serialize,
         Res: Message + DeserializeOwned + Default,
@@ -575,7 +577,7 @@ impl ConnectClient {
         let response = req_builder
             .send()
             .await
-            .map_err(|e| ConnectError::Transport(format!("request failed: {}", e)))?;
+            .map_err(|e| ClientError::Transport(format!("request failed: {}", e)))?;
 
         // 6. Check response status
         let status = response.status();
@@ -594,7 +596,7 @@ impl ConnectClient {
 
         let response_encoding = CompressionEncoding::from_header(content_encoding)
             .ok_or_else(|| {
-                ConnectError::Protocol(format!(
+                ClientError::Protocol(format!(
                     "unsupported response encoding: {:?}",
                     content_encoding
                 ))
@@ -643,7 +645,7 @@ impl ConnectClient {
         ConnectResponse<
             StreamBody<FrameDecoder<impl Stream<Item = Result<Bytes, reqwest::Error>> + Unpin, Res>>,
         >,
-        ConnectError,
+        ClientError,
     >
     where
         Req: Message + Serialize,
@@ -706,7 +708,7 @@ impl ConnectClient {
         let response = req_builder
             .send()
             .await
-            .map_err(|e| ConnectError::Transport(format!("request failed: {}", e)))?;
+            .map_err(|e| ClientError::Transport(format!("request failed: {}", e)))?;
 
         // 6. Check response status
         let status = response.status();
@@ -724,7 +726,7 @@ impl ConnectClient {
 
         let response_encoding = CompressionEncoding::from_header(content_encoding)
             .ok_or_else(|| {
-                ConnectError::Protocol(format!(
+                ClientError::Protocol(format!(
                     "unsupported response encoding: {:?}",
                     content_encoding
                 ))
@@ -760,7 +762,7 @@ impl ConnectClient {
     ///
     /// # Errors
     ///
-    /// Returns a [`ConnectError`] if:
+    /// Returns a [`ClientError`] if:
     /// - The HTTP request fails
     /// - The server returns an error status
     /// - The response cannot be decoded
@@ -787,7 +789,7 @@ impl ConnectClient {
         &self,
         procedure: &str,
         request: S,
-    ) -> Result<ConnectResponse<Res>, ConnectError>
+    ) -> Result<ConnectResponse<Res>, ClientError>
     where
         Req: Message + Serialize + 'static,
         Res: Message + DeserializeOwned + Default,
@@ -815,7 +817,7 @@ impl ConnectClient {
         );
 
         // 3. Create streaming body from encoder
-        // Map FrameEncoder's Result<Bytes, ConnectError> to reqwest's expected Result<Bytes, io::Error>
+        // Map FrameEncoder's Result<Bytes, ClientError> to reqwest's expected Result<Bytes, io::Error>
         let body_stream = futures::StreamExt::map(encoder, |result| {
             result.map_err(|e| std::io::Error::other(e.to_string()))
         });
@@ -855,7 +857,7 @@ impl ConnectClient {
         let response = req_builder
             .send()
             .await
-            .map_err(|e| ConnectError::Transport(format!("request failed: {}", e)))?;
+            .map_err(|e| ClientError::Transport(format!("request failed: {}", e)))?;
 
         // 6. Check response status
         let status = response.status();
@@ -872,7 +874,7 @@ impl ConnectClient {
 
         let response_encoding = CompressionEncoding::from_header(content_encoding).ok_or_else(
             || {
-                ConnectError::Protocol(format!(
+                ClientError::Protocol(format!(
                     "unsupported response encoding: {:?}",
                     content_encoding
                 ))
@@ -888,7 +890,7 @@ impl ConnectClient {
         let message = decoder
             .next()
             .await
-            .ok_or_else(|| ConnectError::Protocol("expected response message but stream ended".into()))??;
+            .ok_or_else(|| ClientError::Protocol("expected response message but stream ended".into()))??;
 
         // 10. Consume the EndStream frame to complete the stream
         // The decoder will return None after processing EndStream
@@ -931,7 +933,7 @@ impl ConnectClient {
         procedure: &str,
         request: S,
         options: CallOptions,
-    ) -> Result<ConnectResponse<Res>, ConnectError>
+    ) -> Result<ConnectResponse<Res>, ClientError>
     where
         Req: Message + Serialize + 'static,
         Res: Message + DeserializeOwned + Default,
@@ -1001,7 +1003,7 @@ impl ConnectClient {
         let response = req_builder
             .send()
             .await
-            .map_err(|e| ConnectError::Transport(format!("request failed: {}", e)))?;
+            .map_err(|e| ClientError::Transport(format!("request failed: {}", e)))?;
 
         // 6. Check response status
         let status = response.status();
@@ -1018,7 +1020,7 @@ impl ConnectClient {
 
         let response_encoding = CompressionEncoding::from_header(content_encoding).ok_or_else(
             || {
-                ConnectError::Protocol(format!(
+                ClientError::Protocol(format!(
                     "unsupported response encoding: {:?}",
                     content_encoding
                 ))
@@ -1034,7 +1036,7 @@ impl ConnectClient {
             Some(Ok(msg)) => msg,
             Some(Err(e)) => return Err(e),
             None => {
-                return Err(ConnectError::Protocol(
+                return Err(ClientError::Protocol(
                     "expected response message but stream ended".to_string(),
                 ))
             }
@@ -1069,7 +1071,7 @@ impl ConnectClient {
     ///
     /// # Errors
     ///
-    /// Returns a [`ConnectError`] if:
+    /// Returns a [`ClientError`] if:
     /// - The HTTP request fails
     /// - The server returns an error status immediately
     ///
@@ -1120,7 +1122,7 @@ impl ConnectClient {
         ConnectResponse<
             StreamBody<FrameDecoder<impl futures::Stream<Item = Result<Bytes, reqwest::Error>> + Unpin, Res>>,
         >,
-        ConnectError,
+        ClientError,
     >
     where
         Req: Message + Serialize + 'static,
@@ -1149,7 +1151,7 @@ impl ConnectClient {
         );
 
         // 3. Create streaming body from encoder
-        // Map FrameEncoder's Result<Bytes, ConnectError> to reqwest's expected Result<Bytes, io::Error>
+        // Map FrameEncoder's Result<Bytes, ClientError> to reqwest's expected Result<Bytes, io::Error>
         let body_stream = futures::StreamExt::map(encoder, |result| {
             result.map_err(|e| std::io::Error::other(e.to_string()))
         });
@@ -1189,7 +1191,7 @@ impl ConnectClient {
         let response = req_builder
             .send()
             .await
-            .map_err(|e| ConnectError::Transport(format!("request failed: {}", e)))?;
+            .map_err(|e| ClientError::Transport(format!("request failed: {}", e)))?;
 
         // 6. Check response status
         let status = response.status();
@@ -1206,7 +1208,7 @@ impl ConnectClient {
 
         let response_encoding = CompressionEncoding::from_header(content_encoding).ok_or_else(
             || {
-                ConnectError::Protocol(format!(
+                ClientError::Protocol(format!(
                     "unsupported response encoding: {:?}",
                     content_encoding
                 ))
@@ -1261,7 +1263,7 @@ impl ConnectClient {
         ConnectResponse<
             StreamBody<FrameDecoder<impl futures::Stream<Item = Result<Bytes, reqwest::Error>> + Unpin, Res>>,
         >,
-        ConnectError,
+        ClientError,
     >
     where
         Req: Message + Serialize + 'static,
@@ -1332,7 +1334,7 @@ impl ConnectClient {
         let response = req_builder
             .send()
             .await
-            .map_err(|e| ConnectError::Transport(format!("request failed: {}", e)))?;
+            .map_err(|e| ClientError::Transport(format!("request failed: {}", e)))?;
 
         // 6. Check response status
         let status = response.status();
@@ -1349,7 +1351,7 @@ impl ConnectClient {
 
         let response_encoding = CompressionEncoding::from_header(content_encoding).ok_or_else(
             || {
-                ConnectError::Protocol(format!(
+                ClientError::Protocol(format!(
                     "unsupported response encoding: {:?}",
                     content_encoding
                 ))

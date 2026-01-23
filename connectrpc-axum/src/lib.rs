@@ -1,9 +1,7 @@
 pub mod context;
-pub mod error;
 pub mod handler;
 pub mod layer;
 pub mod message;
-pub mod pipeline;
 pub mod service_builder;
 #[cfg(feature = "tonic")]
 pub mod tonic;
@@ -88,10 +86,10 @@ pub use context::DeflateCodec;
 pub use context::BrotliCodec;
 #[cfg(feature = "compression-zstd")]
 pub use context::ZstdCodec;
-// Re-export from pipeline module
+// Re-export from message module
 pub use handler::{ConnectHandler, ConnectHandlerWrapper, get_connect, post_connect};
 pub use layer::{BridgeLayer, BridgeService, ConnectLayer, ConnectService};
-pub use pipeline::{RequestPipeline, ResponsePipeline};
+pub use message::{RequestPipeline, ResponsePipeline};
 pub use service_builder::MakeServiceBuilder;
 
 // Re-export several crates
@@ -151,11 +149,10 @@ pub mod prelude {
     #[cfg(feature = "compression-zstd")]
     pub use crate::context::ZstdCodec;
 
-    pub use crate::error::{Code, ConnectError, ErrorDetail};
+    pub use crate::message::error::{Code, ConnectError, ErrorDetail};
     pub use crate::handler::{ConnectHandler, ConnectHandlerWrapper, get_connect, post_connect};
     pub use crate::layer::{BridgeLayer, BridgeService, ConnectLayer, ConnectService};
-    pub use crate::message::{ConnectRequest, ConnectResponse, StreamBody, Streaming};
-    pub use crate::pipeline::{RequestPipeline, ResponsePipeline};
+    pub use crate::message::{ConnectRequest, ConnectResponse, RequestPipeline, ResponsePipeline, StreamBody, Streaming};
     pub use crate::service_builder::MakeServiceBuilder;
     #[cfg(feature = "tonic")]
     pub use crate::tonic::{

@@ -12,7 +12,7 @@
 //!   # Or specify a custom server URL:
 //!   cargo run --bin bidi-stream-client --no-default-features -- http://localhost:8080
 
-use connectrpc_axum_client::{CallOptions, ConnectClient, ConnectError, ConnectResponse as ClientResponse};
+use connectrpc_axum_client::{CallOptions, ConnectClient, ClientError, ConnectResponse as ClientResponse};
 use connectrpc_axum_examples::{EchoRequest, EchoResponse};
 use futures::{StreamExt, stream};
 use std::env;
@@ -168,7 +168,7 @@ async fn main() -> anyhow::Result<()> {
 
         let request_stream = stream::iter(messages);
 
-        let result: Result<ClientResponse<_>, ConnectError> = client
+        let result: Result<ClientResponse<_>, ClientError> = client
             .call_bidi_stream::<EchoRequest, EchoResponse, _>(
                 "echo.EchoService/EchoBidiStream",
                 request_stream,
@@ -176,7 +176,7 @@ async fn main() -> anyhow::Result<()> {
             .await;
 
         match result {
-            Err(ConnectError::Transport(_)) => {
+            Err(ClientError::Transport(_)) => {
                 println!("  PASS: Got expected Transport error");
             }
             Err(other) => {
