@@ -11,7 +11,7 @@
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
 use futures::stream::BoxStream;
-use std::net::SocketAddr;
+// SocketAddr now provided by server_addr()
 
 /// Streaming handler that returns an error with custom metadata
 ///
@@ -91,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
         .add_router(router)
         .build();
 
-    let addr: SocketAddr = "0.0.0.0:3000".parse()?;
+    let addr = connectrpc_axum_examples::server_addr();
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     println!("=== EndStream Metadata Test Server ===");

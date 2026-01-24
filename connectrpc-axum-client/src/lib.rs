@@ -251,30 +251,101 @@
 //!
 //! ## Retry Logic
 //!
-//! Use [`Code::is_retryable()`] or [`ClientError::is_retryable()`] to determine
-//! if an error is transient and safe to retry:
+//! The client provides built-in retry support with exponential backoff and jitter,
+//! following the [gRPC connection backoff specification](https://github.com/grpc/grpc/blob/master/doc/connection-backoff.md).
+//!
+//! ### Using the Retry Helpers
+//!
+//! The simplest way to add retries is with the [`retry`] or [`retry_with_policy`] functions:
 //!
 //! ```ignore
-//! use connectrpc_axum_client::{ConnectClient, Code, ClientError};
+//! use connectrpc_axum_client::{ConnectClient, retry, retry_with_policy, RetryPolicy};
+//! use std::time::Duration;
 //!
-//! async fn call_with_retry<Req, Res>(
-//!     client: &ConnectClient,
-//!     procedure: &str,
-//!     request: &Req,
-//!     max_retries: u32,
-//! ) -> Result<Res, ClientError>
+//! // Using default retry policy (3 retries, 1s base delay)
+//! let response = retry(|| async {
+//!     client.call_unary::<MyRequest, MyResponse>("service/Method", &request).await
+//! }).await?;
+//!
+//! // Using custom retry policy
+//! let policy = RetryPolicy::new()
+//!     .max_retries(5)
+//!     .base_delay(Duration::from_millis(100))
+//!     .max_delay(Duration::from_secs(10));
+//!
+//! let response = retry_with_policy(&policy, || async {
+//!     client.call_unary::<MyRequest, MyResponse>("service/Method", &request).await
+//! }).await?;
+//! ```
+//!
+//! ### Retry Policy Presets
+//!
+//! Several preset policies are available for common use cases:
+//!
+//! ```ignore
+//! use connectrpc_axum_client::RetryPolicy;
+//!
+//! // Default: 3 retries, 1s base delay, 120s max delay
+//! let default = RetryPolicy::default();
+//!
+//! // Aggressive: 5 retries, 50ms base delay, 1s max delay
+//! // Good for latency-sensitive operations
+//! let aggressive = RetryPolicy::aggressive();
+//!
+//! // Patient: 10 retries, 2s base delay, 5 minute max delay
+//! // Good for background jobs
+//! let patient = RetryPolicy::patient();
+//!
+//! // No retries (useful for testing or disabling)
+//! let no_retry = RetryPolicy::no_retry();
+//! ```
+//!
+//! ### Exponential Backoff
+//!
+//! The backoff algorithm uses:
+//! - **Base delay**: Initial wait time before first retry (default: 1s)
+//! - **Multiplier**: Factor to increase delay each retry (default: 1.6)
+//! - **Jitter**: Random variation to prevent thundering herd (default: 20%)
+//! - **Max delay**: Upper bound on wait time (default: 120s)
+//!
+//! Example sequence with default settings (no jitter for clarity):
+//! - Retry 1: ~1.0s
+//! - Retry 2: ~1.6s
+//! - Retry 3: ~2.6s
+//!
+//! ### Retryable Error Codes
+//!
+//! Only certain errors are automatically retried:
+//! - [`Code::Unavailable`] - Service temporarily unavailable
+//! - [`Code::ResourceExhausted`] - Rate limited or quota exceeded
+//! - [`Code::Aborted`] - Transaction aborted, can be retried
+//! - Transport errors (connection failures, timeouts)
+//!
+//! Non-retryable errors (e.g., `InvalidArgument`, `NotFound`, `PermissionDenied`)
+//! are returned immediately without retry.
+//!
+//! ### Manual Retry Control
+//!
+//! For more control, use [`ExponentialBackoff`] directly:
+//!
+//! ```ignore
+//! use connectrpc_axum_client::{RetryPolicy, ExponentialBackoff, ClientError};
+//!
+//! async fn custom_retry<T, F, Fut>(mut operation: F) -> Result<T, ClientError>
 //! where
-//!     Req: prost::Message,
-//!     Res: prost::Message + Default,
+//!     F: FnMut() -> Fut,
+//!     Fut: std::future::Future<Output = Result<T, ClientError>>,
 //! {
-//!     let mut attempts = 0;
+//!     let policy = RetryPolicy::new().max_retries(3);
+//!     let mut backoff = policy.backoff();
+//!
 //!     loop {
-//!         match client.call_unary::<Req, Res>(procedure, request).await {
-//!             Ok(response) => return Ok(response.into_inner()),
-//!             Err(e) if e.is_retryable() && attempts < max_retries => {
-//!                 attempts += 1;
-//!                 tokio::time::sleep(std::time::Duration::from_millis(100 * attempts as u64)).await;
-//!                 continue;
+//!         match operation().await {
+//!             Ok(result) => return Ok(result),
+//!             Err(e) if e.is_retryable() && backoff.can_retry() => {
+//!                 let delay = backoff.next_delay();
+//!                 println!("Retry {} in {:?}", backoff.attempts(), delay);
+//!                 tokio::time::sleep(delay).await;
 //!             }
 //!             Err(e) => return Err(e),
 //!         }
@@ -282,12 +353,20 @@
 //! }
 //! ```
 //!
-//! Retryable error codes are:
-//! - [`Code::Unavailable`] - Service temporarily unavailable
-//! - [`Code::ResourceExhausted`] - Rate limited or quota exceeded
-//! - [`Code::Aborted`] - Transaction aborted, can be retried
+//! ### Checking Retryability
 //!
-//! Transport errors (connection failures) are also considered retryable.
+//! Use [`ClientError::is_retryable()`] or [`Code::is_retryable()`] to check if
+//! an error should be retried:
+//!
+//! ```ignore
+//! use connectrpc_axum_client::{ClientError, Code};
+//!
+//! let err = ClientError::unavailable("service overloaded");
+//! assert!(err.is_retryable());
+//!
+//! let err = ClientError::not_found("user not found");
+//! assert!(!err.is_retryable());
+//! ```
 //!
 //! ## Per-Call Options
 //!
@@ -503,32 +582,36 @@
 
 mod builder;
 mod client;
+pub mod config;
 mod error;
-mod error_parser;
-mod frame;
-pub mod interceptor;
-mod options;
-mod response;
-mod streaming;
+pub mod request;
+pub mod response;
 pub mod transport;
 
 pub use builder::{ClientBuildError, ClientBuilder};
 pub use client::ConnectClient;
 pub use error::ClientError;
-pub use frame::{FrameDecoder, FrameEncoder};
-pub use interceptor::{
-    BoxFuture, FnInterceptor, HeaderInterceptor, Interceptor, InterceptorChain, UnaryFunc,
-    UnaryInterceptorFunc, UnaryNext, UnaryRequest, UnaryResponse,
+
+// Re-export from config module
+pub use config::{
+    BoxFuture, CallOptions, ExponentialBackoff, FnInterceptor, HeaderInterceptor, Interceptor,
+    InterceptorChain, RetryPolicy, UnaryFunc, UnaryInterceptorFunc, UnaryNext, UnaryRequest,
+    UnaryResponse, retry, retry_with_policy,
 };
-pub use options::CallOptions;
-pub use response::{ConnectResponse, Metadata};
-pub use streaming::Streaming;
+
+// Re-export from request module
+pub use request::FrameEncoder;
+
+// Re-export from response module
+pub use response::{ConnectResponse, FrameDecoder, Metadata, Streaming};
 
 // Re-export transport types at the top level for convenience
-pub use transport::{HyperTransport, HyperTransportBuilder, TransportBody, TlsClientConfig};
+pub use transport::{HyperTransport, HyperTransportBuilder, TlsClientConfig, TransportBody};
 
 // Re-export core types that users need
-pub use connectrpc_axum_core::{Code, CompressionConfig, CompressionEncoding, CompressionLevel, ErrorDetail, Status};
+pub use connectrpc_axum_core::{
+    Code, CompressionConfig, CompressionEncoding, CompressionLevel, ErrorDetail, Status,
+};
 
 // Re-export types needed for generated streaming code
 pub use bytes::Bytes;

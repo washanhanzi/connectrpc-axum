@@ -46,6 +46,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 The downloaded binary is cached, so subsequent builds reuse it. The `PROTOC` environment variable is set automatically so prost-build uses the downloaded binary.
 
+## Custom Output Directory
+
+By default, generated code is written to `OUT_DIR` (set by Cargo during build). Use `.out_dir()` to specify a custom output directory:
+
+```rust
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    connectrpc_axum_build::compile_dir("proto")
+        .out_dir("src/generated")
+        .compile()?;
+    Ok(())
+}
+```
+
+This is useful when you want to commit generated code to version control or inspect it more easily.
+
 ## Prost Configuration
 
 Use `.with_prost_config()` to customize `prost_build::Config`:

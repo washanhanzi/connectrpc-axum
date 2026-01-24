@@ -13,7 +13,7 @@ use connectrpc_axum::CompressionConfig;
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{EchoRequest, EchoResponse, echoservice};
 use futures::StreamExt;
-use std::net::SocketAddr;
+// SocketAddr now provided by server_addr()
 
 /// Client streaming handler - collects messages and returns summary
 ///
@@ -57,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
         .add_router(router)
         .build();
 
-    let addr: SocketAddr = "0.0.0.0:3000".parse()?;
+    let addr = connectrpc_axum_examples::server_addr();
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     println!("=== Client Streaming Compression Test Server ===");

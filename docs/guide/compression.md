@@ -65,7 +65,7 @@ The compression level applies uniformly to all enabled algorithms (gzip, deflate
 
 | Encoding | Feature Flag |
 |----------|--------------|
-| `gzip` | (always enabled) |
+| `gzip` | `compression-gzip` |
 | `deflate` | `compression-deflate` |
 | `br` | `compression-br` |
 | `zstd` | `compression-zstd` |
@@ -96,19 +96,6 @@ let config = CompressionConfig::new(512);
 // Default: 0 bytes (compress everything, matching connect-go)
 let config = CompressionConfig::default();
 ```
-
-### Disabling Compression
-
-```rust
-use connectrpc_axum::MakeServiceBuilder;
-
-MakeServiceBuilder::new()
-    .add_router(router)
-    .disable_compression()
-    .build()
-```
-
-When disabled, no compression or decompression layers are added - more efficient than using a high threshold.
 
 ## Request Decompression
 

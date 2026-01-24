@@ -14,7 +14,7 @@ use connectrpc_axum_examples::{
     EchoRequest, EchoResponse, HelloRequest, HelloResponse, echo_service_server, helloworldservice,
 };
 use futures::{Stream, StreamExt};
-use std::net::SocketAddr;
+// SocketAddr now provided by server_addr()
 use std::pin::Pin;
 use std::sync::{Arc, atomic::AtomicUsize};
 use tonic::Status;
@@ -161,7 +161,7 @@ async fn main() -> anyhow::Result<()> {
         .add_grpc_service(echo_grpc_service)
         .build();
 
-    let addr: SocketAddr = "0.0.0.0:3000".parse()?;
+    let addr = connectrpc_axum_examples::server_addr();
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     println!("=== Example 5: Tonic Bidirectional Streaming (gRPC only) ===");

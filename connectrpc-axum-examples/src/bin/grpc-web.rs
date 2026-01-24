@@ -12,7 +12,7 @@ use axum::extract::State;
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
 use futures::Stream;
-use std::net::SocketAddr;
+// SocketAddr now provided by server_addr()
 use std::sync::{Arc, atomic::AtomicUsize};
 
 #[derive(Clone, Default)]
@@ -106,7 +106,7 @@ async fn main() -> anyhow::Result<()> {
         .add_grpc_service(grpc_web_server)
         .build();
 
-    let addr: SocketAddr = "0.0.0.0:3000".parse()?;
+    let addr = connectrpc_axum_examples::server_addr();
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     println!("=== Example 6: gRPC-Web via tonic-web ===");

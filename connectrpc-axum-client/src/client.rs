@@ -5,13 +5,17 @@
 use bytes::Bytes;
 use http::{Method, Request, header};
 use http_body_util::BodyExt;
+use tokio::time::timeout;
 
-use connectrpc_axum_core::{Code, CompressionConfig, CompressionEncoding};
+use connectrpc_axum_core::{Code, CompressionConfig, CompressionEncoding, wrap_envelope};
 #[cfg(feature = "tracing")]
 use tracing::info_span;
 
 use crate::ClientError;
-use crate::interceptor::{InterceptorChain, UnaryFunc, UnaryRequest, UnaryResponse};
+use crate::config::{
+    duration_to_timeout_header, CallOptions, InterceptorChain, StreamType, StreamingRequest,
+    UnaryFunc, UnaryRequest, UnaryResponse,
+};
 use crate::transport::{HyperTransport, TransportBody};
 use futures::{Stream, StreamExt};
 use prost::Message;
@@ -20,11 +24,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::builder::ClientBuilder;
-use crate::error_parser::parse_error_response;
-use crate::frame::{FrameDecoder, FrameEncoder};
-use crate::options::{CallOptions, duration_to_timeout_header};
-use crate::response::{ConnectResponse, Metadata};
-use crate::streaming::Streaming;
+use crate::request::FrameEncoder;
+use crate::response::error_parser::parse_error_response;
+use crate::response::{ConnectResponse, FrameDecoder, Metadata, Streaming};
 
 /// Header name for Connect protocol version.
 const CONNECT_PROTOCOL_VERSION_HEADER: &str = "connect-protocol-version";
@@ -34,6 +36,22 @@ const CONNECT_PROTOCOL_VERSION: &str = "1";
 
 /// Header name for Connect timeout in milliseconds.
 const CONNECT_TIMEOUT_HEADER: &str = "connect-timeout-ms";
+
+/// Check if a header name is reserved by the Connect protocol.
+///
+/// Reserved headers should not be overwritten by user-provided CallOptions headers.
+/// Per connect-go: "Headers beginning with 'Connect-' and 'Grpc-' are reserved."
+fn is_reserved_header(name: &http::header::HeaderName) -> bool {
+    let name_str = name.as_str();
+    // Protocol-specific headers
+    name_str.starts_with("connect-")
+        || name_str.starts_with("grpc-")
+        // Content headers set by the client
+        || name_str == "content-type"
+        || name_str == "content-encoding"
+        || name_str == "accept-encoding"
+        || name_str == "content-length"
+}
 
 /// Connect RPC client.
 ///
@@ -153,13 +171,12 @@ impl ConnectClient {
             let base_url = base_url.clone();
 
             Box::pin(async move {
-                // Build URL
-                let url = format!("{}/{}", base_url, request.procedure);
+                // Build URL (strip leading slash from procedure to avoid double slashes)
+                let procedure = request.procedure.strip_prefix('/').unwrap_or(&request.procedure);
+                let url = format!("{}/{}", base_url, procedure);
 
                 // Build HTTP request
-                let mut req_builder = http::Request::builder()
-                    .method(Method::POST)
-                    .uri(&url);
+                let mut req_builder = http::Request::builder().method(Method::POST).uri(&url);
 
                 // Copy headers from UnaryRequest
                 for (name, value) in request.headers.iter() {
@@ -174,7 +191,9 @@ impl ConnectClient {
                 // Build request with body
                 let req = req_builder
                     .body(TransportBody::full(request.body))
-                    .map_err(|e| ClientError::Protocol(format!("failed to build request: {}", e)))?;
+                    .map_err(|e| {
+                        ClientError::Protocol(format!("failed to build request: {}", e))
+                    })?;
 
                 // Send request
                 let response = transport.request(req).await?;
@@ -200,8 +219,8 @@ impl ConnectClient {
                     .get(header::CONTENT_ENCODING)
                     .and_then(|v| v.to_str().ok());
 
-                let response_encoding =
-                    CompressionEncoding::from_header(content_encoding).ok_or_else(|| {
+                let response_encoding = CompressionEncoding::from_header(content_encoding)
+                    .ok_or_else(|| {
                         ClientError::Protocol(format!(
                             "unsupported response encoding: {:?}",
                             content_encoding
@@ -355,12 +374,15 @@ impl ConnectClient {
 
         // Add Content-Encoding if compressed
         if compressed {
-            headers.insert(header::CONTENT_ENCODING, self.request_encoding.as_str().parse().unwrap());
+            headers.insert(
+                header::CONTENT_ENCODING,
+                self.request_encoding.as_str().parse().unwrap(),
+            );
         }
 
         // Add Connect-Timeout-Ms header if timeout is configured
-        if let Some(timeout) = self.default_timeout {
-            if let Some(timeout_ms) = duration_to_timeout_header(timeout) {
+        if let Some(t) = self.default_timeout {
+            if let Some(timeout_ms) = duration_to_timeout_header(t) {
                 headers.insert(CONNECT_TIMEOUT_HEADER, timeout_ms.parse().unwrap());
             }
         }
@@ -372,8 +394,15 @@ impl ConnectClient {
         let base_func = self.base_unary_func();
         let wrapped_func = self.interceptors.wrap_unary(base_func);
 
-        // 6. Call through interceptor chain
-        let unary_response = wrapped_func(unary_request).await?;
+        // 6. Call through interceptor chain (with client-side timeout if configured)
+        let call_future = wrapped_func(unary_request);
+        let unary_response = if let Some(t) = self.default_timeout {
+            timeout(t, call_future).await.map_err(|_| {
+                ClientError::new(Code::DeadlineExceeded, "client timeout exceeded")
+            })??
+        } else {
+            call_future.await?
+        };
 
         // 7. Decode response
         let message = self.decode_message(&unary_response.body)?;
@@ -450,20 +479,25 @@ impl ConnectClient {
 
         // Add Content-Encoding if compressed
         if compressed {
-            headers.insert(header::CONTENT_ENCODING, self.request_encoding.as_str().parse().unwrap());
+            headers.insert(
+                header::CONTENT_ENCODING,
+                self.request_encoding.as_str().parse().unwrap(),
+            );
         }
 
         // Add Connect-Timeout-Ms header (options timeout overrides default)
         let effective_timeout = options.timeout.or(self.default_timeout);
-        if let Some(timeout) = effective_timeout {
-            if let Some(timeout_ms) = duration_to_timeout_header(timeout) {
+        if let Some(t) = effective_timeout {
+            if let Some(timeout_ms) = duration_to_timeout_header(t) {
                 headers.insert(CONNECT_TIMEOUT_HEADER, timeout_ms.parse().unwrap());
             }
         }
 
-        // Add custom headers from options
+        // Add custom headers from options (skip reserved protocol headers)
         for (name, value) in options.headers.iter() {
-            headers.insert(name.clone(), value.clone());
+            if !is_reserved_header(name) {
+                headers.insert(name.clone(), value.clone());
+            }
         }
 
         // 4. Create UnaryRequest
@@ -473,8 +507,15 @@ impl ConnectClient {
         let base_func = self.base_unary_func();
         let wrapped_func = self.interceptors.wrap_unary(base_func);
 
-        // 6. Call through interceptor chain
-        let unary_response = wrapped_func(unary_request).await?;
+        // 6. Call through interceptor chain (with client-side timeout if configured)
+        let call_future = wrapped_func(unary_request);
+        let unary_response = if let Some(t) = effective_timeout {
+            timeout(t, call_future).await.map_err(|_| {
+                ClientError::new(Code::DeadlineExceeded, "client timeout exceeded")
+            })??
+        } else {
+            call_future.await?
+        };
 
         // 7. Decode response
         let message = self.decode_message(&unary_response.body)?;
@@ -542,10 +583,7 @@ impl ConnectClient {
     ) -> Result<
         ConnectResponse<
             Streaming<
-                FrameDecoder<
-                    impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin,
-                    Res,
-                >,
+                FrameDecoder<impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin, Res>,
             >,
         >,
         ClientError,
@@ -570,22 +608,25 @@ impl ConnectClient {
         // 2. Maybe compress
         let (body, compressed) = self.maybe_compress(body)?;
 
-        // 3. Build URL
+        // 3. Wrap in envelope for streaming request
+        // Connect streaming protocol requires envelope framing even for single-message requests
+        let body = Bytes::from(wrap_envelope(&body, compressed));
+
+        // 4. Build URL (strip leading slash from procedure to avoid double slashes)
+        let procedure = procedure.strip_prefix('/').unwrap_or(procedure);
         let url = format!("{}/{}", self.base_url, procedure);
 
-        // 4. Build request with streaming content-type
+        // 5. Build request with streaming content-type
         let mut req_builder = Request::builder()
             .method(Method::POST)
             .uri(&url)
             .header(CONNECT_PROTOCOL_VERSION_HEADER, CONNECT_PROTOCOL_VERSION)
             .header(header::CONTENT_TYPE, self.streaming_content_type());
 
-        // Add Content-Encoding if compressed
+        // Add Connect-Content-Encoding if compressed (streaming uses this header, not Content-Encoding)
         if compressed {
-            req_builder = req_builder.header(
-                header::CONTENT_ENCODING,
-                self.request_encoding.as_str(),
-            );
+            req_builder =
+                req_builder.header("connect-content-encoding", self.request_encoding.as_str());
         }
 
         // Add Accept-Encoding if configured
@@ -594,15 +635,22 @@ impl ConnectClient {
         }
 
         // Add Connect-Timeout-Ms header if timeout is configured
-        if let Some(timeout) = self.default_timeout {
-            if let Some(timeout_ms) = duration_to_timeout_header(timeout) {
+        if let Some(t) = self.default_timeout {
+            if let Some(timeout_ms) = duration_to_timeout_header(t) {
                 req_builder = req_builder.header(CONNECT_TIMEOUT_HEADER, timeout_ms);
             }
         }
 
-        // Apply interceptor streaming headers
+        // Apply streaming interceptors
         let mut interceptor_headers = http::HeaderMap::new();
-        self.interceptors.apply_streaming_headers(&mut interceptor_headers);
+        {
+            let mut req = StreamingRequest::new(
+                procedure,
+                StreamType::ServerStream,
+                &mut interceptor_headers,
+            );
+            self.interceptors.apply_streaming(&mut req);
+        }
         for (name, value) in interceptor_headers.iter() {
             req_builder = req_builder.header(name, value);
         }
@@ -612,8 +660,16 @@ impl ConnectClient {
             .body(TransportBody::full(body))
             .map_err(|e| ClientError::Protocol(format!("failed to build request: {}", e)))?;
 
-        // 5. Send request
-        let response = self.transport.request(req).await?;
+        // 5. Send request (with client-side timeout if configured)
+        let response = if let Some(t) = self.default_timeout {
+            timeout(t, self.transport.request(req))
+                .await
+                .map_err(|_| {
+                    ClientError::new(Code::DeadlineExceeded, "client timeout exceeded")
+                })??
+        } else {
+            self.transport.request(req).await?
+        };
 
         // 6. Check response status
         let status = response.status();
@@ -626,7 +682,11 @@ impl ConnectClient {
                 .await
                 .map_err(|e| ClientError::Transport(format!("failed to read error body: {}", e)))?
                 .to_bytes();
-            return Err(decompress_and_parse_error(status, &response_headers, body_bytes));
+            return Err(decompress_and_parse_error(
+                status,
+                &response_headers,
+                body_bytes,
+            ));
         }
 
         // 7. Get compression encoding from Connect-Content-Encoding header
@@ -685,9 +745,7 @@ impl ConnectClient {
         options: CallOptions,
     ) -> Result<
         ConnectResponse<
-            Streaming<
-                FrameDecoder<impl Stream<Item = Result<Bytes, ClientError>> + Unpin, Res>,
-            >,
+            Streaming<FrameDecoder<impl Stream<Item = Result<Bytes, ClientError>> + Unpin, Res>>,
         >,
         ClientError,
     >
@@ -705,28 +763,31 @@ impl ConnectClient {
         )
         .entered();
 
-        // 1. Encode request body (for server streaming, request is NOT envelope-wrapped)
+        // 1. Encode request body
         let body = self.encode_message(request)?;
 
         // 2. Maybe compress
         let (body, compressed) = self.maybe_compress(body)?;
 
-        // 3. Build URL
+        // 3. Wrap in envelope for streaming request
+        // Connect streaming protocol requires envelope framing even for single-message requests
+        let body = Bytes::from(wrap_envelope(&body, compressed));
+
+        // 4. Build URL (strip leading slash from procedure to avoid double slashes)
+        let procedure = procedure.strip_prefix('/').unwrap_or(procedure);
         let url = format!("{}/{}", self.base_url, procedure);
 
-        // 4. Build request with streaming content-type
+        // 5. Build request with streaming content-type
         let mut req_builder = Request::builder()
             .method(Method::POST)
             .uri(&url)
             .header(CONNECT_PROTOCOL_VERSION_HEADER, CONNECT_PROTOCOL_VERSION)
             .header(header::CONTENT_TYPE, self.streaming_content_type());
 
-        // Add Content-Encoding if compressed
+        // Add Connect-Content-Encoding if compressed (streaming uses this header, not Content-Encoding)
         if compressed {
-            req_builder = req_builder.header(
-                header::CONTENT_ENCODING,
-                self.request_encoding.as_str(),
-            );
+            req_builder =
+                req_builder.header("connect-content-encoding", self.request_encoding.as_str());
         }
 
         // Add Accept-Encoding if configured
@@ -736,20 +797,29 @@ impl ConnectClient {
 
         // Add Connect-Timeout-Ms header (options timeout overrides default)
         let effective_timeout = options.timeout.or(self.default_timeout);
-        if let Some(timeout) = effective_timeout {
-            if let Some(timeout_ms) = duration_to_timeout_header(timeout) {
+        if let Some(t) = effective_timeout {
+            if let Some(timeout_ms) = duration_to_timeout_header(t) {
                 req_builder = req_builder.header(CONNECT_TIMEOUT_HEADER, timeout_ms);
             }
         }
 
-        // Add custom headers from options
+        // Add custom headers from options (skip reserved protocol headers)
         for (name, value) in options.headers.iter() {
-            req_builder = req_builder.header(name, value);
+            if !is_reserved_header(name) {
+                req_builder = req_builder.header(name, value);
+            }
         }
 
-        // Apply interceptor streaming headers
+        // Apply streaming interceptors
         let mut interceptor_headers = http::HeaderMap::new();
-        self.interceptors.apply_streaming_headers(&mut interceptor_headers);
+        {
+            let mut req = StreamingRequest::new(
+                procedure,
+                StreamType::ServerStream,
+                &mut interceptor_headers,
+            );
+            self.interceptors.apply_streaming(&mut req);
+        }
         for (name, value) in interceptor_headers.iter() {
             req_builder = req_builder.header(name, value);
         }
@@ -759,8 +829,16 @@ impl ConnectClient {
             .body(TransportBody::full(body))
             .map_err(|e| ClientError::Protocol(format!("failed to build request: {}", e)))?;
 
-        // 5. Send request
-        let response = self.transport.request(req).await?;
+        // 5. Send request (with client-side timeout if configured)
+        let response = if let Some(t) = effective_timeout {
+            timeout(t, self.transport.request(req))
+                .await
+                .map_err(|_| {
+                    ClientError::new(Code::DeadlineExceeded, "client timeout exceeded")
+                })??
+        } else {
+            self.transport.request(req).await?
+        };
 
         // 6. Check response status
         let status = response.status();
@@ -773,7 +851,11 @@ impl ConnectClient {
                 .await
                 .map_err(|e| ClientError::Transport(format!("failed to read error body: {}", e)))?
                 .to_bytes();
-            return Err(decompress_and_parse_error(status, &response_headers, body_bytes));
+            return Err(decompress_and_parse_error(
+                status,
+                &response_headers,
+                body_bytes,
+            ));
         }
 
         // 7. Get compression encoding from Connect-Content-Encoding header
@@ -863,7 +945,8 @@ impl ConnectClient {
         )
         .entered();
 
-        // 1. Build URL
+        // 1. Build URL (strip leading slash from procedure to avoid double slashes)
+        let procedure = procedure.strip_prefix('/').unwrap_or(procedure);
         let url = format!("{}/{}", self.base_url, procedure);
 
         // 2. Wrap request stream with FrameEncoder
@@ -896,15 +979,22 @@ impl ConnectClient {
         }
 
         // Add Connect-Timeout-Ms header if timeout is configured
-        if let Some(timeout) = self.default_timeout {
-            if let Some(timeout_ms) = duration_to_timeout_header(timeout) {
+        if let Some(t) = self.default_timeout {
+            if let Some(timeout_ms) = duration_to_timeout_header(t) {
                 req_builder = req_builder.header(CONNECT_TIMEOUT_HEADER, timeout_ms);
             }
         }
 
-        // Apply interceptor streaming headers
+        // Apply streaming interceptors
         let mut interceptor_headers = http::HeaderMap::new();
-        self.interceptors.apply_streaming_headers(&mut interceptor_headers);
+        {
+            let mut req = StreamingRequest::new(
+                procedure,
+                StreamType::ClientStream,
+                &mut interceptor_headers,
+            );
+            self.interceptors.apply_streaming(&mut req);
+        }
         for (name, value) in interceptor_headers.iter() {
             req_builder = req_builder.header(name, value);
         }
@@ -914,8 +1004,16 @@ impl ConnectClient {
             .body(body)
             .map_err(|e| ClientError::Protocol(format!("failed to build request: {}", e)))?;
 
-        // 5. Send request
-        let response = self.transport.request(req).await?;
+        // 5. Send request (with client-side timeout if configured)
+        let response = if let Some(t) = self.default_timeout {
+            timeout(t, self.transport.request(req))
+                .await
+                .map_err(|_| {
+                    ClientError::new(Code::DeadlineExceeded, "client timeout exceeded")
+                })??
+        } else {
+            self.transport.request(req).await?
+        };
 
         // 6. Check response status
         let status = response.status();
@@ -928,7 +1026,11 @@ impl ConnectClient {
                 .await
                 .map_err(|e| ClientError::Transport(format!("failed to read error body: {}", e)))?
                 .to_bytes();
-            return Err(decompress_and_parse_error(status, &response_headers, body_bytes));
+            return Err(decompress_and_parse_error(
+                status,
+                &response_headers,
+                body_bytes,
+            ));
         }
 
         // 7. Get compression encoding from Connect-Content-Encoding header
@@ -957,12 +1059,20 @@ impl ConnectClient {
 
         // 10. Consume the EndStream frame and check for errors
         // The decoder will return an error if the EndStream frame contains an error
-        while let Some(result) = decoder.next().await {
-            if let Err(e) = result {
-                // EndStream contained an error - propagate it
-                return Err(e);
+        if let Some(result) = decoder.next().await {
+            match result {
+                Err(e) => {
+                    // EndStream contained an error - propagate it
+                    return Err(e);
+                }
+                Ok(_) => {
+                    // Protocol violation: got another message after the response
+                    return Err(ClientError::new(
+                        Code::Unimplemented,
+                        "unary response has multiple messages",
+                    ));
+                }
             }
-            // Unexpected: got another message after the response (protocol violation)
         }
 
         // 11. Extract metadata from response headers
@@ -1016,7 +1126,8 @@ impl ConnectClient {
         )
         .entered();
 
-        // 1. Build URL
+        // 1. Build URL (strip leading slash from procedure to avoid double slashes)
+        let procedure = procedure.strip_prefix('/').unwrap_or(procedure);
         let url = format!("{}/{}", self.base_url, procedure);
 
         // 2. Wrap request stream with FrameEncoder
@@ -1050,20 +1161,29 @@ impl ConnectClient {
 
         // Add Connect-Timeout-Ms header (options timeout overrides default)
         let effective_timeout = options.timeout.or(self.default_timeout);
-        if let Some(timeout) = effective_timeout {
-            if let Some(timeout_ms) = duration_to_timeout_header(timeout) {
+        if let Some(t) = effective_timeout {
+            if let Some(timeout_ms) = duration_to_timeout_header(t) {
                 req_builder = req_builder.header(CONNECT_TIMEOUT_HEADER, timeout_ms);
             }
         }
 
-        // Add custom headers from options
+        // Add custom headers from options (skip reserved protocol headers)
         for (name, value) in options.headers.iter() {
-            req_builder = req_builder.header(name, value);
+            if !is_reserved_header(name) {
+                req_builder = req_builder.header(name, value);
+            }
         }
 
-        // Apply interceptor streaming headers
+        // Apply streaming interceptors
         let mut interceptor_headers = http::HeaderMap::new();
-        self.interceptors.apply_streaming_headers(&mut interceptor_headers);
+        {
+            let mut req = StreamingRequest::new(
+                procedure,
+                StreamType::ClientStream,
+                &mut interceptor_headers,
+            );
+            self.interceptors.apply_streaming(&mut req);
+        }
         for (name, value) in interceptor_headers.iter() {
             req_builder = req_builder.header(name, value);
         }
@@ -1073,8 +1193,16 @@ impl ConnectClient {
             .body(body)
             .map_err(|e| ClientError::Protocol(format!("failed to build request: {}", e)))?;
 
-        // 5. Send request
-        let response = self.transport.request(req).await?;
+        // 5. Send request (with client-side timeout if configured)
+        let response = if let Some(t) = effective_timeout {
+            timeout(t, self.transport.request(req))
+                .await
+                .map_err(|_| {
+                    ClientError::new(Code::DeadlineExceeded, "client timeout exceeded")
+                })??
+        } else {
+            self.transport.request(req).await?
+        };
 
         // 6. Check response status
         let status = response.status();
@@ -1087,7 +1215,11 @@ impl ConnectClient {
                 .await
                 .map_err(|e| ClientError::Transport(format!("failed to read error body: {}", e)))?
                 .to_bytes();
-            return Err(decompress_and_parse_error(status, &response_headers, body_bytes));
+            return Err(decompress_and_parse_error(
+                status,
+                &response_headers,
+                body_bytes,
+            ));
         }
 
         // 7. Get compression encoding from Connect-Content-Encoding header
@@ -1122,12 +1254,20 @@ impl ConnectClient {
 
         // 10. Consume the EndStream frame and check for errors
         // The decoder will return an error if the EndStream frame contains an error
-        while let Some(result) = decoder.next().await {
-            if let Err(e) = result {
-                // EndStream contained an error - propagate it
-                return Err(e);
+        if let Some(result) = decoder.next().await {
+            match result {
+                Err(e) => {
+                    // EndStream contained an error - propagate it
+                    return Err(e);
+                }
+                Ok(_) => {
+                    // Protocol violation: got another message after the response
+                    return Err(ClientError::new(
+                        Code::Unimplemented,
+                        "unary response has multiple messages",
+                    ));
+                }
             }
-            // Unexpected: got another message after the response (protocol violation)
         }
 
         // 11. Extract metadata from response headers
@@ -1204,10 +1344,7 @@ impl ConnectClient {
     ) -> Result<
         ConnectResponse<
             Streaming<
-                FrameDecoder<
-                    impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin,
-                    Res,
-                >,
+                FrameDecoder<impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin, Res>,
             >,
         >,
         ClientError,
@@ -1227,7 +1364,8 @@ impl ConnectClient {
         )
         .entered();
 
-        // 1. Build URL
+        // 1. Build URL (strip leading slash from procedure to avoid double slashes)
+        let procedure = procedure.strip_prefix('/').unwrap_or(procedure);
         let url = format!("{}/{}", self.base_url, procedure);
 
         // 2. Wrap request stream with FrameEncoder
@@ -1260,15 +1398,19 @@ impl ConnectClient {
         }
 
         // Add Connect-Timeout-Ms header if timeout is configured
-        if let Some(timeout) = self.default_timeout {
-            if let Some(timeout_ms) = duration_to_timeout_header(timeout) {
+        if let Some(t) = self.default_timeout {
+            if let Some(timeout_ms) = duration_to_timeout_header(t) {
                 req_builder = req_builder.header(CONNECT_TIMEOUT_HEADER, timeout_ms);
             }
         }
 
-        // Apply interceptor streaming headers
+        // Apply streaming interceptors
         let mut interceptor_headers = http::HeaderMap::new();
-        self.interceptors.apply_streaming_headers(&mut interceptor_headers);
+        {
+            let mut req =
+                StreamingRequest::new(procedure, StreamType::BidiStream, &mut interceptor_headers);
+            self.interceptors.apply_streaming(&mut req);
+        }
         for (name, value) in interceptor_headers.iter() {
             req_builder = req_builder.header(name, value);
         }
@@ -1278,8 +1420,16 @@ impl ConnectClient {
             .body(body)
             .map_err(|e| ClientError::Protocol(format!("failed to build request: {}", e)))?;
 
-        // 5. Send request
-        let response = self.transport.request(req).await?;
+        // 5. Send request (with client-side timeout if configured)
+        let response = if let Some(t) = self.default_timeout {
+            timeout(t, self.transport.request(req))
+                .await
+                .map_err(|_| {
+                    ClientError::new(Code::DeadlineExceeded, "client timeout exceeded")
+                })??
+        } else {
+            self.transport.request(req).await?
+        };
 
         // 6. Verify HTTP/2 for bidirectional streaming
         // Bidi streaming requires HTTP/2 for full-duplex operation
@@ -1305,7 +1455,11 @@ impl ConnectClient {
                 .await
                 .map_err(|e| ClientError::Transport(format!("failed to read error body: {}", e)))?
                 .to_bytes();
-            return Err(decompress_and_parse_error(status, &response_headers, body_bytes));
+            return Err(decompress_and_parse_error(
+                status,
+                &response_headers,
+                body_bytes,
+            ));
         }
 
         // 8. Get compression encoding from Connect-Content-Encoding header
@@ -1369,10 +1523,7 @@ impl ConnectClient {
     ) -> Result<
         ConnectResponse<
             Streaming<
-                FrameDecoder<
-                    impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin,
-                    Res,
-                >,
+                FrameDecoder<impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin, Res>,
             >,
         >,
         ClientError,
@@ -1392,7 +1543,8 @@ impl ConnectClient {
         )
         .entered();
 
-        // 1. Build URL
+        // 1. Build URL (strip leading slash from procedure to avoid double slashes)
+        let procedure = procedure.strip_prefix('/').unwrap_or(procedure);
         let url = format!("{}/{}", self.base_url, procedure);
 
         // 2. Wrap request stream with FrameEncoder
@@ -1426,20 +1578,26 @@ impl ConnectClient {
 
         // Add Connect-Timeout-Ms header (options timeout overrides default)
         let effective_timeout = options.timeout.or(self.default_timeout);
-        if let Some(timeout) = effective_timeout {
-            if let Some(timeout_ms) = duration_to_timeout_header(timeout) {
+        if let Some(t) = effective_timeout {
+            if let Some(timeout_ms) = duration_to_timeout_header(t) {
                 req_builder = req_builder.header(CONNECT_TIMEOUT_HEADER, timeout_ms);
             }
         }
 
-        // Add custom headers from options
+        // Add custom headers from options (skip reserved protocol headers)
         for (name, value) in options.headers.iter() {
-            req_builder = req_builder.header(name, value);
+            if !is_reserved_header(name) {
+                req_builder = req_builder.header(name, value);
+            }
         }
 
-        // Apply interceptor streaming headers
+        // Apply streaming interceptors
         let mut interceptor_headers = http::HeaderMap::new();
-        self.interceptors.apply_streaming_headers(&mut interceptor_headers);
+        {
+            let mut req =
+                StreamingRequest::new(procedure, StreamType::BidiStream, &mut interceptor_headers);
+            self.interceptors.apply_streaming(&mut req);
+        }
         for (name, value) in interceptor_headers.iter() {
             req_builder = req_builder.header(name, value);
         }
@@ -1449,8 +1607,16 @@ impl ConnectClient {
             .body(body)
             .map_err(|e| ClientError::Protocol(format!("failed to build request: {}", e)))?;
 
-        // 5. Send request
-        let response = self.transport.request(req).await?;
+        // 5. Send request (with client-side timeout if configured)
+        let response = if let Some(t) = effective_timeout {
+            timeout(t, self.transport.request(req))
+                .await
+                .map_err(|_| {
+                    ClientError::new(Code::DeadlineExceeded, "client timeout exceeded")
+                })??
+        } else {
+            self.transport.request(req).await?
+        };
 
         // 6. Verify HTTP/2 for bidirectional streaming
         // Bidi streaming requires HTTP/2 for full-duplex operation
@@ -1476,7 +1642,11 @@ impl ConnectClient {
                 .await
                 .map_err(|e| ClientError::Transport(format!("failed to read error body: {}", e)))?
                 .to_bytes();
-            return Err(decompress_and_parse_error(status, &response_headers, body_bytes));
+            return Err(decompress_and_parse_error(
+                status,
+                &response_headers,
+                body_bytes,
+            ));
         }
 
         // 8. Get compression encoding from Connect-Content-Encoding header
@@ -1514,6 +1684,11 @@ impl ConnectClient {
 /// This handles the case where error responses may be compressed.
 /// Per connect-go reference implementation, error responses can have Content-Encoding
 /// and should be decompressed before parsing.
+///
+/// Follows connect-go behavior:
+/// - If Content-Encoding is set but unknown, return CodeInternal error
+/// - If Content-Encoding is not set, use raw bytes
+/// - If decompression fails, fall back to creating error from HTTP status
 fn decompress_and_parse_error(
     status: http::StatusCode,
     headers: &http::HeaderMap,
@@ -1524,21 +1699,49 @@ fn decompress_and_parse_error(
         .get(header::CONTENT_ENCODING)
         .and_then(|v| v.to_str().ok());
 
-    let decompressed = match CompressionEncoding::from_header(content_encoding) {
-        Some(encoding) => {
-            if let Some(codec) = encoding.codec() {
-                match codec.decompress(&body_bytes) {
-                    Ok(decompressed) => decompressed,
-                    Err(_) => body_bytes, // Fall back to raw bytes if decompression fails
-                }
-            } else {
-                body_bytes
-            }
-        }
-        None => body_bytes, // Unknown or no encoding, parse raw bytes
+    // If no Content-Encoding header, parse raw bytes
+    let Some(encoding_str) = content_encoding else {
+        return parse_error_response(status, &body_bytes);
     };
 
-    parse_error_response(status, &decompressed)
+    // Empty or identity encoding means no compression
+    if encoding_str.is_empty() || encoding_str == "identity" {
+        return parse_error_response(status, &body_bytes);
+    }
+
+    // Try to get the compression encoding
+    let Some(encoding) = CompressionEncoding::from_header(Some(encoding_str)) else {
+        // Unknown encoding - per connect-go, return CodeInternal error
+        return ClientError::new(
+            Code::Internal,
+            format!("unknown encoding {:?} in error response", encoding_str),
+        );
+    };
+
+    // Try to get the codec for this encoding
+    let Some(codec) = encoding.codec() else {
+        // Encoding known but codec not available (feature not enabled)
+        return ClientError::new(
+            Code::Internal,
+            format!(
+                "compression {:?} not available (feature not enabled)",
+                encoding_str
+            ),
+        );
+    };
+
+    // Decompress and parse
+    match codec.decompress(&body_bytes) {
+        Ok(decompressed) => parse_error_response(status, &decompressed),
+        Err(_) => {
+            // Decompression failed - fall back to error from HTTP status
+            // (consistent with connect-go behavior when unmarshaling fails)
+            ClientError::new(
+                crate::response::error_parser::http_status_to_code(status),
+                format!("HTTP {}: decompression of error body failed", status),
+            )
+        }
+    }
 }
 
 /// Convert a hyper Incoming body to a stream of bytes with ClientError.
@@ -1547,26 +1750,32 @@ fn body_to_stream(
 ) -> impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin {
     use http_body_util::BodyExt;
 
-    Box::pin(futures::stream::unfold(body, |mut body| async move {
-        match body.frame().await {
-            Some(Ok(frame)) => {
-                if let Ok(data) = frame.into_data() {
-                    Some((Ok(data), body))
-                } else {
-                    // Trailers or other frame types - skip
-                    Some((Ok(Bytes::new()), body))
+    Box::pin(
+        futures::stream::unfold(body, |mut body| async move {
+            match body.frame().await {
+                Some(Ok(frame)) => {
+                    if let Ok(data) = frame.into_data() {
+                        Some((Ok(data), body))
+                    } else {
+                        // Trailers or other frame types - skip
+                        Some((Ok(Bytes::new()), body))
+                    }
                 }
+                Some(Err(e)) => Some((
+                    Err(ClientError::Transport(format!("stream error: {}", e))),
+                    body,
+                )),
+                None => None,
             }
-            Some(Err(e)) => Some((Err(ClientError::Transport(format!("stream error: {}", e))), body)),
-            None => None,
-        }
-    }).filter(|result| {
-        // Filter out empty chunks
-        futures::future::ready(match result {
-            Ok(bytes) => !bytes.is_empty(),
-            Err(_) => true,
         })
-    }))
+        .filter(|result| {
+            // Filter out empty chunks
+            futures::future::ready(match result {
+                Ok(bytes) => !bytes.is_empty(),
+                Err(_) => true,
+            })
+        }),
+    )
 }
 
 #[cfg(test)]

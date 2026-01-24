@@ -13,6 +13,9 @@ tonic = [
   "dep:tonic-prost",
 ]
 
+# Enable gzip compression for streaming (basic compression test)
+compression-gzip-stream = ["connectrpc-axum/compression-gzip-stream"]
+
 # Enable all compression algorithms for testing
 compression-full = ["connectrpc-axum/compression-full"]
 
@@ -90,6 +93,16 @@ path = "src/bin/error-details.rs"
 name = "axum-router"
 path = "src/bin/axum-router.rs"
 
+# Streaming compression with gzip (basic test)
+[[bin]]
+name = "streaming-compression"
+path = "src/bin/streaming-compression.rs"
+
+# Client streaming decompression with gzip (basic test)
+[[bin]]
+name = "client-streaming-compression"
+path = "src/bin/client-streaming-compression.rs"
+
 # Streaming compression with all algorithms (deflate, br, zstd)
 [[bin]]
 name = "streaming-compression-algos"
@@ -133,10 +146,25 @@ path = "src/bin/client/client-stream-client.rs"
 name = "bidi-stream-client"
 path = "src/bin/client/bidi-stream-client.rs"
 
+# Interceptor integration test - verifies #28 and #29 are resolved
+[[bin]]
+name = "interceptor-test"
+path = "src/bin/interceptor-test.rs"
+
 # Connect protocol bidi streaming server
 [[bin]]
 name = "connect-bidi-stream"
 path = "src/bin/connect-bidi-stream.rs"
+
+# Connect client streaming server
+[[bin]]
+name = "connect-client-stream"
+path = "src/bin/connect-client-stream.rs"
+
+# Integration test runner - orchestrates all tests with dynamic port allocation
+[[bin]]
+name = "integration-test"
+path = "src/bin/integration-test.rs"
 
 [dependencies]
 # Application dependency for error handling

@@ -12,14 +12,29 @@ connectrpc-axum-core = { path = "../connectrpc-axum-core" }
 
 # HTTP client (hyper-based)
 hyper = { version = "1.6", features = ["client", "http1", "http2"] }
-hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio"] }
-hyper-rustls = { version = "0.27", default-features = false, features = ["http2", "ring", "tls12", "webpki-tokio"] }
+hyper-util = { version = "0.1", features = [
+    "client",
+    "client-legacy",
+    "http1",
+    "http2",
+    "tokio",
+] }
+hyper-rustls = { version = "0.27", default-features = false, features = [
+    "http2",
+    "ring",
+    "tls12",
+    "webpki-tokio",
+] }
 http-body = { workspace = true }
 http-body-util = { workspace = true }
 tower = { workspace = true }
 tower-service = "0.3"
-rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
-webpki-roots = "0.26"
+rustls = { version = "0.23", default-features = false, features = [
+    "std",
+    "ring",
+    "tls12",
+] }
+webpki-roots = "1"
 pin-project-lite = "0.2"
 
 # Serialization
@@ -43,6 +58,9 @@ zstd = { workspace = true, optional = true }
 # Error handling
 thiserror = { workspace = true }
 
+# Random for retry jitter
+rand = { workspace = true }
+
 # Base64 for error detail parsing
 base64 = { workspace = true }
 
@@ -51,11 +69,28 @@ tracing = { workspace = true, optional = true }
 
 [features]
 default = []
-compression-gzip-stream = ["dep:flate2", "connectrpc-axum-core/compression-gzip-stream"]
-compression-deflate-stream = ["dep:flate2", "connectrpc-axum-core/compression-deflate-stream"]
-compression-br-stream = ["dep:brotli", "connectrpc-axum-core/compression-br-stream"]
-compression-zstd-stream = ["dep:zstd", "connectrpc-axum-core/compression-zstd-stream"]
-compression-full-stream = ["compression-gzip-stream", "compression-deflate-stream", "compression-br-stream", "compression-zstd-stream"]
+compression-gzip-stream = [
+    "dep:flate2",
+    "connectrpc-axum-core/compression-gzip-stream",
+]
+compression-deflate-stream = [
+    "dep:flate2",
+    "connectrpc-axum-core/compression-deflate-stream",
+]
+compression-br-stream = [
+    "dep:brotli",
+    "connectrpc-axum-core/compression-br-stream",
+]
+compression-zstd-stream = [
+    "dep:zstd",
+    "connectrpc-axum-core/compression-zstd-stream",
+]
+compression-full-stream = [
+    "compression-gzip-stream",
+    "compression-deflate-stream",
+    "compression-br-stream",
+    "compression-zstd-stream",
+]
 # Enable tracing instrumentation for RPC calls
 tracing = ["dep:tracing"]
 

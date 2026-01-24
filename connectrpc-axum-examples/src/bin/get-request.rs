@@ -16,7 +16,7 @@
 use axum::Router;
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{HelloRequest, HelloResponse};
-use std::net::SocketAddr;
+// SocketAddr now provided by server_addr()
 
 /// Handler for unary RPC - works with both GET and POST
 async fn say_hello(
@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .layer(ConnectLayer::new());
 
-    let addr: SocketAddr = "0.0.0.0:3000".parse()?;
+    let addr = connectrpc_axum_examples::server_addr();
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     println!("=== GET Request Support Example ===");

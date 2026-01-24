@@ -5,109 +5,160 @@ description: Run the complete test suite for connectrpc-axum. Use when the user 
 
 # test
 
-Run the complete test suite for connectrpc-axum: unit tests, doc tests, Rust client integration tests, and Go client integration tests.
+Run the complete test suite for connectrpc-axum using cargo-make.
 
-## Instructions
-
-Run all test suites in order:
-
-### 1. Unit Tests
+## Quick Start
 
 ```bash
-cargo test
+# Run all tests (unit + Rust client + Go client)
+cargo make test
 ```
 
-### 2. Rust Client Integration Tests
+This runs the integration test runner which:
+- Allocates unique ports dynamically for each test (prevents port conflicts)
+- Runs unit tests, Rust client tests, and Go client tests
+- Provides colored output with pass/fail status
+- Ensures proper cleanup of server processes
 
-Tests the `connectrpc-axum-client` crate against the Rust server.
+## Cargo Make Commands
 
-**Location**: `connectrpc-axum-examples/src/bin/client/` (client binaries are separate from server binaries in `src/bin/`)
+| Command | Description |
+|---------|-------------|
+| `cargo make test` | Run all tests |
+| `cargo make test-unit` | Run unit tests only |
+| `cargo make test-rust-client` | Run Rust client integration tests (against Rust servers) |
+| `cargo make test-go-client` | Run Go client integration tests (against Rust servers) |
+| `cargo make test-cross-impl` | Run cross-implementation tests (Rust clients against Go server) |
+| `cargo make test-verbose` | Run all tests with verbose output |
+| `cargo make test-filter <pattern>` | Run tests matching a filter |
+
+### Examples
 
 ```bash
-# Start the server in background, run client test, then stop server
-cargo run --bin connect-unary --no-default-features &
-sleep 1
-cargo run --bin unary-client --no-default-features
-kill %1 2>/dev/null || true
+# Run all tests (unit + Rust client + Go client + cross-impl)
+cargo make test
+
+# Run only unit tests (fastest)
+cargo make test-unit
+
+# Run only Rust client tests (against Rust servers)
+cargo make test-rust-client
+
+# Run only Go client tests (against Rust servers)
+cargo make test-go-client
+
+# Run only cross-implementation tests (Rust clients against Go server)
+cargo make test-cross-impl
+
+# Run with verbose output
+cargo make test-verbose
+
+# Filter tests by name
+cargo make test-filter TestConnectUnary
+cargo make test-filter "Unary"
 ```
 
-The Rust client tests verify:
-- JSON and Proto encoding
-- Response wrapper methods (Deref, map, into_parts)
-- Metadata extraction
-- Connection error handling
+## CI Commands
 
-### 3. Go Client Integration Tests
-
-Run from the repo root (use `-C` to avoid changing working directory):
 ```bash
-go test -C connectrpc-axum-examples/go-client -v -timeout 300s
+# Full CI: fmt-check + clippy + all tests
+cargo make ci
+
+# Quick CI: fmt-check + clippy + unit tests only
+cargo make ci-quick
 ```
 
-The Go tests:
-1. Build all Rust example servers (once, cached)
-2. Start each server, wait for it to be ready
-3. Run Go client tests against each server
-4. Validate responses match expected behavior
+## Direct Integration Test Runner (Alternative)
+
+If cargo-make is not installed, run the integration test binary directly:
+
+```bash
+# Run all tests
+cargo run -p connectrpc-axum-examples --bin integration-test
+
+# Run only unit tests
+cargo run -p connectrpc-axum-examples --bin integration-test -- --unit
+
+# Run only Rust client tests
+cargo run -p connectrpc-axum-examples --bin integration-test -- --rust-client
+
+# Run only Go client tests
+cargo run -p connectrpc-axum-examples --bin integration-test -- --go-client
+
+# Filter tests by name
+cargo run -p connectrpc-axum-examples --bin integration-test -- --filter TestConnectUnary
+
+# Verbose output
+cargo run -p connectrpc-axum-examples --bin integration-test -- -v
+```
 
 ## Success Criteria
 
-**Unit Tests**: All tests pass with exit code 0
+The test runner shows a summary:
 
-**Rust Client Tests**: All 7 tests pass ("=== All tests passed! ===" in output)
+```
+=== Summary ===
 
-**Go Integration Tests**: All tests pass (PASS in output)
+Passed: X
+Failed: 0
+Total: X
+```
 
-## Integration Test Matrix
+All tests should pass (Failed: 0).
 
-### Rust Client Tests
+## Test Categories
 
-| Test | Server | Protocol | Test Type |
-|------|--------|----------|-----------|
-| unary-client | connect-unary | Connect | Unary (JSON + Proto) |
+### Unit Tests
+- All crate unit tests and doc tests via `cargo test --workspace`
 
-### Go Client Tests
+### Rust Client Tests (against Rust servers)
+| Test | Server | Description |
+|------|--------|-------------|
+| unary-client | connect-unary | Unary calls (JSON + Proto encoding) |
+| server-stream-client | connect-server-stream | Server streaming |
+| client-stream-client | connect-client-stream | Client streaming |
+| bidi-stream-client | connect-bidi-stream | Bidirectional streaming |
 
-| Test | Server | Protocol | Test Type |
-|------|--------|----------|-----------|
-| TestConnectUnary | connect-unary | Connect | Unary |
-| TestConnectServerStream | connect-server-stream | Connect | Server streaming |
-| TestTonicUnaryConnect | tonic-unary | Connect | Unary |
-| TestTonicUnaryGRPC | tonic-unary | gRPC | Unary |
-| TestTonicServerStreamConnect | tonic-server-stream | Connect | Server streaming |
-| TestTonicServerStreamGRPC | tonic-server-stream | gRPC | Server streaming |
-| TestTonicBidiStreamConnectUnary | tonic-bidi-stream | Connect | Unary |
-| TestTonicBidiStreamGRPC | tonic-bidi-stream | gRPC | Bidi streaming |
-| TestGRPCWeb | grpc-web | gRPC-Web | Unary |
-| TestStreamingErrorHandling | streaming-error-repro | Connect | Stream error handling |
-| TestProtocolVersion | protocol-version | Connect | Protocol header validation |
-| TestTimeout | timeout | Connect | Connect-Timeout-Ms enforcement |
-| TestExtractorConnectError | extractor-connect-error | Connect | Extractor rejection with ConnectError |
-| TestExtractorHTTPResponse | extractor-http-response | Connect | Extractor rejection with plain HTTP |
+### Go Client Tests (against Rust servers)
+| Test | Server | Protocol |
+|------|--------|----------|
+| TestConnectUnary | connect-unary | Connect |
+| TestConnectServerStream | connect-server-stream | Connect |
+| TestTonicUnary* | tonic-unary | Connect + gRPC |
+| TestTonicServerStream* | tonic-server-stream | Connect + gRPC |
+| TestTonicBidiStream* | tonic-bidi-stream | Connect + gRPC |
+| TestGRPCWeb | grpc-web | gRPC-Web |
+| TestProtocolVersion | protocol-version | Connect |
+| TestTimeout | timeout | Connect |
+| TestExtractor* | extractor-* | Connect |
+| TestStreamingErrorHandling | streaming-error-repro | Connect |
+
+### Cross-Implementation Tests (Rust clients against Go server)
+| Rust Client | Description |
+|-------------|-------------|
+| unary-client | Unary calls (JSON + Proto encoding) |
+| server-stream-client | Server streaming |
+| client-stream-client | Client streaming |
+| bidi-stream-client | Bidirectional streaming |
+| typed-client | Typed client API |
+
+The Go server is located in `connectrpc-axum-examples/go-server/` and implements all proto services (HelloWorldService, EchoService) using connect-go.
 
 ## Failure Handling
 
-**Unit test failures**: Check the specific test name and error message
+**Test runner failures**: Check the failed test name and output shown below it.
 
-**Integration test failures**:
-1. Note which specific test failed from the output
-2. Check if the server started (look for "Server ready" message)
-3. Check the Go client error message for details
-4. Common issues:
-   - Port 3000 already in use
-   - Missing Go dependencies (run `go mod tidy` in go-client/)
-   - Build errors (run `cargo build --features tonic` first)
+**Port issues**: The integration test runner uses dynamic ports, so port conflicts should not occur.
 
-## Report Format
+**Build errors**: Run `cargo make build-examples` or `cargo build -p connectrpc-axum-examples --features tonic` first.
 
-```
-Unit Tests: [PASS/FAIL]
-- Passed: X
-- Failed: Y
+**Go dependency issues**: Run `go mod tidy` in `connectrpc-axum-examples/go-client/`.
 
-Rust Client Tests: [PASS/FAIL]
-- 7 tests passed
+**cargo-make not installed**: Install with `cargo install cargo-make` or use the direct integration test runner commands above.
 
-Go Integration Tests: [PASS/FAIL]
-- X tests passed
-```
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PORT` | Server listen port | 3000 |
+| `SERVER_URL` | Client target URL | http://localhost:3000 |

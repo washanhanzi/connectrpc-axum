@@ -9,7 +9,7 @@
 use connectrpc_axum::prelude::*;
 use connectrpc_axum::{MakeServiceBuilder, MessageLimits};
 use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
-use std::net::SocketAddr;
+// SocketAddr now provided by server_addr()
 
 // Base64 string with high entropy to avoid compression dropping below send_max_bytes.
 const LARGE_MESSAGE: &str = "wE+paSZYML1xNsjnrVQYAMjU/Wa4dp9wbyn76pKj1/rsl+4n8aivMK4X0tjJN9ViHf+m6YxLLQ5VstvHcgoXI3YV2VrgasLpZ8OliVkHREsl8D6Kwnr+1OAT5J1oKm/t2AJBfuHls/+JhJ6FlZFosMtF66H70yqdqSYPmkrAebksl9G/uY+bRLSIUPT0Sx8XbtLhtGUs";
@@ -104,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .build();
 
-    let addr: SocketAddr = "0.0.0.0:3000".parse()?;
+    let addr = connectrpc_axum_examples::server_addr();
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     println!("=== send_max_bytes Integration Test Server ===");

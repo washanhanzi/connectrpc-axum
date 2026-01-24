@@ -75,10 +75,17 @@ dependencies = ["go-generate"]
 [tasks.go-build-server]
 description = "Build the Go reference server"
 category = "Go Server"
-cwd = "go-client"
+cwd = "go-server"
 command = "go"
-args = ["build", "-o", "go-server", "./cmd/server"]
+args = ["build", "-o", "go-server", "."]
 dependencies = ["go-generate"]
+
+[tasks.go-server-deps]
+description = "Download Go server dependencies"
+category = "Go Server"
+cwd = "go-server"
+command = "go"
+args = ["mod", "tidy"]
 
 [tasks.go-build]
 description = "Build both Go client and server"

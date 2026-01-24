@@ -12,7 +12,7 @@ use axum::http::HeaderMap;
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{EchoRequest, EchoResponse, HelloRequest, HelloResponse};
 use futures::{Stream, StreamExt};
-use std::net::SocketAddr;
+// SocketAddr now provided by server_addr()
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -187,7 +187,7 @@ async fn main() -> anyhow::Result<()> {
         .layer(ConnectLayer::new())
         .with_state(state);
 
-    let addr: SocketAddr = "0.0.0.0:3000".parse()?;
+    let addr = connectrpc_axum_examples::server_addr();
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     println!("=== Streaming Handlers with Extractors Example ===");

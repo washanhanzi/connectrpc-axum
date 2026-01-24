@@ -4,11 +4,13 @@ This page provides a conceptual overview of how connectrpc-axum works internally
 
 ## Overview
 
-connectrpc-axum bridges the Connect protocol with Axum's handler model through two crates:
+connectrpc-axum bridges the Connect protocol with Axum's handler model through multiple crates:
 
 | Crate | Purpose |
 |-------|---------|
-| `connectrpc-axum` | Runtime library - layers, extractors, response types |
+| `connectrpc-axum` | Server runtime library - layers, extractors, response types |
+| `connectrpc-axum-client` | Client library - HTTP client, streaming, interceptors |
+| `connectrpc-axum-core` | Shared protocol types - compression, error codes, envelope framing |
 | `connectrpc-axum-build` | Build-time code generation from proto files |
 
 The core modules in the runtime library:

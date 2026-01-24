@@ -23,15 +23,17 @@
 //!   cargo run --bin typed-client --no-default-features -- http://localhost:8080
 
 use connectrpc_axum_examples::{
-    HelloRequest, HelloResponse, HelloWorldServiceClient,
-    HELLO_WORLD_SERVICE_SERVICE_NAME, hello_world_service_procedures,
+    HELLO_WORLD_SERVICE_SERVICE_NAME, HelloRequest, HelloResponse, HelloWorldServiceClient,
+    hello_world_service_procedures,
 };
 use std::env;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Check command line args first, then SERVER_URL env var, then default
     let base_url = env::args()
         .nth(1)
+        .or_else(|| env::var("SERVER_URL").ok())
         .unwrap_or_else(|| "http://localhost:3000".to_string());
 
     println!("=== Typed Connect RPC Client Example ===");
@@ -98,9 +100,18 @@ async fn main() -> anyhow::Result<()> {
     // Test 4: Using procedure constants for reference
     println!("Test 4: Procedure path constants...");
     {
-        println!("  SAY_HELLO path: {}", hello_world_service_procedures::SAY_HELLO);
-        println!("  SAY_HELLO_STREAM path: {}", hello_world_service_procedures::SAY_HELLO_STREAM);
-        println!("  GET_GREETING path: {}", hello_world_service_procedures::GET_GREETING);
+        println!(
+            "  SAY_HELLO path: {}",
+            hello_world_service_procedures::SAY_HELLO
+        );
+        println!(
+            "  SAY_HELLO_STREAM path: {}",
+            hello_world_service_procedures::SAY_HELLO_STREAM
+        );
+        println!(
+            "  GET_GREETING path: {}",
+            hello_world_service_procedures::GET_GREETING
+        );
     }
 
     // Test 5: Accessing the underlying ConnectClient
@@ -144,7 +155,10 @@ async fn main() -> anyhow::Result<()> {
 
         let response = client2.say_hello(&request).await?;
         assert_eq!(response.message, "Hello, Eve!");
-        println!("  PASS: Cloned client works - message = {:?}", response.message);
+        println!(
+            "  PASS: Cloned client works - message = {:?}",
+            response.message
+        );
     }
 
     println!();

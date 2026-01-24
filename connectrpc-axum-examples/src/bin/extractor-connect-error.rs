@@ -21,7 +21,7 @@
 use axum::{extract::FromRequestParts, http::request::Parts};
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
-use std::net::SocketAddr;
+// SocketAddr now provided by server_addr()
 
 /// Custom extractor that validates the x-user-id header.
 /// Returns `ConnectError` on rejection, which gets encoded with Connect protocol.
@@ -61,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
         .say_hello(say_hello)
         .build_connect();
 
-    let addr: SocketAddr = "0.0.0.0:3000".parse()?;
+    let addr = connectrpc_axum_examples::server_addr();
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     println!("=== Example: Extractor Rejection with ConnectError ===");

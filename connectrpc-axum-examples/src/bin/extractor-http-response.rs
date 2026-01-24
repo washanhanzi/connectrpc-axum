@@ -26,7 +26,7 @@ use axum::{
 };
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
-use std::net::SocketAddr;
+// SocketAddr now provided by server_addr()
 
 /// Custom rejection type that returns a plain HTTP 401 response.
 /// This bypasses Connect protocol encoding entirely.
@@ -84,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
         .say_hello(say_hello)
         .build_connect();
 
-    let addr: SocketAddr = "0.0.0.0:3000".parse()?;
+    let addr = connectrpc_axum_examples::server_addr();
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     println!("=== Example: Extractor Rejection with Plain HTTP Response ===");

@@ -41,6 +41,7 @@ impl BuildMarker for Disabled {
 /// Default state is `CompileBuilder<Enabled, Disabled, Disabled, Disabled>` (Connect handlers only).
 pub struct CompileBuilder<Connect = Enabled, Tonic = Disabled, TonicClient = Disabled, ConnectClient = Disabled> {
     includes_dir: PathBuf,
+    out_dir: Option<PathBuf>,
     prost_config: Option<Box<dyn FnOnce(&mut prost_build::Config)>>,
     #[cfg(feature = "tonic")]
     tonic_config: Option<Box<dyn FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder>>,
@@ -78,6 +79,7 @@ impl<T, TC, CC> CompileBuilder<Enabled, T, TC, CC> {
     pub fn no_handlers(self) -> CompileBuilder<Disabled, Disabled, TC, Disabled> {
         CompileBuilder {
             includes_dir: self.includes_dir,
+            out_dir: self.out_dir,
             prost_config: self.prost_config,
             #[cfg(feature = "tonic")]
             tonic_config: None,
@@ -101,6 +103,7 @@ impl<TC, CC> CompileBuilder<Enabled, Disabled, TC, CC> {
     pub fn with_tonic(self) -> CompileBuilder<Enabled, Enabled, TC, CC> {
         CompileBuilder {
             includes_dir: self.includes_dir,
+            out_dir: self.out_dir,
             prost_config: self.prost_config,
             tonic_config: self.tonic_config,
             #[cfg(feature = "tonic-client")]
@@ -231,6 +234,26 @@ impl<C, T, TC, CC> CompileBuilder<C, T, TC, CC> {
         self.prost_config = Some(Box::new(f));
         self
     }
+
+    /// Set the output directory for generated code.
+    ///
+    /// By default, generated code is written to `OUT_DIR` (set by Cargo during build).
+    /// Use this method to specify a custom output directory instead.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     connectrpc_axum_build::compile_dir("proto")
+    ///         .out_dir("src/generated")
+    ///         .compile()?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn out_dir(mut self, path: impl AsRef<Path>) -> Self {
+        self.out_dir = Some(path.as_ref().to_path_buf());
+        self
+    }
 }
 
 // ============================================================================
@@ -259,6 +282,7 @@ impl<C, T, CC> CompileBuilder<C, T, Disabled, CC> {
     pub fn with_tonic_client(self) -> CompileBuilder<C, T, Enabled, CC> {
         CompileBuilder {
             includes_dir: self.includes_dir,
+            out_dir: self.out_dir,
             prost_config: self.prost_config,
             #[cfg(feature = "tonic")]
             tonic_config: self.tonic_config,
@@ -344,6 +368,7 @@ impl<C, T, TC> CompileBuilder<C, T, TC, Disabled> {
     pub fn with_connect_client(self) -> CompileBuilder<C, T, TC, Enabled> {
         CompileBuilder {
             includes_dir: self.includes_dir,
+            out_dir: self.out_dir,
             prost_config: self.prost_config,
             #[cfg(feature = "tonic")]
             tonic_config: self.tonic_config,
@@ -366,12 +391,20 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBu
         #[cfg(feature = "tonic-client")]
         let grpc_client = TC::VALUE;
         let connect_client = CC::VALUE;
-        let out_dir = std::env::var("OUT_DIR")
-            .map_err(|e| std::io::Error::other(format!("OUT_DIR not set: {e}")))?;
+        let out_dir = match &self.out_dir {
+            Some(dir) => dir.display().to_string(),
+            None => std::env::var("OUT_DIR")
+                .map_err(|e| std::io::Error::other(format!("OUT_DIR not set: {e}")))?,
+        };
         let descriptor_path = format!("{}/descriptor.bin", out_dir);
 
         // -------- Pass 1: prost + connect (conditionally) --------
         let mut config = prost_build::Config::default();
+
+        // Set custom output directory if specified
+        if self.out_dir.is_some() {
+            config.out_dir(&out_dir);
+        }
 
         // Apply user's prost configuration first
         if let Some(config_fn) = self.prost_config {
@@ -407,7 +440,11 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBu
         let descriptor_bytes = fs::read(&descriptor_path)
             .map_err(|e| std::io::Error::other(format!("read descriptor: {e}")))?;
 
-        pbjson_build::Builder::new()
+        let mut pbjson_builder = pbjson_build::Builder::new();
+        if self.out_dir.is_some() {
+            pbjson_builder.out_dir(&out_dir);
+        }
+        pbjson_builder
             .register_descriptors(&descriptor_bytes)
             .map_err(|e| std::io::Error::other(format!("register descriptors: {e}")))?
             .build(&["."]) // Generate for all packages
@@ -443,8 +480,6 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBu
         if grpc {
             use prost::Message; // for descriptor decode
 
-            let out_dir = std::env::var("OUT_DIR").unwrap();
-            let descriptor_path = format!("{}/descriptor.bin", out_dir);
             let bytes = fs::read(&descriptor_path)
                 .map_err(|e| std::io::Error::other(format!("read descriptor: {e}")))?;
             let fds = prost_types::FileDescriptorSet::decode(bytes.as_slice())
@@ -520,8 +555,6 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBu
         if grpc_client {
             use prost::Message; // for descriptor decode
 
-            let out_dir = std::env::var("OUT_DIR").unwrap();
-            let descriptor_path = format!("{}/descriptor.bin", out_dir);
             let bytes = fs::read(&descriptor_path)
                 .map_err(|e| std::io::Error::other(format!("read descriptor: {e}")))?;
             let fds = prost_types::FileDescriptorSet::decode(bytes.as_slice())
@@ -782,6 +815,7 @@ fn recurse_enum(
 pub fn compile_dir(includes_dir: impl AsRef<Path>) -> CompileBuilder {
     CompileBuilder {
         includes_dir: includes_dir.as_ref().to_path_buf(),
+        out_dir: None,
         prost_config: None,
         #[cfg(feature = "tonic")]
         tonic_config: None,

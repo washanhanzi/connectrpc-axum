@@ -5,6 +5,10 @@
 //
 // Run: go test -v
 // Run single: go test -v -run TestConnectUnary
+//
+// With custom server URL (for use with Rust test runner):
+//
+//	SERVER_URL=http://localhost:4567 go test -v -run TestConnectUnary
 package main
 
 import (
@@ -12,28 +16,58 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
 const (
-	serverPort   = "3000"
-	serverAddr   = "localhost:" + serverPort
-	serverURL    = "http://" + serverAddr
-	maxWaitTime  = 30 * time.Second
-	pollInterval = 200 * time.Millisecond
+	defaultServerPort = "3000"
+	maxWaitTime       = 30 * time.Second
+	pollInterval      = 200 * time.Millisecond
 )
 
 var (
+	// serverURL is the base URL for the test server.
+	// Set via SERVER_URL env var, defaults to http://localhost:3000
+	serverURL string
+
+	// serverAddr is the host:port for TCP connections (derived from serverURL)
+	serverAddr string
+
 	examplesDir string
 	rootDir     string
 	buildOnce   sync.Once
 	buildErr    error
+
+	// useExternalServer indicates whether SERVER_URL was set externally.
+	// When true, tests skip starting their own server.
+	useExternalServer bool
 )
+
+func init() {
+	// Initialize server URL from environment or use default
+	serverURL = os.Getenv("SERVER_URL")
+	if serverURL == "" {
+		serverURL = "http://localhost:" + defaultServerPort
+	}
+
+	// Parse server address from URL
+	parsed, err := url.Parse(serverURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid SERVER_URL: %v\n", err)
+		os.Exit(1)
+	}
+	serverAddr = parsed.Host
+
+	// If SERVER_URL was explicitly set, use external server mode
+	useExternalServer = os.Getenv("SERVER_URL") != ""
+}
 
 func TestMain(m *testing.M) {
 	// Find project root
@@ -52,6 +86,10 @@ func TestMain(m *testing.M) {
 
 // buildServers builds all example servers once before running tests
 func buildServers(t *testing.T) {
+	if useExternalServer {
+		return // Skip building when using external server
+	}
+
 	buildOnce.Do(func() {
 		t.Log("Building all example servers...")
 		// Build with tonic feature to cover all examples
@@ -77,10 +115,21 @@ type server struct {
 	features string
 	cmd      *exec.Cmd
 	cancel   context.CancelFunc
+	external bool // true if using external server (no process to manage)
 }
 
-// startServer starts a Rust server and waits for it to be ready
+// startServer starts a Rust server and waits for it to be ready.
+// If SERVER_URL is set externally, it skips starting a server and just verifies connectivity.
 func startServer(t *testing.T, name, features string) *server {
+	if useExternalServer {
+		// External server mode: just verify the server is reachable
+		if !waitForServer(t, 5*time.Second) {
+			t.Fatalf("External server at %s is not reachable", serverURL)
+		}
+		t.Logf("Using external server at %s", serverURL)
+		return &server{name: name, external: true}
+	}
+
 	buildServers(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -94,6 +143,10 @@ func startServer(t *testing.T, name, features string) *server {
 	cmd.Dir = rootDir
 	cmd.Stdout = nil // Discard output
 	cmd.Stderr = nil
+
+	// Set PORT environment variable to match serverAddr
+	port := strings.Split(serverAddr, ":")[1]
+	cmd.Env = append(os.Environ(), "PORT="+port)
 
 	if err := cmd.Start(); err != nil {
 		cancel()
@@ -119,6 +172,10 @@ func startServer(t *testing.T, name, features string) *server {
 
 // stop gracefully stops the server
 func (s *server) stop() {
+	if s.external {
+		return // Nothing to stop for external servers
+	}
+
 	s.cancel()
 	// Wait briefly for clean shutdown
 	done := make(chan struct{})
@@ -148,4 +205,3 @@ func waitForServer(t *testing.T, timeout time.Duration) bool {
 	}
 	return false
 }
-

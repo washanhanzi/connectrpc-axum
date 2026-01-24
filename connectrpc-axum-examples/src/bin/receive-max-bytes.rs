@@ -10,7 +10,7 @@ use connectrpc_axum::MakeServiceBuilder;
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{EchoRequest, EchoResponse, echoservice};
 use futures::StreamExt;
-use std::net::SocketAddr;
+// SocketAddr now provided by server_addr()
 
 /// Unary echo handler - just echoes back the message
 async fn echo(
@@ -73,7 +73,7 @@ async fn main() -> anyhow::Result<()> {
         .receive_max_bytes(1000) // 1000 byte limit for requests
         .build();
 
-    let addr: SocketAddr = "0.0.0.0:3000".parse()?;
+    let addr = connectrpc_axum_examples::server_addr();
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     println!("=== receive_max_bytes Integration Test Server ===");

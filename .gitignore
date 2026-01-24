@@ -3,7 +3,7 @@ target/
 
 .DS_Store
 
-connect-go
+/connect-go
 
 # VitePress
 docs/.vitepress/cache
@@ -14,3 +14,5 @@ node_modules
 
 # compare
 ./compare
+
+/tonic

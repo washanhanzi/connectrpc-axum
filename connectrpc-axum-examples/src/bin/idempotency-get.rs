@@ -18,7 +18,7 @@
 
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{helloworldservice, HelloRequest, HelloResponse};
-use std::net::SocketAddr;
+// SocketAddr now provided by server_addr()
 
 /// Handler for the idempotent GetGreeting RPC.
 /// Works with both GET and POST requests automatically.
@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
         .get_greeting(get_greeting)
         .build_connect();
 
-    let addr: SocketAddr = "0.0.0.0:3000".parse()?;
+    let addr = connectrpc_axum_examples::server_addr();
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     println!("=== Idempotency Level: Auto GET Support ===");

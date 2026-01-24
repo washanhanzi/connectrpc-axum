@@ -15,7 +15,7 @@ use connectrpc_axum::MakeServiceBuilder;
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
 use serde::Serialize;
-use std::net::SocketAddr;
+// SocketAddr now provided by server_addr()
 
 /// Simple stateless handler for unary RPC
 async fn say_hello(
@@ -63,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
         .add_axum_router(axum_router)
         .build();
 
-    let addr: SocketAddr = "0.0.0.0:3000".parse()?;
+    let addr = connectrpc_axum_examples::server_addr();
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     println!("=== Example: MakeServiceBuilder with axum router ===");

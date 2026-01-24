@@ -19,7 +19,7 @@ Add to your `Cargo.toml`:
 connectrpc-axum = "*"
 axum = "0.8"
 prost = "0.14"
-pbjson = "0.8"
+pbjson = "0.9"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 # If you need stream support

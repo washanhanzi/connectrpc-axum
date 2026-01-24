@@ -335,15 +335,6 @@ where
         self
     }
 
-    /// Disable compression entirely.
-    ///
-    /// When disabled, no compression/decompression layers are added to the router.
-    /// This is more efficient than setting a high threshold.
-    pub fn disable_compression(mut self) -> Self {
-        self.config.compression = None;
-        self
-    }
-
     /// Set the server-side maximum timeout.
     ///
     /// When set, the effective timeout for each request is the minimum of:

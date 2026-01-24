@@ -2,6 +2,16 @@
 //!
 //! Tests the connectrpc-axum-client server streaming against the Rust server.
 //!
+//! Demonstrates using the typed client API for server streaming:
+//! ```ignore
+//! let response = client.say_hello_stream(&request).await?;
+//! ```
+//!
+//! Instead of the low-level API:
+//! ```ignore
+//! let response = client.call_server_stream::<Req, Res>("service/Method", &request).await?;
+//! ```
+//!
 //! Usage:
 //!   # First, start the server in another terminal:
 //!   cargo run --bin connect-server-stream --no-default-features
@@ -12,15 +22,17 @@
 //!   # Or specify a custom server URL:
 //!   cargo run --bin server-stream-client --no-default-features -- http://localhost:8080
 
-use connectrpc_axum_client::{Code, ConnectClient, ClientError};
-use connectrpc_axum_examples::{HelloRequest, HelloResponse};
+use connectrpc_axum_client::ClientError;
+use connectrpc_axum_examples::{HelloRequest, HelloResponse, HelloWorldServiceClient};
 use futures::StreamExt;
 use std::env;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Check command line args first, then SERVER_URL env var, then default
     let base_url = env::args()
         .nth(1)
+        .or_else(|| env::var("SERVER_URL").ok())
         .unwrap_or_else(|| "http://localhost:3000".to_string());
 
     println!("=== ConnectRPC Server Streaming Client Tests ===");
@@ -30,7 +42,9 @@ async fn main() -> anyhow::Result<()> {
     // Test 1: Server stream with JSON encoding
     println!("Test 1: Server streaming with JSON encoding...");
     {
-        let client = ConnectClient::builder(&base_url).use_json().build()?;
+        let client = HelloWorldServiceClient::builder(&base_url)
+            .use_json()
+            .build()?;
 
         let request = HelloRequest {
             name: Some("Alice".to_string()),
@@ -38,15 +52,13 @@ async fn main() -> anyhow::Result<()> {
             greeting_type: None,
         };
 
-        let response = client
-            .call_server_stream::<HelloRequest, HelloResponse>(
-                "hello.HelloWorldService/SayHelloStream",
-                &request,
-            )
-            .await?;
+        let response = client.say_hello_stream(&request).await?;
 
         // Check initial response metadata
-        println!("  Initial response has {} metadata headers", response.metadata().headers().len());
+        println!(
+            "  Initial response has {} metadata headers",
+            response.metadata().headers().len()
+        );
 
         let mut stream = response.into_inner();
         let mut messages = Vec::new();
@@ -65,17 +77,36 @@ async fn main() -> anyhow::Result<()> {
         }
 
         // Verify we got the expected messages
-        assert!(messages.len() >= 3, "Expected at least 3 messages, got {}", messages.len());
-        assert!(messages[0].contains("Starting stream"), "First message should mention starting");
-        assert!(messages[1].contains("Hobby #1: reading"), "Should have first hobby");
-        assert!(messages[2].contains("Hobby #2: coding"), "Should have second hobby");
-        assert!(messages.last().unwrap().contains("Goodbye"), "Last message should say goodbye");
+        assert!(
+            messages.len() >= 3,
+            "Expected at least 3 messages, got {}",
+            messages.len()
+        );
+        assert!(
+            messages[0].contains("Starting stream"),
+            "First message should mention starting"
+        );
+        assert!(
+            messages[1].contains("Hobby #1: reading"),
+            "Should have first hobby"
+        );
+        assert!(
+            messages[2].contains("Hobby #2: coding"),
+            "Should have second hobby"
+        );
+        assert!(
+            messages.last().unwrap().contains("Goodbye"),
+            "Last message should say goodbye"
+        );
 
         println!("  PASS: Received {} messages", messages.len());
 
         // Check if trailers are available
         if let Some(trailers) = stream.trailers() {
-            println!("  PASS: Trailers available ({} headers)", trailers.headers().len());
+            println!(
+                "  PASS: Trailers available ({} headers)",
+                trailers.headers().len()
+            );
         } else {
             println!("  PASS: No trailers (expected for this server)");
         }
@@ -84,7 +115,9 @@ async fn main() -> anyhow::Result<()> {
     // Test 2: Server stream with Proto encoding
     println!("Test 2: Server streaming with Proto encoding...");
     {
-        let client = ConnectClient::builder(&base_url).use_proto().build()?;
+        let client = HelloWorldServiceClient::builder(&base_url)
+            .use_proto()
+            .build()?;
 
         let request = HelloRequest {
             name: Some("Bob".to_string()),
@@ -92,12 +125,7 @@ async fn main() -> anyhow::Result<()> {
             greeting_type: None,
         };
 
-        let response = client
-            .call_server_stream::<HelloRequest, HelloResponse>(
-                "hello.HelloWorldService/SayHelloStream",
-                &request,
-            )
-            .await?;
+        let response = client.say_hello_stream(&request).await?;
 
         let mut stream = response.into_inner();
         let mut count = 0;
@@ -123,7 +151,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 3: Empty stream (no hobbies, but server still sends some messages)
     println!("Test 3: Server stream with default name...");
     {
-        let client = ConnectClient::builder(&base_url).use_json().build()?;
+        let client = HelloWorldServiceClient::new(&base_url)?;
 
         let request = HelloRequest {
             name: None,
@@ -131,12 +159,7 @@ async fn main() -> anyhow::Result<()> {
             greeting_type: None,
         };
 
-        let response = client
-            .call_server_stream::<HelloRequest, HelloResponse>(
-                "hello.HelloWorldService/SayHelloStream",
-                &request,
-            )
-            .await?;
+        let response = client.say_hello_stream(&request).await?;
 
         let mut stream = response.into_inner();
         let mut messages = Vec::new();
@@ -146,14 +169,20 @@ async fn main() -> anyhow::Result<()> {
         }
 
         // Should default to "World"
-        assert!(messages[0].message.contains("World"), "Should use default name 'World'");
-        println!("  PASS: Default name used, received {} messages", messages.len());
+        assert!(
+            messages[0].message.contains("World"),
+            "Should use default name 'World'"
+        );
+        println!(
+            "  PASS: Default name used, received {} messages",
+            messages.len()
+        );
     }
 
     // Test 4: Connection error handling
     println!("Test 4: Connection error handling...");
     {
-        let client = ConnectClient::builder("http://127.0.0.1:1")
+        let client = HelloWorldServiceClient::builder("http://127.0.0.1:1")
             .use_json()
             .build()?;
 
@@ -163,19 +192,17 @@ async fn main() -> anyhow::Result<()> {
             greeting_type: None,
         };
 
-        let result = client
-            .call_server_stream::<HelloRequest, HelloResponse>(
-                "hello.HelloWorldService/SayHelloStream",
-                &request,
-            )
-            .await;
+        let result = client.say_hello_stream(&request).await;
 
         match result {
             Err(ClientError::Transport(_)) => {
                 println!("  PASS: Got expected Transport error");
             }
             Err(other) => {
-                println!("  FAIL: Expected Transport error, got different error: {:?}", other);
+                println!(
+                    "  FAIL: Expected Transport error, got different error: {:?}",
+                    other
+                );
                 return Err(anyhow::anyhow!("Unexpected error type"));
             }
             Ok(_) => {
@@ -188,7 +215,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 5: Collect all messages at once using collect
     println!("Test 5: Collect all messages with collect()...");
     {
-        let client = ConnectClient::builder(&base_url).use_json().build()?;
+        let client = HelloWorldServiceClient::new(&base_url)?;
 
         let request = HelloRequest {
             name: Some("Collector".to_string()),
@@ -196,12 +223,7 @@ async fn main() -> anyhow::Result<()> {
             greeting_type: None,
         };
 
-        let response = client
-            .call_server_stream::<HelloRequest, HelloResponse>(
-                "hello.HelloWorldService/SayHelloStream",
-                &request,
-            )
-            .await?;
+        let response = client.say_hello_stream(&request).await?;
 
         let stream = response.into_inner();
 
@@ -217,7 +239,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 6: is_finished() check
     println!("Test 6: is_finished() works correctly...");
     {
-        let client = ConnectClient::builder(&base_url).use_json().build()?;
+        let client = HelloWorldServiceClient::new(&base_url)?;
 
         let request = HelloRequest {
             name: Some("Finisher".to_string()),
@@ -225,30 +247,31 @@ async fn main() -> anyhow::Result<()> {
             greeting_type: None,
         };
 
-        let response = client
-            .call_server_stream::<HelloRequest, HelloResponse>(
-                "hello.HelloWorldService/SayHelloStream",
-                &request,
-            )
-            .await?;
+        let response = client.say_hello_stream(&request).await?;
 
         let mut stream = response.into_inner();
 
         // Before consuming, not finished
-        assert!(!stream.is_finished(), "Stream should not be finished before consuming");
+        assert!(
+            !stream.is_finished(),
+            "Stream should not be finished before consuming"
+        );
 
         // Consume all messages
         while let Some(_) = stream.next().await {}
 
         // After consuming, should be finished
-        assert!(stream.is_finished(), "Stream should be finished after consuming all messages");
+        assert!(
+            stream.is_finished(),
+            "Stream should be finished after consuming all messages"
+        );
         println!("  PASS: is_finished() returns correct values");
     }
 
     // Test 7: Verify trailers with custom server that sends them
     println!("Test 7: Trailers access after stream consumption...");
     {
-        let client = ConnectClient::builder(&base_url).use_json().build()?;
+        let client = HelloWorldServiceClient::new(&base_url)?;
 
         let request = HelloRequest {
             name: Some("Trailer".to_string()),
@@ -256,12 +279,7 @@ async fn main() -> anyhow::Result<()> {
             greeting_type: None,
         };
 
-        let response = client
-            .call_server_stream::<HelloRequest, HelloResponse>(
-                "hello.HelloWorldService/SayHelloStream",
-                &request,
-            )
-            .await?;
+        let response = client.say_hello_stream(&request).await?;
 
         let mut stream = response.into_inner();
 
@@ -272,7 +290,10 @@ async fn main() -> anyhow::Result<()> {
 
         // Trailers should be accessible now (even if empty/None)
         let trailers = stream.trailers();
-        println!("  PASS: Trailers access works (trailers: {:?})", trailers.is_some());
+        println!(
+            "  PASS: Trailers access works (trailers: {:?})",
+            trailers.is_some()
+        );
     }
 
     println!();

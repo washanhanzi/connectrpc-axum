@@ -7,7 +7,7 @@ use connectrpc_axum::MakeServiceBuilder;
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{EchoRequest, EchoResponse, echoservice};
 use futures::StreamExt;
-use std::net::SocketAddr;
+// SocketAddr now provided by server_addr()
 
 async fn echo(
     ConnectRequest(req): ConnectRequest<EchoRequest>,
@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
     // Configure with no receive_max_bytes limit (default behavior)
     let service = MakeServiceBuilder::new().add_router(router).build();
 
-    let addr: SocketAddr = "0.0.0.0:3000".parse()?;
+    let addr = connectrpc_axum_examples::server_addr();
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     println!("=== receive_max_bytes Unlimited Test Server ===");

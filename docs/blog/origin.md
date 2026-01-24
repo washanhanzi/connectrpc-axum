@@ -178,7 +178,9 @@ If you're interested in tonic compatibility and `MakeServiceBuilder`, the [archi
 
 ## Client
 
-I realized that to create a Connect protocol client, I would reuse the types and core structs already in my server implementation, so I built them together.
+I realized that if someone wanted to build a Connect protocol client, they would reuse the core types and structs from the server implementation. So I decided to build the client in the same repo.
+
+I chose to build the client on `hyper` instead of `reqwest`. Part of it was personal interest — I wanted to explore hyper's lower-level HTTP primitives. But there's also a practical reason: [RPC-level interceptors](https://github.com/washanhanzi/connectrpc-axum/issues/29). With `reqwest-middleware`, you only get HTTP-level middleware that sees the raw request/response once. For streaming, the body just flows through — you can't intercept individual messages. connect-go solves this with interceptors that wrap the streaming connection, allowing them to see every `Send` and `Receive` call. To implement something similar in Rust, I needed more control over the connection lifecycle than reqwest provides. Building on hyper directly gives me that flexibility.
 
 ## Wrapping Up
 

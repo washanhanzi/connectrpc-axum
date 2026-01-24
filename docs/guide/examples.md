@@ -43,11 +43,32 @@ See the [connectrpc-axum-examples](https://github.com/washanhanzi/connectrpc-axu
 | `streaming-compression` | Per-message compression in streaming responses |
 | `client-streaming-compression` | Per-message decompression in streaming requests |
 
+## Connect RPC Client
+
+| Example | Description |
+|---------|-------------|
+| `client/unary-client` | Basic unary RPC client |
+| `client/server-stream-client` | Server streaming client |
+| `client/client-stream-client` | Client streaming client |
+| `client/bidi-stream-client` | Bidirectional streaming client |
+| `client/typed-client` | Type-safe client wrapper pattern |
+| `interceptor-test` | Client interceptor demonstration |
+
 ## Running Examples
 
 ```bash
 cd connectrpc-axum-examples
 cargo run --bin connect-unary
+```
+
+For client examples:
+
+```bash
+# Start a server first
+cargo run --bin connect-unary &
+
+# Run the client
+cargo run --bin unary-client
 ```
 
 For examples with tonic features:

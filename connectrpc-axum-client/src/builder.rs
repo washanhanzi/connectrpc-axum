@@ -3,7 +3,7 @@
 //! Provides a fluent API for configuring and building a [`ConnectClient`].
 
 use crate::client::ConnectClient;
-use crate::interceptor::{Interceptor, InterceptorChain};
+use crate::config::{Interceptor, InterceptorChain};
 use crate::transport::{HyperTransport, HyperTransportBuilder, TlsClientConfig};
 use connectrpc_axum_core::{CompressionConfig, CompressionEncoding};
 use std::sync::Arc;
@@ -177,11 +177,17 @@ impl ClientBuilder {
 
     /// Set the default timeout for RPC calls.
     ///
-    /// This timeout is propagated to the server via the `Connect-Timeout-Ms` header,
-    /// allowing the server to cancel processing if the deadline will be exceeded.
+    /// This timeout is enforced on both client and server sides:
+    /// - **Client-side**: The request will be cancelled if it exceeds the timeout
+    /// - **Server-side**: The `Connect-Timeout-Ms` header is sent, allowing the
+    ///   server to cancel processing if the deadline will be exceeded
     ///
-    /// The timeout applies to the entire RPC call, including connection time,
-    /// request sending, server processing, and response receiving.
+    /// For unary and client-streaming RPCs, the timeout applies to the entire
+    /// call including connection, request, and response.
+    ///
+    /// For server-streaming and bidirectional RPCs, the timeout applies to the
+    /// initial connection and response establishment. Stream consumption is not
+    /// subject to this timeout (use [`Streaming::drain_timeout`] for that).
     ///
     /// Individual calls can override this timeout using [`CallOptions::timeout`].
     ///

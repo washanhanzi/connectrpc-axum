@@ -9,6 +9,8 @@ A Rust library that brings [ConnectRPC](https://connectrpc.com/) protocol suppor
 
 > **Status**: Under active development. Not recommended for production use yet.
 
+📝 [The Origin of connectrpc-axum](https://washanhanzi.github.io/connectrpc-axum/blog/origin) - Learn about the problems this library solves and the design decisions behind it.
+
 ## Features
 
 | Protocol | Support |

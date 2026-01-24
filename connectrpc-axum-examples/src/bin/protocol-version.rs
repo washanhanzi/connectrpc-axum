@@ -9,7 +9,7 @@
 
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
-use std::net::SocketAddr;
+// SocketAddr now provided by server_addr()
 
 /// Simple handler for testing protocol version validation
 async fn say_hello(
@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
         .require_protocol_header(true)
         .build();
 
-    let addr: SocketAddr = "0.0.0.0:3000".parse()?;
+    let addr = connectrpc_axum_examples::server_addr();
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     println!("=== Protocol Version Validation Example ===");

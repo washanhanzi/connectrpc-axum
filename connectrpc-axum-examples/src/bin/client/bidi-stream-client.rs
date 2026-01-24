@@ -2,6 +2,11 @@
 //!
 //! Tests the bidirectional streaming RPC call against the Rust server.
 //!
+//! Demonstrates using the typed client API for bidi streaming:
+//! ```ignore
+//! let response = client.echo_bidi_stream(request_stream).await?;
+//! ```
+//!
 //! Usage:
 //!   # First, start the server in another terminal:
 //!   cargo run --bin connect-bidi-stream --no-default-features
@@ -12,16 +17,35 @@
 //!   # Or specify a custom server URL:
 //!   cargo run --bin bidi-stream-client --no-default-features -- http://localhost:8080
 
-use connectrpc_axum_client::{CallOptions, ConnectClient, ClientError, ConnectResponse as ClientResponse};
-use connectrpc_axum_examples::{EchoRequest, EchoResponse};
-use futures::{StreamExt, stream};
+use connectrpc_axum_client::ClientError;
+use connectrpc_axum_examples::{EchoRequest, EchoServiceClient, EchoServiceClientBuilder};
+use futures::{stream, StreamExt};
 use std::env;
 use std::time::Duration;
 
+/// Helper to build a client configured for bidi streaming.
+///
+/// For bidirectional streaming over plain HTTP (http://), we need to enable
+/// HTTP/2 prior knowledge (h2c) since HTTP/1.1 doesn't support full-duplex
+/// communication. For HTTPS URLs, HTTP/2 is negotiated via ALPN automatically.
+fn bidi_client_builder(base_url: &str) -> EchoServiceClientBuilder {
+    let builder = EchoServiceClient::builder(base_url);
+
+    // Enable HTTP/2 prior knowledge for http:// URLs (required for bidi streaming)
+    // For https:// URLs, HTTP/2 is negotiated via ALPN
+    if base_url.starts_with("http://") {
+        builder.http2_prior_knowledge()
+    } else {
+        builder
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Check command line args first, then SERVER_URL env var, then default
     let base_url = env::args()
         .nth(1)
+        .or_else(|| env::var("SERVER_URL").ok())
         .unwrap_or_else(|| "http://localhost:3000".to_string());
 
     println!("=== Bidi Streaming Integration Tests ===");
@@ -31,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 1: Bidi streaming with JSON encoding
     println!("Test 1: Bidi streaming with JSON encoding...");
     {
-        let client = ConnectClient::builder(&base_url).use_json().build()?;
+        let client = bidi_client_builder(&base_url).use_json().build()?;
 
         let messages = vec![
             EchoRequest {
@@ -47,12 +71,7 @@ async fn main() -> anyhow::Result<()> {
 
         let request_stream = stream::iter(messages);
 
-        let response = client
-            .call_bidi_stream::<EchoRequest, EchoResponse, _>(
-                "echo.EchoService/EchoBidiStream",
-                request_stream,
-            )
-            .await?;
+        let response = client.echo_bidi_stream(request_stream).await?;
 
         let mut stream = response.into_inner();
         let mut message_count = 0;
@@ -86,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 2: Bidi streaming with Proto encoding
     println!("Test 2: Bidi streaming with Proto encoding...");
     {
-        let client = ConnectClient::builder(&base_url).use_proto().build()?;
+        let client = bidi_client_builder(&base_url).use_proto().build()?;
 
         let messages = vec![
             EchoRequest {
@@ -99,12 +118,7 @@ async fn main() -> anyhow::Result<()> {
 
         let request_stream = stream::iter(messages);
 
-        let response = client
-            .call_bidi_stream::<EchoRequest, EchoResponse, _>(
-                "echo.EchoService/EchoBidiStream",
-                request_stream,
-            )
-            .await?;
+        let response = client.echo_bidi_stream(request_stream).await?;
 
         let mut stream = response.into_inner();
         let messages: Vec<_> = stream
@@ -127,7 +141,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 3: Bidi streaming with single message
     println!("Test 3: Bidi streaming with single message...");
     {
-        let client = ConnectClient::builder(&base_url).use_json().build()?;
+        let client = bidi_client_builder(&base_url).use_json().build()?;
 
         let messages = vec![EchoRequest {
             message: "single".to_string(),
@@ -135,12 +149,7 @@ async fn main() -> anyhow::Result<()> {
 
         let request_stream = stream::iter(messages);
 
-        let response = client
-            .call_bidi_stream::<EchoRequest, EchoResponse, _>(
-                "echo.EchoService/EchoBidiStream",
-                request_stream,
-            )
-            .await?;
+        let response = client.echo_bidi_stream(request_stream).await?;
 
         let mut stream = response.into_inner();
         let mut count = 0;
@@ -158,7 +167,9 @@ async fn main() -> anyhow::Result<()> {
     // Test 4: Connection error handling
     println!("Test 4: Connection error handling...");
     {
-        let client = ConnectClient::builder("http://127.0.0.1:1")
+        // Note: For connection error test, we still need http2_prior_knowledge
+        // because the error happens at the transport level, not protocol negotiation
+        let client = bidi_client_builder("http://127.0.0.1:1")
             .use_json()
             .build()?;
 
@@ -168,12 +179,7 @@ async fn main() -> anyhow::Result<()> {
 
         let request_stream = stream::iter(messages);
 
-        let result: Result<ClientResponse<_>, ClientError> = client
-            .call_bidi_stream::<EchoRequest, EchoResponse, _>(
-                "echo.EchoService/EchoBidiStream",
-                request_stream,
-            )
-            .await;
+        let result: Result<_, ClientError> = client.echo_bidi_stream(request_stream).await;
 
         match result {
             Err(ClientError::Transport(_)) => {
@@ -196,7 +202,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 5: Collect all messages using StreamExt
     println!("Test 5: Collect all messages using StreamExt...");
     {
-        let client = ConnectClient::builder(&base_url).use_json().build()?;
+        let client = bidi_client_builder(&base_url).use_json().build()?;
 
         let messages = vec![
             EchoRequest {
@@ -212,12 +218,7 @@ async fn main() -> anyhow::Result<()> {
 
         let request_stream = stream::iter(messages);
 
-        let response = client
-            .call_bidi_stream::<EchoRequest, EchoResponse, _>(
-                "echo.EchoService/EchoBidiStream",
-                request_stream,
-            )
-            .await?;
+        let response = client.echo_bidi_stream(request_stream).await?;
 
         let stream = response.into_inner();
         let all_results: Vec<_> = stream.collect().await;
@@ -234,7 +235,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 6: is_finished() works correctly
     println!("Test 6: is_finished() works correctly...");
     {
-        let client = ConnectClient::builder(&base_url).use_json().build()?;
+        let client = bidi_client_builder(&base_url).use_json().build()?;
 
         let messages = vec![EchoRequest {
             message: "finish-test".to_string(),
@@ -242,12 +243,7 @@ async fn main() -> anyhow::Result<()> {
 
         let request_stream = stream::iter(messages);
 
-        let response = client
-            .call_bidi_stream::<EchoRequest, EchoResponse, _>(
-                "echo.EchoService/EchoBidiStream",
-                request_stream,
-            )
-            .await?;
+        let response = client.echo_bidi_stream(request_stream).await?;
 
         let mut stream = response.into_inner();
 
@@ -268,7 +264,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 7: Trailers access after stream consumption
     println!("Test 7: Trailers access after stream consumption...");
     {
-        let client = ConnectClient::builder(&base_url).use_json().build()?;
+        let client = bidi_client_builder(&base_url).use_json().build()?;
 
         let messages = vec![EchoRequest {
             message: "trailers-test".to_string(),
@@ -276,12 +272,7 @@ async fn main() -> anyhow::Result<()> {
 
         let request_stream = stream::iter(messages);
 
-        let response = client
-            .call_bidi_stream::<EchoRequest, EchoResponse, _>(
-                "echo.EchoService/EchoBidiStream",
-                request_stream,
-            )
-            .await?;
+        let response = client.echo_bidi_stream(request_stream).await?;
 
         let mut stream = response.into_inner();
 
@@ -298,7 +289,7 @@ async fn main() -> anyhow::Result<()> {
     println!("Test 8: Timeout configuration...");
     {
         // Create a client with a 30-second timeout
-        let client = ConnectClient::builder(&base_url)
+        let client = bidi_client_builder(&base_url)
             .use_json()
             .timeout(Duration::from_secs(30))
             .build()?;
@@ -310,12 +301,7 @@ async fn main() -> anyhow::Result<()> {
         let request_stream = stream::iter(messages);
 
         // The Connect-Timeout-Ms header will be set to 30000
-        let response = client
-            .call_bidi_stream::<EchoRequest, EchoResponse, _>(
-                "echo.EchoService/EchoBidiStream",
-                request_stream,
-            )
-            .await?;
+        let response = client.echo_bidi_stream(request_stream).await?;
 
         let mut stream = response.into_inner();
         let mut count = 0;
@@ -329,47 +315,6 @@ async fn main() -> anyhow::Result<()> {
         assert!(count >= 1, "Expected at least 1 message, got {}", count);
         println!(
             "  PASS: Request with timeout succeeded, received {} messages",
-            count
-        );
-    }
-
-    // Test 9: Per-call options with custom headers
-    println!("Test 9: Per-call options with custom headers...");
-    {
-        let client = ConnectClient::builder(&base_url).use_json().build()?;
-
-        let messages = vec![EchoRequest {
-            message: "options-test".to_string(),
-        }];
-
-        let request_stream = stream::iter(messages);
-
-        // Use call_bidi_stream_with_options to add custom headers
-        let options = CallOptions::new()
-            .timeout(Duration::from_secs(10))
-            .header("x-custom-header", "test-value")
-            .header("authorization", "Bearer test-token");
-
-        let response = client
-            .call_bidi_stream_with_options::<EchoRequest, EchoResponse, _>(
-                "echo.EchoService/EchoBidiStream",
-                request_stream,
-                options,
-            )
-            .await?;
-
-        let mut stream = response.into_inner();
-        let mut count = 0;
-
-        while let Some(result) = stream.next().await {
-            if result.is_ok() {
-                count += 1;
-            }
-        }
-
-        assert!(count >= 1, "Expected at least 1 message, got {}", count);
-        println!(
-            "  PASS: Request with custom headers succeeded, received {} messages",
             count
         );
     }

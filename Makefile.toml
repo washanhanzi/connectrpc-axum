@@ -1,0 +1,110 @@
+[config]
+default_to_workspace = false
+skip_core_tasks = true
+
+# ============================================================================
+# Test Tasks
+# ============================================================================
+
+[tasks.test]
+description = "Run all tests (unit + Rust client + Go client)"
+category = "Testing"
+command = "cargo"
+args = ["run", "-p", "connectrpc-axum-examples", "--bin", "integration-test"]
+
+[tasks.test-unit]
+description = "Run unit tests only"
+category = "Testing"
+command = "cargo"
+args = [
+    "run",
+    "-p",
+    "connectrpc-axum-examples",
+    "--bin",
+    "integration-test",
+    "--",
+    "--unit",
+]
+
+[tasks.test-rust-client]
+description = "Run Rust client integration tests"
+category = "Testing"
+command = "cargo"
+args = [
+    "run",
+    "-p",
+    "connectrpc-axum-examples",
+    "--bin",
+    "integration-test",
+    "--",
+    "--rust-client",
+]
+
+[tasks.test-go-client]
+description = "Run Go client integration tests (against Rust servers)"
+category = "Testing"
+command = "cargo"
+args = [
+    "run",
+    "-p",
+    "connectrpc-axum-examples",
+    "--bin",
+    "integration-test",
+    "--",
+    "--go-client",
+]
+
+[tasks.test-cross-impl]
+description = "Run cross-implementation tests (Rust clients against Go server)"
+category = "Testing"
+command = "cargo"
+args = [
+    "run",
+    "-p",
+    "connectrpc-axum-examples",
+    "--bin",
+    "integration-test",
+    "--",
+    "--cross-impl",
+]
+
+[tasks.test-verbose]
+description = "Run all tests with verbose output"
+category = "Testing"
+command = "cargo"
+args = [
+    "run",
+    "-p",
+    "connectrpc-axum-examples",
+    "--bin",
+    "integration-test",
+    "--",
+    "-v",
+]
+
+[tasks.test-filter]
+description = "Run tests matching a filter (use: cargo make test-filter FILTER_NAME)"
+category = "Testing"
+script = '''
+if [ -z "${@}" ]; then
+    echo "Usage: cargo make test-filter <pattern>"
+    echo "Example: cargo make test-filter TestConnectUnary"
+    exit 1
+fi
+cargo run -p connectrpc-axum-examples --bin integration-test -- --filter "${@}"
+'''
+
+
+# ============================================================================
+# CI Tasks
+# ============================================================================
+
+[tasks.ci]
+description = "Run all CI checks (fmt, clippy, test)"
+category = "CI"
+dependencies = ["fmt-check", "clippy", "test"]
+
+[tasks.ci-quick]
+description = "Run quick CI checks (fmt, clippy, unit tests only)"
+category = "CI"
+dependencies = ["fmt-check", "clippy", "test-unit"]
