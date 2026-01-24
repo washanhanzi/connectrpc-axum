@@ -4,7 +4,7 @@
 
 use base64::Engine;
 use connectrpc_axum_core::{Code, ErrorDetail};
-use reqwest::Response;
+use http::StatusCode;
 use serde::Deserialize;
 
 use crate::ClientError;
@@ -24,22 +24,9 @@ use crate::ClientError;
 ///
 /// If the response body cannot be parsed as a Connect error, falls back to
 /// creating an error based on the HTTP status code.
-pub async fn parse_error_response(response: Response) -> ClientError {
-    let status = response.status();
-
-    // Try to read the response body
-    let body_bytes = match response.bytes().await {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            return ClientError::Transport(format!(
-                "failed to read error response body: {}",
-                e
-            ));
-        }
-    };
-
+pub fn parse_error_response(status: StatusCode, body_bytes: &[u8]) -> ClientError {
     // Try to parse as Connect error JSON
-    match serde_json::from_slice::<ErrorResponseJson>(&body_bytes) {
+    match serde_json::from_slice::<ErrorResponseJson>(body_bytes) {
         Ok(error_json) => {
             // Parse error code
             let code = error_json.code.parse().unwrap_or_else(|_| {
@@ -70,7 +57,7 @@ pub async fn parse_error_response(response: Response) -> ClientError {
                 status.canonical_reason().unwrap_or("Unknown error")
             } else {
                 // Try to use body as message if it's valid UTF-8
-                std::str::from_utf8(&body_bytes).unwrap_or("Unknown error")
+                std::str::from_utf8(body_bytes).unwrap_or("Unknown error")
             };
             ClientError::new(code, message)
         }
@@ -115,7 +102,7 @@ fn parse_error_detail(json: &ErrorDetailJson) -> Option<ErrorDetail> {
 ///
 /// This is used as a fallback when the response body doesn't contain
 /// a valid Connect error JSON.
-fn http_status_to_code(status: reqwest::StatusCode) -> Code {
+fn http_status_to_code(status: StatusCode) -> Code {
     match status.as_u16() {
         200 => Code::Ok,
         400 => Code::InvalidArgument,
@@ -138,7 +125,6 @@ fn http_status_to_code(status: reqwest::StatusCode) -> Code {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reqwest::StatusCode;
 
     #[test]
     fn test_http_status_to_code() {
@@ -223,5 +209,29 @@ mod tests {
         };
 
         assert!(parse_error_detail(&json).is_none());
+    }
+
+    #[test]
+    fn test_parse_error_response_with_json() {
+        let body = br#"{"code":"not_found","message":"resource not found"}"#;
+        let err = parse_error_response(StatusCode::NOT_FOUND, body);
+        assert_eq!(err.code(), Code::NotFound);
+        assert_eq!(err.message(), Some("resource not found"));
+    }
+
+    #[test]
+    fn test_parse_error_response_invalid_json() {
+        let body = b"Plain text error";
+        let err = parse_error_response(StatusCode::INTERNAL_SERVER_ERROR, body);
+        assert_eq!(err.code(), Code::Internal);
+        assert_eq!(err.message(), Some("Plain text error"));
+    }
+
+    #[test]
+    fn test_parse_error_response_empty_body() {
+        let body = b"";
+        let err = parse_error_response(StatusCode::NOT_FOUND, body);
+        assert_eq!(err.code(), Code::NotFound);
+        assert_eq!(err.message(), Some("Not Found"));
     }
 }

@@ -192,7 +192,7 @@ impl<S, T> Unpin for FrameDecoder<S, T> where S: Unpin {}
 
 impl<S, T> Stream for FrameDecoder<S, T>
 where
-    S: Stream<Item = Result<Bytes, reqwest::Error>> + Unpin,
+    S: Stream<Item = Result<Bytes, ClientError>> + Unpin,
     T: Message + DeserializeOwned + Default,
 {
     type Item = Result<T, ClientError>;
@@ -240,11 +240,10 @@ where
                     // Loop back to try parsing again
                 }
                 Poll::Ready(Some(Err(e))) => {
+                    // Preserve the original error - it's already a ClientError
+                    // with proper code and details
                     this.finished = true;
-                    return Poll::Ready(Some(Err(ClientError::Transport(format!(
-                        "stream error: {}",
-                        e
-                    )))));
+                    return Poll::Ready(Some(Err(e)));
                 }
                 Poll::Ready(None) => {
                     // Stream ended unexpectedly
@@ -685,7 +684,7 @@ mod tests {
         let mut all_data = frame.to_vec();
         all_data.extend_from_slice(&end_frame);
 
-        let stream = stream::iter(vec![Ok::<_, reqwest::Error>(Bytes::from(all_data))]);
+        let stream = stream::iter(vec![Ok::<_, ClientError>(Bytes::from(all_data))]);
         let mut decoder = FrameDecoder::<_, TestMessage>::new(
             stream,
             false, // JSON
@@ -709,7 +708,7 @@ mod tests {
         all_data.extend_from_slice(&frame2);
         all_data.extend_from_slice(&end_frame);
 
-        let stream = stream::iter(vec![Ok::<_, reqwest::Error>(Bytes::from(all_data))]);
+        let stream = stream::iter(vec![Ok::<_, ClientError>(Bytes::from(all_data))]);
         let mut decoder = FrameDecoder::<_, TestMessage>::new(
             stream,
             false,
@@ -734,7 +733,7 @@ mod tests {
         let mut all_data = frame.to_vec();
         all_data.extend_from_slice(&end_frame);
 
-        let stream = stream::iter(vec![Ok::<_, reqwest::Error>(Bytes::from(all_data))]);
+        let stream = stream::iter(vec![Ok::<_, ClientError>(Bytes::from(all_data))]);
         let mut decoder = FrameDecoder::<_, TestMessage>::new(
             stream,
             false,
@@ -760,7 +759,7 @@ mod tests {
         let mut all_data = frame.to_vec();
         all_data.extend_from_slice(&end_frame);
 
-        let stream = stream::iter(vec![Ok::<_, reqwest::Error>(Bytes::from(all_data))]);
+        let stream = stream::iter(vec![Ok::<_, ClientError>(Bytes::from(all_data))]);
         let mut decoder = FrameDecoder::<_, TestMessage>::new(
             stream,
             false,
@@ -795,7 +794,7 @@ mod tests {
         let chunk3 = Bytes::copy_from_slice(&all_data[10..]);
 
         let stream = stream::iter(vec![
-            Ok::<_, reqwest::Error>(chunk1),
+            Ok::<_, ClientError>(chunk1),
             Ok(chunk2),
             Ok(chunk3),
         ]);
@@ -1000,7 +999,7 @@ mod tests {
 
         // Decode
         let byte_stream =
-            stream::iter(vec![Ok::<_, reqwest::Error>(Bytes::from(all_bytes))]);
+            stream::iter(vec![Ok::<_, ClientError>(Bytes::from(all_bytes))]);
         let mut decoder = FrameDecoder::<_, TestMessage>::new(
             byte_stream,
             false,
@@ -1114,7 +1113,7 @@ mod tests {
         let all_bytes: Vec<u8> = frames.iter().flat_map(|f| f.to_vec()).collect();
 
         // Decode and verify ordering
-        let byte_stream = stream::iter(vec![Ok::<_, reqwest::Error>(Bytes::from(all_bytes))]);
+        let byte_stream = stream::iter(vec![Ok::<_, ClientError>(Bytes::from(all_bytes))]);
         let mut decoder = FrameDecoder::<_, TestMessage>::new(
             byte_stream,
             false,

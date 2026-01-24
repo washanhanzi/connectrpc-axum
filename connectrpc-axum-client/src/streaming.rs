@@ -332,7 +332,7 @@ mod tests {
         let mut all_data = frame.to_vec();
         all_data.extend_from_slice(&end_frame);
 
-        let byte_stream = stream::iter(vec![Ok::<_, reqwest::Error>(Bytes::from(all_data))]);
+        let byte_stream = stream::iter(vec![Ok::<_, ClientError>(Bytes::from(all_data))]);
         let decoder = FrameDecoder::<_, TestMessage>::new(
             byte_stream,
             false,
@@ -356,7 +356,7 @@ mod tests {
         let mut all_data = frame.to_vec();
         all_data.extend_from_slice(&end_frame);
 
-        let byte_stream = stream::iter(vec![Ok::<_, reqwest::Error>(Bytes::from(all_data))]);
+        let byte_stream = stream::iter(vec![Ok::<_, ClientError>(Bytes::from(all_data))]);
         let decoder = FrameDecoder::<_, TestMessage>::new(
             byte_stream,
             false,
@@ -386,7 +386,7 @@ mod tests {
         all_data.extend_from_slice(&frame3);
         all_data.extend_from_slice(&end_frame);
 
-        let byte_stream = stream::iter(vec![Ok::<_, reqwest::Error>(Bytes::from(all_data))]);
+        let byte_stream = stream::iter(vec![Ok::<_, ClientError>(Bytes::from(all_data))]);
         let decoder = FrameDecoder::<_, TestMessage>::new(
             byte_stream,
             false,
@@ -416,7 +416,7 @@ mod tests {
         all_data.extend_from_slice(&frame1);
         all_data.extend_from_slice(&end_frame);
 
-        let byte_stream = stream::iter(vec![Ok::<_, reqwest::Error>(Bytes::from(all_data))]);
+        let byte_stream = stream::iter(vec![Ok::<_, ClientError>(Bytes::from(all_data))]);
         let decoder = FrameDecoder::<_, TestMessage>::new(
             byte_stream,
             false,

@@ -188,12 +188,12 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
 
                             match (*is_ss, *is_cs) {
                                 (false, false) => {
-                                    // Unary - use TonicHandlerWrapper with UnaryRpc
+                                    // Unary - use TonicHandlerWrapper with Unary
                                     quote! {
                                         /// Register a handler for this RPC method (unary)
                                         pub fn #method_name<F, T>(mut self, handler: F) -> #tonic_builder_name<S>
                                         where
-                                            connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::UnaryRpc>:
+                                            connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::Unary>:
                                                 axum::handler::Handler<T, S>
                                                 + connectrpc_axum::tonic::IntoFactory<T, #request_type, #response_type, S>,
                                             F: Clone + Send + Sync + 'static,
@@ -204,7 +204,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
 
                                             // Store factory (needs &S later to materialize the boxed call)
                                             let wrapper = connectrpc_axum::tonic::TonicHandlerWrapper::unary(handler);
-                                            let factory = <connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::UnaryRpc> as
+                                            let factory = <connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::Unary> as
                                                 connectrpc_axum::tonic::IntoFactory<
                                                     T, #request_type, #response_type, S
                                                 >>::into_factory(wrapper);
@@ -219,12 +219,12 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                                     }
                                 }
                                 (true, false) => {
-                                    // Server streaming - use TonicHandlerWrapper with ServerStreamRpc
+                                    // Server streaming - use TonicHandlerWrapper with ServerStream
                                     quote! {
                                         /// Register a handler for this RPC method (server streaming)
                                         pub fn #method_name<F, T>(mut self, handler: F) -> #tonic_builder_name<S>
                                         where
-                                            connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::ServerStreamRpc>:
+                                            connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::ServerStream>:
                                                 axum::handler::Handler<T, S>
                                                 + connectrpc_axum::tonic::IntoStreamFactory<T, #request_type, #response_type, S>,
                                             F: Clone + Send + Sync + 'static,
@@ -235,7 +235,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
 
                                             // Store factory (needs &S later to materialize the boxed stream call)
                                             let wrapper = connectrpc_axum::tonic::TonicHandlerWrapper::server_stream(handler);
-                                            let factory = <connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::ServerStreamRpc> as
+                                            let factory = <connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::ServerStream> as
                                                 connectrpc_axum::tonic::IntoStreamFactory<
                                                     T, #request_type, #response_type, S
                                                 >>::into_stream_factory(wrapper);
@@ -250,12 +250,12 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                                     }
                                 }
                                 (false, true) => {
-                                    // Client streaming - use TonicHandlerWrapper with ClientStreamRpc
+                                    // Client streaming - use TonicHandlerWrapper with ClientStream
                                     quote! {
                                         /// Register a handler for this RPC method (client streaming)
                                         pub fn #method_name<F, T>(mut self, handler: F) -> #tonic_builder_name<S>
                                         where
-                                            connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::ClientStreamRpc>:
+                                            connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::ClientStream>:
                                                 axum::handler::Handler<T, S>
                                                 + connectrpc_axum::tonic::IntoClientStreamFactory<T, #request_type, #response_type, S>,
                                             F: Clone + Send + Sync + 'static,
@@ -266,7 +266,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
 
                                             // Store factory (needs &S later to materialize the boxed client stream call)
                                             let wrapper = connectrpc_axum::tonic::TonicHandlerWrapper::client_stream(handler);
-                                            let factory = <connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::ClientStreamRpc> as
+                                            let factory = <connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::ClientStream> as
                                                 connectrpc_axum::tonic::IntoClientStreamFactory<
                                                     T, #request_type, #response_type, S
                                                 >>::into_client_stream_factory(wrapper);
@@ -281,12 +281,12 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                                     }
                                 }
                                 (true, true) => {
-                                    // Bidi streaming - use TonicHandlerWrapper with BidiStreamRpc
+                                    // Bidi streaming - use TonicHandlerWrapper with BidiStream
                                     quote! {
                                         /// Register a handler for this RPC method (bidirectional streaming)
                                         pub fn #method_name<F, T>(mut self, handler: F) -> #tonic_builder_name<S>
                                         where
-                                            connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::BidiStreamRpc>:
+                                            connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::BidiStream>:
                                                 axum::handler::Handler<T, S>
                                                 + connectrpc_axum::tonic::IntoBidiStreamFactory<T, #request_type, #response_type, S>,
                                             F: Clone + Send + Sync + 'static,
@@ -297,7 +297,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
 
                                             // Store factory (needs &S later to materialize the boxed bidi stream call)
                                             let wrapper = connectrpc_axum::tonic::TonicHandlerWrapper::bidi_stream(handler);
-                                            let factory = <connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::BidiStreamRpc> as
+                                            let factory = <connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::BidiStream> as
                                                 connectrpc_axum::tonic::IntoBidiStreamFactory<
                                                     T, #request_type, #response_type, S
                                                 >>::into_bidi_stream_factory(wrapper);
@@ -1055,7 +1055,7 @@ fn generate_connect_client(
                             connectrpc_axum_client::ConnectResponse<
                                 connectrpc_axum_client::Streaming<
                                     connectrpc_axum_client::FrameDecoder<
-                                        impl ::futures::Stream<Item = Result<connectrpc_axum_client::Bytes, connectrpc_axum_client::ReqwestError>> + Unpin,
+                                        impl ::futures::Stream<Item = Result<connectrpc_axum_client::Bytes, connectrpc_axum_client::ClientError>> + Unpin,
                                         #response_type
                                     >
                                 >
@@ -1114,7 +1114,7 @@ fn generate_connect_client(
                             connectrpc_axum_client::ConnectResponse<
                                 connectrpc_axum_client::Streaming<
                                     connectrpc_axum_client::FrameDecoder<
-                                        impl ::futures::Stream<Item = Result<connectrpc_axum_client::Bytes, connectrpc_axum_client::ReqwestError>> + Unpin,
+                                        impl ::futures::Stream<Item = Result<connectrpc_axum_client::Bytes, connectrpc_axum_client::ClientError>> + Unpin,
                                         #response_type
                                     >
                                 >
@@ -1203,9 +1203,9 @@ fn generate_connect_client(
                 self
             }
 
-            /// Use a pre-configured HTTP client.
-            pub fn client(mut self, client: connectrpc_axum_client::HttpClient) -> Self {
-                self.inner = self.inner.client(client);
+            /// Use a pre-configured HTTP transport.
+            pub fn with_transport(mut self, transport: connectrpc_axum_client::HyperTransport) -> Self {
+                self.inner = self.inner.with_transport(transport);
                 self
             }
 

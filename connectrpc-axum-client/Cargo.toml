@@ -10,13 +10,17 @@ license = "MIT"
 # Core protocol types
 connectrpc-axum-core = { path = "../connectrpc-axum-core" }
 
-# HTTP client
-reqwest = { version = "0.12", default-features = false, features = [
-    "rustls-tls",
-    "json",
-    "stream",
-    "http2",
-] }
+# HTTP client (hyper-based)
+hyper = { version = "1.6", features = ["client", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http2", "ring", "tls12", "webpki-tokio"] }
+http-body = { workspace = true }
+http-body-util = { workspace = true }
+tower = { workspace = true }
+tower-service = "0.3"
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+webpki-roots = "0.26"
+pin-project-lite = "0.2"
 
 # Serialization
 bytes = { workspace = true }
@@ -29,7 +33,7 @@ http = { workspace = true }
 
 # Async
 futures = { workspace = true }
-tokio = { workspace = true, features = ["macros", "time"] }
+tokio = { workspace = true, features = ["macros", "time", "rt"] }
 
 # Compression (re-use from core via features)
 flate2 = { workspace = true, optional = true }

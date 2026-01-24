@@ -506,24 +506,29 @@ mod client;
 mod error;
 mod error_parser;
 mod frame;
+pub mod interceptor;
 mod options;
 mod response;
 mod streaming;
+pub mod transport;
 
 pub use builder::{ClientBuildError, ClientBuilder};
 pub use client::ConnectClient;
 pub use error::ClientError;
 pub use frame::{FrameDecoder, FrameEncoder};
+pub use interceptor::{
+    BoxFuture, FnInterceptor, HeaderInterceptor, Interceptor, InterceptorChain, UnaryFunc,
+    UnaryInterceptorFunc, UnaryNext, UnaryRequest, UnaryResponse,
+};
 pub use options::CallOptions;
 pub use response::{ConnectResponse, Metadata};
 pub use streaming::Streaming;
 
+// Re-export transport types at the top level for convenience
+pub use transport::{HyperTransport, HyperTransportBuilder, TransportBody, TlsClientConfig};
+
 // Re-export core types that users need
 pub use connectrpc_axum_core::{Code, CompressionConfig, CompressionEncoding, CompressionLevel, ErrorDetail, Status};
 
-// Re-export reqwest::Client for generated client builders
-pub use reqwest::Client as HttpClient;
-
 // Re-export types needed for generated streaming code
 pub use bytes::Bytes;
-pub use reqwest::Error as ReqwestError;

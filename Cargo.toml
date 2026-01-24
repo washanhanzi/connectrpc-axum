@@ -44,8 +44,9 @@ tonic = "0.14"
 tonic-web = "0.14"
 tonic-prost = "0.14"
 tonic-prost-build = "0.14"
-tower = "0.5"
+tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", default-features = false }
+tower-service = "0.3"
 tracing = "0.1"
 flate2 = "1.0"
 brotli = "8"

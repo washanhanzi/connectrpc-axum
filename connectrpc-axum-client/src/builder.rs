@@ -3,8 +3,10 @@
 //! Provides a fluent API for configuring and building a [`ConnectClient`].
 
 use crate::client::ConnectClient;
+use crate::interceptor::{Interceptor, InterceptorChain};
+use crate::transport::{HyperTransport, HyperTransportBuilder, TlsClientConfig};
 use connectrpc_axum_core::{CompressionConfig, CompressionEncoding};
-use reqwest::Client;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Builder for creating a [`ConnectClient`].
@@ -22,8 +24,10 @@ use std::time::Duration;
 pub struct ClientBuilder {
     /// Base URL for the service (e.g., "http://localhost:3000").
     base_url: String,
-    /// Optional pre-configured reqwest client.
-    client: Option<Client>,
+    /// Optional pre-configured transport.
+    transport: Option<HyperTransport>,
+    /// Transport builder for when transport is not directly provided.
+    transport_builder: HyperTransportBuilder,
     /// Use protobuf encoding (true) or JSON encoding (false).
     use_proto: bool,
     /// Compression configuration for outgoing requests.
@@ -34,24 +38,21 @@ pub struct ClientBuilder {
     accept_encoding: Option<CompressionEncoding>,
     /// Default timeout for RPC calls.
     default_timeout: Option<Duration>,
-    /// Enable HTTP/2 prior knowledge (h2c) for unencrypted HTTP/2 connections.
-    http2_prior_knowledge: bool,
-    /// TCP keep-alive interval for connections.
-    tcp_keepalive: Option<Duration>,
+    /// Interceptor chain for RPC calls.
+    interceptors: InterceptorChain,
 }
 
 impl std::fmt::Debug for ClientBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ClientBuilder")
             .field("base_url", &self.base_url)
-            .field("client", &self.client.is_some())
+            .field("transport", &self.transport.is_some())
             .field("use_proto", &self.use_proto)
             .field("compression", &self.compression)
             .field("request_encoding", &self.request_encoding)
             .field("accept_encoding", &self.accept_encoding)
             .field("default_timeout", &self.default_timeout)
-            .field("http2_prior_knowledge", &self.http2_prior_knowledge)
-            .field("tcp_keepalive", &self.tcp_keepalive)
+            .field("interceptors", &self.interceptors.len())
             .finish()
     }
 }
@@ -70,35 +71,39 @@ impl ClientBuilder {
     pub fn new<S: Into<String>>(base_url: S) -> Self {
         Self {
             base_url: base_url.into(),
-            client: None,
+            transport: None,
+            transport_builder: HyperTransportBuilder::new(),
             use_proto: false, // Default to JSON for broader compatibility
             compression: None,
             request_encoding: CompressionEncoding::Identity,
             accept_encoding: None,
             default_timeout: None,
-            http2_prior_knowledge: false,
-            tcp_keepalive: None,
+            interceptors: InterceptorChain::new(),
         }
     }
 
-    /// Use a pre-configured reqwest Client.
+    /// Use a pre-configured HyperTransport.
     ///
-    /// This allows you to configure TLS, timeouts, connection pooling, etc.
-    /// on the underlying HTTP client.
+    /// This allows you to configure TLS, HTTP/2, connection pooling, etc.
+    /// on the underlying transport.
     ///
     /// # Example
     ///
     /// ```ignore
-    /// let http_client = reqwest::Client::builder()
-    ///     .timeout(Duration::from_secs(30))
+    /// use connectrpc_axum_client::{HyperTransportBuilder, ClientBuilder};
+    /// use std::time::Duration;
+    ///
+    /// let transport = HyperTransportBuilder::new()
+    ///     .http2_only(true)
+    ///     .pool_idle_timeout(Duration::from_secs(60))
     ///     .build()?;
     ///
     /// let client = ClientBuilder::new("http://localhost:3000")
-    ///     .client(http_client)
+    ///     .with_transport(transport)
     ///     .build()?;
     /// ```
-    pub fn client(mut self, client: Client) -> Self {
-        self.client = Some(client);
+    pub fn with_transport(mut self, transport: HyperTransport) -> Self {
+        self.transport = Some(transport);
         self
     }
 
@@ -199,6 +204,35 @@ impl ClientBuilder {
         self
     }
 
+    /// Add an interceptor to the client.
+    ///
+    /// Interceptors allow you to add cross-cutting logic to RPC calls, such as:
+    /// - Adding authentication headers
+    /// - Logging and metrics
+    /// - Retry logic
+    /// - Request/response transformation
+    ///
+    /// Interceptors are applied in the order they are added. The first interceptor
+    /// added is the first to process outgoing requests and the last to process
+    /// incoming responses.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use connectrpc_axum_client::{ClientBuilder, HeaderInterceptor};
+    ///
+    /// // Add an auth header to all requests
+    /// let auth_interceptor = HeaderInterceptor::new("authorization", "Bearer token123");
+    ///
+    /// let client = ClientBuilder::new("http://localhost:3000")
+    ///     .with_interceptor(auth_interceptor)
+    ///     .build()?;
+    /// ```
+    pub fn with_interceptor<I: Interceptor + 'static>(mut self, interceptor: I) -> Self {
+        self.interceptors.push(Arc::new(interceptor));
+        self
+    }
+
     /// Enable HTTP/2 prior knowledge (h2c) for unencrypted connections.
     ///
     /// When enabled, the client will use HTTP/2 directly without the HTTP/1.1
@@ -210,9 +244,9 @@ impl ClientBuilder {
     /// - Internal services behind a load balancer that terminates TLS
     /// - Any scenario where you need bidi streaming over `http://`
     ///
-    /// **Note:** This setting only applies when the builder creates the HTTP client.
-    /// If you provide your own client via [`client()`], configure HTTP/2 on that
-    /// client's builder instead.
+    /// **Note:** This setting only applies when the builder creates the transport.
+    /// If you provide your own transport via [`with_transport()`], configure HTTP/2
+    /// on that transport's builder instead.
     ///
     /// For HTTPS connections, HTTP/2 is negotiated via ALPN automatically,
     /// so this setting is not needed.
@@ -227,26 +261,20 @@ impl ClientBuilder {
     ///     .build()?;
     /// ```
     ///
-    /// [`client()`]: Self::client
+    /// [`with_transport()`]: Self::with_transport
     pub fn http2_prior_knowledge(mut self) -> Self {
-        self.http2_prior_knowledge = true;
+        self.transport_builder = self.transport_builder.http2_only(true);
         self
     }
 
-    /// Set TCP keep-alive interval for connections.
+    /// Set the connection pool idle timeout.
     ///
-    /// TCP keep-alive probes help detect dead connections and keep connections
-    /// alive through NAT/firewall timeouts. This is especially useful for:
-    /// - Long-running streaming RPCs
-    /// - Connections that may be idle between requests
-    /// - Networks with aggressive NAT timeout policies
+    /// Connections that have been idle for longer than this duration
+    /// will be closed and removed from the pool.
     ///
-    /// The duration specifies how long a connection can be idle before TCP
-    /// starts sending keep-alive probes.
-    ///
-    /// **Note:** This setting only applies when the builder creates the HTTP client.
-    /// If you provide your own client via [`client()`], configure TCP keep-alive
-    /// on that client's builder instead.
+    /// **Note:** This setting only applies when the builder creates the transport.
+    /// If you provide your own transport via [`with_transport()`], configure this
+    /// on that transport's builder instead.
     ///
     /// # Example
     ///
@@ -254,13 +282,68 @@ impl ClientBuilder {
     /// use std::time::Duration;
     ///
     /// let client = ClientBuilder::new("http://localhost:3000")
-    ///     .tcp_keepalive(Duration::from_secs(60))
+    ///     .pool_idle_timeout(Duration::from_secs(60))
     ///     .build()?;
     /// ```
     ///
-    /// [`client()`]: Self::client
-    pub fn tcp_keepalive(mut self, interval: Duration) -> Self {
-        self.tcp_keepalive = Some(interval);
+    /// [`with_transport()`]: Self::with_transport
+    pub fn pool_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.transport_builder = self.transport_builder.pool_idle_timeout(timeout);
+        self
+    }
+
+    /// Set a custom TLS configuration.
+    ///
+    /// Use this to configure custom root certificates, client certificates for mTLS,
+    /// or other TLS settings.
+    ///
+    /// **Note:** This setting only applies when the builder creates the transport.
+    /// If you provide your own transport via [`with_transport()`], configure TLS
+    /// on that transport's builder instead.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use connectrpc_axum_client::TlsClientConfig;
+    ///
+    /// let tls_config = TlsClientConfig::builder()
+    ///     .with_root_certificates(my_roots)
+    ///     .with_no_client_auth();
+    ///
+    /// let client = ClientBuilder::new("https://api.example.com")
+    ///     .tls_config(tls_config)
+    ///     .build()?;
+    /// ```
+    ///
+    /// [`with_transport()`]: Self::with_transport
+    pub fn tls_config(mut self, config: TlsClientConfig) -> Self {
+        self.transport_builder = self.transport_builder.tls_config(config);
+        self
+    }
+
+    /// Accept invalid TLS certificates.
+    ///
+    /// # Warning
+    ///
+    /// This is extremely dangerous and should only be used for development/testing!
+    /// It makes the connection vulnerable to man-in-the-middle attacks.
+    ///
+    /// **Note:** This setting only applies when the builder creates the transport.
+    /// If you provide your own transport via [`with_transport()`], configure this
+    /// on that transport's builder instead.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // WARNING: Only use for development/testing!
+    /// let client = ClientBuilder::new("https://self-signed:3000")
+    ///     .danger_accept_invalid_certs()
+    ///     .build()?;
+    /// ```
+    ///
+    /// [`with_transport()`]: Self::with_transport
+    pub fn danger_accept_invalid_certs(mut self) -> Self {
+        self.transport_builder = self.transport_builder.danger_accept_invalid_certs();
         self
     }
 
@@ -268,36 +351,29 @@ impl ClientBuilder {
     ///
     /// # Errors
     ///
-    /// Returns an error if the HTTP client cannot be created.
+    /// Returns an error if the HTTP transport cannot be created.
     pub fn build(self) -> Result<ConnectClient, ClientBuildError> {
-        // Create or use provided reqwest client
-        let base_client = match self.client {
-            Some(c) => c,
-            None => {
-                let mut builder = Client::builder();
-                if self.http2_prior_knowledge {
-                    builder = builder.http2_prior_knowledge();
-                }
-                if let Some(keepalive) = self.tcp_keepalive {
-                    builder = builder.tcp_keepalive(keepalive);
-                }
-                builder
-                    .build()
-                    .map_err(|e| ClientBuildError::HttpClient(e.to_string()))?
-            }
+        // Create or use provided transport
+        let transport = match self.transport {
+            Some(t) => t,
+            None => self
+                .transport_builder
+                .build()
+                .map_err(|e| ClientBuildError::Transport(e.to_string()))?,
         };
 
         // Normalize base URL (remove trailing slash)
         let base_url = self.base_url.trim_end_matches('/').to_string();
 
         Ok(ConnectClient::new(
-            base_client,
+            transport,
             base_url,
             self.use_proto,
             self.compression.unwrap_or_default(),
             self.request_encoding,
             self.accept_encoding,
             self.default_timeout,
+            self.interceptors,
         ))
     }
 }
@@ -305,9 +381,9 @@ impl ClientBuilder {
 /// Error type for client building failures.
 #[derive(Debug, thiserror::Error)]
 pub enum ClientBuildError {
-    /// Failed to create HTTP client.
-    #[error("failed to create HTTP client: {0}")]
-    HttpClient(String),
+    /// Failed to create HTTP transport.
+    #[error("failed to create HTTP transport: {0}")]
+    Transport(String),
 }
 
 #[cfg(test)]
@@ -318,7 +394,7 @@ mod tests {
     fn test_builder_defaults() {
         let builder = ClientBuilder::new("http://localhost:3000");
         assert!(!builder.use_proto);
-        assert!(builder.client.is_none());
+        assert!(builder.transport.is_none());
     }
 
     #[test]
@@ -338,8 +414,8 @@ mod tests {
     #[cfg(feature = "compression-gzip-stream")]
     #[test]
     fn test_builder_accept_encoding() {
-        let builder = ClientBuilder::new("http://localhost:3000")
-            .accept_encoding(CompressionEncoding::Gzip);
+        let builder =
+            ClientBuilder::new("http://localhost:3000").accept_encoding(CompressionEncoding::Gzip);
         assert_eq!(builder.accept_encoding, Some(CompressionEncoding::Gzip));
     }
 
@@ -363,15 +439,16 @@ mod tests {
 
     #[test]
     fn test_builder_normalizes_url() {
-        let client = ClientBuilder::new("http://localhost:3000/").build().unwrap();
+        let client = ClientBuilder::new("http://localhost:3000/")
+            .build()
+            .unwrap();
         // The trailing slash should be removed
         assert!(!client.base_url().ends_with('/'));
     }
 
     #[test]
     fn test_builder_timeout() {
-        let builder = ClientBuilder::new("http://localhost:3000")
-            .timeout(Duration::from_secs(30));
+        let builder = ClientBuilder::new("http://localhost:3000").timeout(Duration::from_secs(30));
         assert_eq!(builder.default_timeout, Some(Duration::from_secs(30)));
     }
 
@@ -382,20 +459,8 @@ mod tests {
     }
 
     #[test]
-    fn test_builder_http2_prior_knowledge_default_false() {
-        let builder = ClientBuilder::new("http://localhost:3000");
-        assert!(!builder.http2_prior_knowledge);
-    }
-
-    #[test]
     fn test_builder_http2_prior_knowledge() {
-        let builder = ClientBuilder::new("http://localhost:3000").http2_prior_knowledge();
-        assert!(builder.http2_prior_knowledge);
-    }
-
-    #[test]
-    fn test_builder_http2_prior_knowledge_build() {
-        // Verify that build() succeeds with http2_prior_knowledge enabled
+        // Just verify it builds successfully with http2_prior_knowledge enabled
         let result = ClientBuilder::new("http://localhost:3000")
             .http2_prior_knowledge()
             .build();
@@ -403,23 +468,10 @@ mod tests {
     }
 
     #[test]
-    fn test_builder_tcp_keepalive_default_none() {
-        let builder = ClientBuilder::new("http://localhost:3000");
-        assert!(builder.tcp_keepalive.is_none());
-    }
-
-    #[test]
-    fn test_builder_tcp_keepalive() {
-        let builder =
-            ClientBuilder::new("http://localhost:3000").tcp_keepalive(Duration::from_secs(60));
-        assert_eq!(builder.tcp_keepalive, Some(Duration::from_secs(60)));
-    }
-
-    #[test]
-    fn test_builder_tcp_keepalive_build() {
-        // Verify that build() succeeds with tcp_keepalive set
+    fn test_builder_pool_idle_timeout() {
+        // Verify it builds successfully with pool_idle_timeout set
         let result = ClientBuilder::new("http://localhost:3000")
-            .tcp_keepalive(Duration::from_secs(30))
+            .pool_idle_timeout(Duration::from_secs(60))
             .build();
         assert!(result.is_ok());
     }
@@ -429,8 +481,21 @@ mod tests {
         // Verify that multiple transport options can be combined
         let result = ClientBuilder::new("http://localhost:3000")
             .http2_prior_knowledge()
-            .tcp_keepalive(Duration::from_secs(60))
+            .pool_idle_timeout(Duration::from_secs(60))
             .timeout(Duration::from_secs(30))
+            .build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_builder_with_custom_transport() {
+        let transport = HyperTransportBuilder::new()
+            .http2_only(true)
+            .build()
+            .unwrap();
+
+        let result = ClientBuilder::new("http://localhost:3000")
+            .with_transport(transport)
             .build();
         assert!(result.is_ok());
     }
