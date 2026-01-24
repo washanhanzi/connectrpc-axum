@@ -9,30 +9,35 @@ pub mod tonic;
 // Re-export key types at the crate root for convenience
 #[cfg(feature = "tonic")]
 pub use crate::tonic::{
+    BidiStream,
+    // Boxed call types
     BoxedBidiStreamCall,
     BoxedCall,
     BoxedClientStreamCall,
     BoxedStream,
     BoxedStreamCall,
+    // Parts types
     CapturedParts,
+    ClientStream,
     ContentTypeSwitch,
     FromRequestPartsLayer,
+    // Factory traits
     IntoBidiStreamFactory,
     IntoClientStreamFactory,
     IntoFactory,
     IntoStreamFactory,
-    // Parts types
     RequestContext,
+    ServerStream,
     TonicCompatible,
-    TonicCompatibleBidiStreamHandlerWrapper,
-    TonicCompatibleClientStreamHandlerWrapper,
-    TonicCompatibleHandlerWrapper,
-    TonicCompatibleStreamHandlerWrapper,
+    // Unified handler wrapper and RPC markers
+    TonicHandlerWrapper,
+    Unary,
+    // Routing functions
+    post_tonic,
     post_tonic_bidi_stream,
     post_tonic_client_stream,
     post_tonic_stream,
-    // Handler types from tonic module
-    post_tonic_unary,
+    // Unimplemented handlers
     unimplemented_boxed_bidi_stream_call,
     unimplemented_boxed_call,
     unimplemented_boxed_client_stream_call,
@@ -58,10 +63,10 @@ pub use context::{
     ContextError,
     // Envelope compression for streaming
     EnvelopeCompression,
-    // Identity codec (always available)
-    IdentityCodec,
     // Idempotency
     IdempotencyLevel,
+    // Identity codec (always available)
+    IdentityCodec,
     // Limits
     MessageLimits,
     RequestProtocol,
@@ -78,12 +83,12 @@ pub use context::{
     resolve_codec,
 };
 // Feature-gated codec exports
-#[cfg(feature = "compression-gzip-stream")]
-pub use context::GzipCodec;
-#[cfg(feature = "compression-deflate-stream")]
-pub use context::DeflateCodec;
 #[cfg(feature = "compression-br-stream")]
 pub use context::BrotliCodec;
+#[cfg(feature = "compression-deflate-stream")]
+pub use context::DeflateCodec;
+#[cfg(feature = "compression-gzip-stream")]
+pub use context::GzipCodec;
 #[cfg(feature = "compression-zstd-stream")]
 pub use context::ZstdCodec;
 // Re-export from message module
@@ -121,10 +126,10 @@ pub mod prelude {
         ContextError,
         // Compression types
         EnvelopeCompression,
-        // Identity codec (always available)
-        IdentityCodec,
         // Idempotency
         IdempotencyLevel,
+        // Identity codec (always available)
+        IdentityCodec,
         // Limits
         MessageLimits,
         RequestProtocol,
@@ -140,29 +145,53 @@ pub mod prelude {
         resolve_codec,
     };
     // Feature-gated codec exports for prelude
-    #[cfg(feature = "compression-gzip-stream")]
-    pub use crate::context::GzipCodec;
-    #[cfg(feature = "compression-deflate-stream")]
-    pub use crate::context::DeflateCodec;
     #[cfg(feature = "compression-br-stream")]
     pub use crate::context::BrotliCodec;
+    #[cfg(feature = "compression-deflate-stream")]
+    pub use crate::context::DeflateCodec;
+    #[cfg(feature = "compression-gzip-stream")]
+    pub use crate::context::GzipCodec;
     #[cfg(feature = "compression-zstd-stream")]
     pub use crate::context::ZstdCodec;
 
-    pub use crate::message::error::{Code, ConnectError, ErrorDetail, Status};
     pub use crate::handler::{ConnectHandler, ConnectHandlerWrapper, get_connect, post_connect};
     pub use crate::layer::{BridgeLayer, BridgeService, ConnectLayer, ConnectService};
-    pub use crate::message::{ConnectRequest, ConnectResponse, RequestPipeline, ResponsePipeline, StreamBody, Streaming};
+    pub use crate::message::error::{Code, ConnectError, ErrorDetail, Status};
+    pub use crate::message::{
+        ConnectRequest, ConnectResponse, RequestPipeline, ResponsePipeline, StreamBody, Streaming,
+    };
     pub use crate::service_builder::MakeServiceBuilder;
     #[cfg(feature = "tonic")]
     pub use crate::tonic::{
-        BoxedBidiStreamCall, BoxedCall, BoxedClientStreamCall, BoxedStream, BoxedStreamCall,
-        CapturedParts, ContentTypeSwitch, FromRequestPartsLayer, IntoBidiStreamFactory,
-        IntoClientStreamFactory, IntoFactory, IntoStreamFactory, RequestContext, TonicCompatible,
-        TonicCompatibleBidiStreamHandlerWrapper, TonicCompatibleClientStreamHandlerWrapper,
-        TonicCompatibleHandlerWrapper, TonicCompatibleStreamHandlerWrapper, post_tonic_bidi_stream,
-        post_tonic_client_stream, post_tonic_stream, post_tonic_unary,
-        unimplemented_boxed_bidi_stream_call, unimplemented_boxed_call,
-        unimplemented_boxed_client_stream_call, unimplemented_boxed_stream_call,
+        BidiStream,
+        BoxedBidiStreamCall,
+        BoxedCall,
+        BoxedClientStreamCall,
+        BoxedStream,
+        BoxedStreamCall,
+        CapturedParts,
+        ClientStream,
+        ContentTypeSwitch,
+        FromRequestPartsLayer,
+        IntoBidiStreamFactory,
+        IntoClientStreamFactory,
+        IntoFactory,
+        IntoStreamFactory,
+        RequestContext,
+        ServerStream,
+        TonicCompatible,
+        // Unified wrapper and markers
+        TonicHandlerWrapper,
+        Unary,
+        // Routing functions
+        post_tonic,
+        post_tonic_bidi_stream,
+        post_tonic_client_stream,
+        post_tonic_stream,
+        // Unimplemented handlers
+        unimplemented_boxed_bidi_stream_call,
+        unimplemented_boxed_call,
+        unimplemented_boxed_client_stream_call,
+        unimplemented_boxed_stream_call,
     };
 }

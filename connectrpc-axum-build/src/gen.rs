@@ -188,23 +188,23 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
 
                             match (*is_ss, *is_cs) {
                                 (false, false) => {
-                                    // Unary - use TonicCompatibleHandlerWrapper
+                                    // Unary - use TonicHandlerWrapper with UnaryRpc
                                     quote! {
                                         /// Register a handler for this RPC method (unary)
                                         pub fn #method_name<F, T>(mut self, handler: F) -> #tonic_builder_name<S>
                                         where
-                                            connectrpc_axum::tonic::TonicCompatibleHandlerWrapper<F>:
+                                            connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::UnaryRpc>:
                                                 axum::handler::Handler<T, S>
                                                 + connectrpc_axum::tonic::IntoFactory<T, #request_type, #response_type, S>,
                                             F: Clone + Send + Sync + 'static,
                                             T: 'static,
                                         {
                                             // Add route to router progressively
-                                            let method_router = connectrpc_axum::tonic::post_tonic_unary(handler.clone());
+                                            let method_router = connectrpc_axum::tonic::post_tonic(handler.clone());
 
                                             // Store factory (needs &S later to materialize the boxed call)
-                                            let wrapper = connectrpc_axum::tonic::TonicCompatibleHandlerWrapper(handler);
-                                            let factory = <connectrpc_axum::tonic::TonicCompatibleHandlerWrapper<F> as
+                                            let wrapper = connectrpc_axum::tonic::TonicHandlerWrapper::unary(handler);
+                                            let factory = <connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::UnaryRpc> as
                                                 connectrpc_axum::tonic::IntoFactory<
                                                     T, #request_type, #response_type, S
                                                 >>::into_factory(wrapper);
@@ -219,12 +219,12 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                                     }
                                 }
                                 (true, false) => {
-                                    // Server streaming - use TonicCompatibleStreamHandlerWrapper
+                                    // Server streaming - use TonicHandlerWrapper with ServerStreamRpc
                                     quote! {
                                         /// Register a handler for this RPC method (server streaming)
                                         pub fn #method_name<F, T>(mut self, handler: F) -> #tonic_builder_name<S>
                                         where
-                                            connectrpc_axum::tonic::TonicCompatibleStreamHandlerWrapper<F>:
+                                            connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::ServerStreamRpc>:
                                                 axum::handler::Handler<T, S>
                                                 + connectrpc_axum::tonic::IntoStreamFactory<T, #request_type, #response_type, S>,
                                             F: Clone + Send + Sync + 'static,
@@ -234,8 +234,8 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                                             let method_router = connectrpc_axum::tonic::post_tonic_stream(handler.clone());
 
                                             // Store factory (needs &S later to materialize the boxed stream call)
-                                            let wrapper = connectrpc_axum::tonic::TonicCompatibleStreamHandlerWrapper(handler);
-                                            let factory = <connectrpc_axum::tonic::TonicCompatibleStreamHandlerWrapper<F> as
+                                            let wrapper = connectrpc_axum::tonic::TonicHandlerWrapper::server_stream(handler);
+                                            let factory = <connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::ServerStreamRpc> as
                                                 connectrpc_axum::tonic::IntoStreamFactory<
                                                     T, #request_type, #response_type, S
                                                 >>::into_stream_factory(wrapper);
@@ -250,12 +250,12 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                                     }
                                 }
                                 (false, true) => {
-                                    // Client streaming - use TonicCompatibleClientStreamHandlerWrapper
+                                    // Client streaming - use TonicHandlerWrapper with ClientStreamRpc
                                     quote! {
                                         /// Register a handler for this RPC method (client streaming)
                                         pub fn #method_name<F, T>(mut self, handler: F) -> #tonic_builder_name<S>
                                         where
-                                            connectrpc_axum::tonic::TonicCompatibleClientStreamHandlerWrapper<F>:
+                                            connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::ClientStreamRpc>:
                                                 axum::handler::Handler<T, S>
                                                 + connectrpc_axum::tonic::IntoClientStreamFactory<T, #request_type, #response_type, S>,
                                             F: Clone + Send + Sync + 'static,
@@ -265,8 +265,8 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                                             let method_router = connectrpc_axum::tonic::post_tonic_client_stream(handler.clone());
 
                                             // Store factory (needs &S later to materialize the boxed client stream call)
-                                            let wrapper = connectrpc_axum::tonic::TonicCompatibleClientStreamHandlerWrapper(handler);
-                                            let factory = <connectrpc_axum::tonic::TonicCompatibleClientStreamHandlerWrapper<F> as
+                                            let wrapper = connectrpc_axum::tonic::TonicHandlerWrapper::client_stream(handler);
+                                            let factory = <connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::ClientStreamRpc> as
                                                 connectrpc_axum::tonic::IntoClientStreamFactory<
                                                     T, #request_type, #response_type, S
                                                 >>::into_client_stream_factory(wrapper);
@@ -281,12 +281,12 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                                     }
                                 }
                                 (true, true) => {
-                                    // Bidi streaming - use TonicCompatibleBidiStreamHandlerWrapper
+                                    // Bidi streaming - use TonicHandlerWrapper with BidiStreamRpc
                                     quote! {
                                         /// Register a handler for this RPC method (bidirectional streaming)
                                         pub fn #method_name<F, T>(mut self, handler: F) -> #tonic_builder_name<S>
                                         where
-                                            connectrpc_axum::tonic::TonicCompatibleBidiStreamHandlerWrapper<F>:
+                                            connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::BidiStreamRpc>:
                                                 axum::handler::Handler<T, S>
                                                 + connectrpc_axum::tonic::IntoBidiStreamFactory<T, #request_type, #response_type, S>,
                                             F: Clone + Send + Sync + 'static,
@@ -296,8 +296,8 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                                             let method_router = connectrpc_axum::tonic::post_tonic_bidi_stream(handler.clone());
 
                                             // Store factory (needs &S later to materialize the boxed bidi stream call)
-                                            let wrapper = connectrpc_axum::tonic::TonicCompatibleBidiStreamHandlerWrapper(handler);
-                                            let factory = <connectrpc_axum::tonic::TonicCompatibleBidiStreamHandlerWrapper<F> as
+                                            let wrapper = connectrpc_axum::tonic::TonicHandlerWrapper::bidi_stream(handler);
+                                            let factory = <connectrpc_axum::tonic::TonicHandlerWrapper<F, connectrpc_axum::tonic::BidiStreamRpc> as
                                                 connectrpc_axum::tonic::IntoBidiStreamFactory<
                                                     T, #request_type, #response_type, S
                                                 >>::into_bidi_stream_factory(wrapper);

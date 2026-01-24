@@ -10,7 +10,7 @@ use axum::{
     routing::MethodRouter,
 };
 use futures::Stream;
-use std::{future::Future, pin::Pin};
+use std::{future::Future, marker::PhantomData, pin::Pin};
 
 use crate::{
     context::ConnectContext,
@@ -23,19 +23,85 @@ use serde::de::DeserializeOwned;
 
 use super::parts::RequestContext;
 
-// =============== Factory trait for deferred handler boxing ===============
+// =============== RPC Kind Markers ===============
 
-/// Tonic-style handler wrapper with axum extractor support
+/// Marker type for unary RPC handlers.
+#[derive(Debug, Clone, Copy)]
+pub struct Unary;
+
+/// Marker type for server streaming RPC handlers.
+#[derive(Debug, Clone, Copy)]
+pub struct ServerStream;
+
+/// Marker type for client streaming RPC handlers.
+#[derive(Debug, Clone, Copy)]
+pub struct ClientStream;
+
+/// Marker type for bidirectional streaming RPC handlers.
+#[derive(Debug, Clone, Copy)]
+pub struct BidiStream;
+
+// =============== Unified Handler Wrapper ===============
+
+/// Unified tonic-style handler wrapper with axum extractor support.
 ///
 /// This wrapper accepts handlers following tonic-like patterns extended with
 /// axum's `FromRequestParts` extractors (1-8 extractors supported).
-/// The final argument must always be `ConnectRequest<Req>`.
+/// The final argument must always be `ConnectRequest<Req>` (or `ConnectRequest<Streaming<Req>>`
+/// for client/bidi streaming).
+///
+/// The `Kind` type parameter distinguishes different RPC types:
+/// - [`UnaryRpc`] for unary handlers (default)
+/// - [`ServerStreamRpc`] for server streaming handlers
+/// - [`ClientStreamRpc`] for client streaming handlers
+/// - [`BidiStreamRpc`] for bidirectional streaming handlers
+///
+/// # Example
+///
+/// ```ignore
+/// // Unary handler
+/// let router = post_tonic(|req: ConnectRequest<MyRequest>| async { ... });
+///
+/// // Server streaming handler
+/// let router = post_tonic_stream(|req: ConnectRequest<MyRequest>| async { ... });
+/// ```
 #[derive(Clone)]
-pub struct TonicCompatibleHandlerWrapper<F>(pub F);
+pub struct TonicHandlerWrapper<F, Kind = Unary>(pub F, PhantomData<Kind>);
 
-/// Tonic-style streaming handler wrapper with axum extractor support
-#[derive(Clone)]
-pub struct TonicCompatibleStreamHandlerWrapper<F>(pub F);
+impl<F, Kind> TonicHandlerWrapper<F, Kind> {
+    /// Create a new handler wrapper with the specified RPC kind.
+    pub fn new(f: F) -> Self {
+        TonicHandlerWrapper(f, PhantomData)
+    }
+}
+
+impl<F> TonicHandlerWrapper<F, Unary> {
+    /// Create a unary RPC handler wrapper.
+    pub fn unary(f: F) -> Self {
+        TonicHandlerWrapper(f, PhantomData)
+    }
+}
+
+impl<F> TonicHandlerWrapper<F, ServerStream> {
+    /// Create a server streaming RPC handler wrapper.
+    pub fn server_stream(f: F) -> Self {
+        TonicHandlerWrapper(f, PhantomData)
+    }
+}
+
+impl<F> TonicHandlerWrapper<F, ClientStream> {
+    /// Create a client streaming RPC handler wrapper.
+    pub fn client_stream(f: F) -> Self {
+        TonicHandlerWrapper(f, PhantomData)
+    }
+}
+
+impl<F> TonicHandlerWrapper<F, BidiStream> {
+    /// Create a bidirectional streaming RPC handler wrapper.
+    pub fn bidi_stream(f: F) -> Self {
+        TonicHandlerWrapper(f, PhantomData)
+    }
+}
 
 // =============== Boxed callable and IntoFactory adapters ===============
 
@@ -147,19 +213,11 @@ pub trait IntoBidiStreamFactory<T, Req, Resp, S> {
     ) -> Box<dyn Fn(&S) -> BoxedBidiStreamCall<Req, Resp> + Send + Sync>;
 }
 
-/// Tonic-style client streaming handler wrapper with axum extractor support
-#[derive(Clone)]
-pub struct TonicCompatibleClientStreamHandlerWrapper<F>(pub F);
-
-/// Tonic-style bidi streaming handler wrapper with axum extractor support
-#[derive(Clone)]
-pub struct TonicCompatibleBidiStreamHandlerWrapper<F>(pub F);
-
 // =============== IntoFactory implementations ===============
 
 // no-extractor: (ConnectRequest<Req>,)
 impl<F, Fut, Req, Resp, S> IntoFactory<(ConnectRequest<Req>,), Req, Resp, S>
-    for TonicCompatibleHandlerWrapper<F>
+    for TonicHandlerWrapper<F, Unary>
 where
     F: Fn(ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
@@ -184,7 +242,7 @@ where
 
 // no-extractor: (ConnectRequest<Req>,)
 impl<F, Fut, Req, Resp, St, S> IntoStreamFactory<(ConnectRequest<Req>,), Req, Resp, S>
-    for TonicCompatibleStreamHandlerWrapper<F>
+    for TonicHandlerWrapper<F, ServerStream>
 where
     F: Fn(ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
@@ -218,7 +276,7 @@ where
 
 // no-extractor: (ConnectRequest<Streaming<Req>>,)
 impl<F, Fut, Req, Resp, S> IntoClientStreamFactory<(ConnectRequest<Streaming<Req>>,), Req, Resp, S>
-    for TonicCompatibleClientStreamHandlerWrapper<F>
+    for TonicHandlerWrapper<F, ClientStream>
 where
     F: Fn(ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
@@ -247,7 +305,7 @@ where
 // no-extractor: (ConnectRequest<Streaming<Req>>,)
 impl<F, Fut, Req, Resp, St, S>
     IntoBidiStreamFactory<(ConnectRequest<Streaming<Req>>,), Req, Resp, S>
-    for TonicCompatibleBidiStreamHandlerWrapper<F>
+    for TonicHandlerWrapper<F, BidiStream>
 where
     F: Fn(ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
@@ -278,7 +336,7 @@ where
     }
 }
 
-// =============== N-extractor IntoFactory implementations ===============
+// =============== N-extractor implementations ===============
 
 // Macro for 1-8 extractors
 macro_rules! all_extractor_tuples {
@@ -298,7 +356,7 @@ macro_rules! impl_into_factory_with_extractors {
     ([$($A:ident),+]) => {
         impl<F, Fut, Req, Resp, S, $($A,)+>
             IntoFactory<($($A,)+ ConnectRequest<Req>,), Req, Resp, S>
-            for TonicCompatibleHandlerWrapper<F>
+            for TonicHandlerWrapper<F, Unary>
         where
             F: Fn($($A,)+ ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
             Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
@@ -341,7 +399,7 @@ macro_rules! impl_into_stream_factory_with_extractors {
     ([$($A:ident),+]) => {
         impl<F, Fut, Req, Resp, St, S, $($A,)+>
             IntoStreamFactory<($($A,)+ ConnectRequest<Req>,), Req, Resp, S>
-            for TonicCompatibleStreamHandlerWrapper<F>
+            for TonicHandlerWrapper<F, ServerStream>
         where
             F: Fn($($A,)+ ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
             Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
@@ -390,7 +448,7 @@ macro_rules! impl_into_client_stream_factory_with_extractors {
     ([$($A:ident),+]) => {
         impl<F, Fut, Req, Resp, S, $($A,)+>
             IntoClientStreamFactory<($($A,)+ ConnectRequest<Streaming<Req>>,), Req, Resp, S>
-            for TonicCompatibleClientStreamHandlerWrapper<F>
+            for TonicHandlerWrapper<F, ClientStream>
         where
             F: Fn($($A,)+ ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
             Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
@@ -433,7 +491,7 @@ macro_rules! impl_into_bidi_stream_factory_with_extractors {
     ([$($A:ident),+]) => {
         impl<F, Fut, Req, Resp, St, S, $($A,)+>
             IntoBidiStreamFactory<($($A,)+ ConnectRequest<Streaming<Req>>,), Req, Resp, S>
-            for TonicCompatibleBidiStreamHandlerWrapper<F>
+            for TonicHandlerWrapper<F, BidiStream>
         where
             F: Fn($($A,)+ ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
             Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
@@ -485,8 +543,8 @@ all_extractor_tuples!(impl_into_bidi_stream_factory_with_extractors);
 
 // =============== Handler implementations for Connect protocol ===============
 
-// Implement Handler for TonicCompatibleHandlerWrapper - no extractors variant
-impl<F, Fut, Req, Resp> Handler<(ConnectRequest<Req>,), ()> for TonicCompatibleHandlerWrapper<F>
+// Implement Handler for unary RPC - no extractors variant
+impl<F, Fut, Req, Resp> Handler<(ConnectRequest<Req>,), ()> for TonicHandlerWrapper<F, Unary>
 where
     F: Fn(ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
@@ -518,13 +576,13 @@ where
     }
 }
 
-// =============== N-extractor Handler implementations ===============
+// =============== N-extractor Handler implementations for Unary ===============
 
-macro_rules! impl_handler_for_tonic_wrapper_with_extractors {
+macro_rules! impl_handler_for_unary_with_extractors {
     ([$($A:ident),+]) => {
         impl<F, Fut, S, Req, Resp, $($A,)+>
             Handler<($($A,)+ ConnectRequest<Req>,), S>
-            for TonicCompatibleHandlerWrapper<F>
+            for TonicHandlerWrapper<F, Unary>
         where
             F: Fn($($A,)+ ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
             Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
@@ -568,33 +626,13 @@ macro_rules! impl_handler_for_tonic_wrapper_with_extractors {
 }
 
 // Generate implementations for 1-8 extractors
-all_extractor_tuples!(impl_handler_for_tonic_wrapper_with_extractors);
-
-/// Creates a POST method router for tonic-compatible unary RPC handlers.
-pub fn post_tonic_unary<F, T, S>(f: F) -> MethodRouter<S>
-where
-    S: Clone + Send + Sync + 'static,
-    TonicCompatibleHandlerWrapper<F>: Handler<T, S>,
-    T: 'static,
-{
-    axum::routing::post(TonicCompatibleHandlerWrapper(f))
-}
-
-/// Creates a POST method router for tonic-compatible streaming RPC handlers.
-pub fn post_tonic_stream<F, T, S>(f: F) -> MethodRouter<S>
-where
-    S: Clone + Send + Sync + 'static,
-    TonicCompatibleStreamHandlerWrapper<F>: Handler<T, S>,
-    T: 'static,
-{
-    axum::routing::post(TonicCompatibleStreamHandlerWrapper(f))
-}
+all_extractor_tuples!(impl_handler_for_unary_with_extractors);
 
 // =============== Streaming Handler Implementations ===============
 
-// Implement Handler for TonicCompatibleStreamHandlerWrapper (no-state)
+// Implement Handler for server streaming - no extractors
 impl<F, Fut, Req, Resp, St> Handler<(ConnectRequest<Req>,), ()>
-    for TonicCompatibleStreamHandlerWrapper<F>
+    for TonicHandlerWrapper<F, ServerStream>
 where
     F: Fn(ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
@@ -632,11 +670,11 @@ where
 }
 
 // N-extractor streaming handler implementations
-macro_rules! impl_handler_for_tonic_stream_wrapper_with_extractors {
+macro_rules! impl_handler_for_server_stream_with_extractors {
     ([$($A:ident),+]) => {
         impl<F, Fut, S, Req, Resp, St, $($A,)+>
             Handler<($($A,)+ ConnectRequest<Req>,), S>
-            for TonicCompatibleStreamHandlerWrapper<F>
+            for TonicHandlerWrapper<F, ServerStream>
         where
             F: Fn($($A,)+ ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
             Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
@@ -685,13 +723,13 @@ macro_rules! impl_handler_for_tonic_stream_wrapper_with_extractors {
 }
 
 // Generate implementations for 1-8 extractors
-all_extractor_tuples!(impl_handler_for_tonic_stream_wrapper_with_extractors);
+all_extractor_tuples!(impl_handler_for_server_stream_with_extractors);
 
 // =============== Client Streaming Handler Implementations ===============
 
-// Implement Handler for TonicCompatibleClientStreamHandlerWrapper (no-state)
+// Implement Handler for client streaming - no extractors
 impl<F, Fut, Req, Resp> Handler<(ConnectRequest<Streaming<Req>>,), ()>
-    for TonicCompatibleClientStreamHandlerWrapper<F>
+    for TonicHandlerWrapper<F, ClientStream>
 where
     F: Fn(ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
@@ -733,11 +771,11 @@ where
 }
 
 // N-extractor client streaming handler implementations
-macro_rules! impl_handler_for_tonic_client_stream_wrapper_with_extractors {
+macro_rules! impl_handler_for_client_stream_with_extractors {
     ([$($A:ident),+]) => {
         impl<F, Fut, S, Req, Resp, $($A,)+>
             Handler<($($A,)+ ConnectRequest<Streaming<Req>>,), S>
-            for TonicCompatibleClientStreamHandlerWrapper<F>
+            for TonicHandlerWrapper<F, ClientStream>
         where
             F: Fn($($A,)+ ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
             Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
@@ -790,23 +828,13 @@ macro_rules! impl_handler_for_tonic_client_stream_wrapper_with_extractors {
 }
 
 // Generate implementations for 1-8 extractors
-all_extractor_tuples!(impl_handler_for_tonic_client_stream_wrapper_with_extractors);
-
-/// Creates a POST method router for tonic-compatible client streaming RPC handlers.
-pub fn post_tonic_client_stream<F, T, S>(f: F) -> MethodRouter<S>
-where
-    S: Clone + Send + Sync + 'static,
-    TonicCompatibleClientStreamHandlerWrapper<F>: Handler<T, S>,
-    T: 'static,
-{
-    axum::routing::post(TonicCompatibleClientStreamHandlerWrapper(f))
-}
+all_extractor_tuples!(impl_handler_for_client_stream_with_extractors);
 
 // =============== Bidi Streaming Handler Implementations ===============
 
-// Implement Handler for TonicCompatibleBidiStreamHandlerWrapper (no-state)
+// Implement Handler for bidi streaming - no extractors
 impl<F, Fut, Req, Resp, St> Handler<(ConnectRequest<Streaming<Req>>,), ()>
-    for TonicCompatibleBidiStreamHandlerWrapper<F>
+    for TonicHandlerWrapper<F, BidiStream>
 where
     F: Fn(ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
@@ -849,11 +877,11 @@ where
 }
 
 // N-extractor bidi streaming handler implementations
-macro_rules! impl_handler_for_tonic_bidi_stream_wrapper_with_extractors {
+macro_rules! impl_handler_for_bidi_stream_with_extractors {
     ([$($A:ident),+]) => {
         impl<F, Fut, S, Req, Resp, St, $($A,)+>
             Handler<($($A,)+ ConnectRequest<Streaming<Req>>,), S>
-            for TonicCompatibleBidiStreamHandlerWrapper<F>
+            for TonicHandlerWrapper<F, BidiStream>
         where
             F: Fn($($A,)+ ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
             Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
@@ -907,18 +935,54 @@ macro_rules! impl_handler_for_tonic_bidi_stream_wrapper_with_extractors {
 }
 
 // Generate implementations for 1-8 extractors
-all_extractor_tuples!(impl_handler_for_tonic_bidi_stream_wrapper_with_extractors);
+all_extractor_tuples!(impl_handler_for_bidi_stream_with_extractors);
+
+// =============== Routing Functions ===============
+
+/// Creates a POST method router for tonic-compatible unary RPC handlers.
+///
+/// This is the primary function for routing unary (request-response) RPC methods.
+pub fn post_tonic<F, T, S>(f: F) -> MethodRouter<S>
+where
+    S: Clone + Send + Sync + 'static,
+    TonicHandlerWrapper<F, Unary>: Handler<T, S>,
+    T: 'static,
+{
+    axum::routing::post(TonicHandlerWrapper::unary(f))
+}
+
+/// Creates a POST method router for tonic-compatible server streaming RPC handlers.
+pub fn post_tonic_stream<F, T, S>(f: F) -> MethodRouter<S>
+where
+    S: Clone + Send + Sync + 'static,
+    TonicHandlerWrapper<F, ServerStream>: Handler<T, S>,
+    T: 'static,
+{
+    axum::routing::post(TonicHandlerWrapper::server_stream(f))
+}
+
+/// Creates a POST method router for tonic-compatible client streaming RPC handlers.
+pub fn post_tonic_client_stream<F, T, S>(f: F) -> MethodRouter<S>
+where
+    S: Clone + Send + Sync + 'static,
+    TonicHandlerWrapper<F, ClientStream>: Handler<T, S>,
+    T: 'static,
+{
+    axum::routing::post(TonicHandlerWrapper::client_stream(f))
+}
 
 /// Creates a POST method router for tonic-compatible bidirectional streaming RPC handlers.
 /// Requires HTTP/2 for full-duplex communication.
 pub fn post_tonic_bidi_stream<F, T, S>(f: F) -> MethodRouter<S>
 where
     S: Clone + Send + Sync + 'static,
-    TonicCompatibleBidiStreamHandlerWrapper<F>: Handler<T, S>,
+    TonicHandlerWrapper<F, BidiStream>: Handler<T, S>,
     T: 'static,
 {
-    axum::routing::post(TonicCompatibleBidiStreamHandlerWrapper(f))
+    axum::routing::post(TonicHandlerWrapper::bidi_stream(f))
 }
+
+// =============== Unimplemented Handlers ===============
 
 /// Creates an unimplemented handler that returns ConnectError::unimplemented for the given method name
 pub fn unimplemented_boxed_call<Req, Resp>() -> BoxedCall<Req, Resp>
