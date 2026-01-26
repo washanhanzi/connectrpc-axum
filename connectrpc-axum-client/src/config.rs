@@ -3,15 +3,14 @@
 //! This module contains request-level configuration:
 //! - [`CallOptions`]: Per-call timeout and headers
 //! - [`RetryPolicy`]: Retry behavior with exponential backoff
-//! - [`Interceptor`]: Request/response interception
+//! - [`Intercept`]: Request/response interception
 
 mod interceptor;
 mod options;
 mod retry;
 
 pub use interceptor::{
-    BoxFuture, FnInterceptor, HeaderInterceptor, Interceptor, InterceptorChain, StreamType,
-    StreamingRequest, UnaryFunc, UnaryInterceptorFunc, UnaryNext, UnaryRequest, UnaryResponse,
+    Chain, HeaderInterceptor, Intercept, InterceptContext, Interceptor,
 };
 pub use options::CallOptions;
 pub(crate) use options::duration_to_timeout_header;

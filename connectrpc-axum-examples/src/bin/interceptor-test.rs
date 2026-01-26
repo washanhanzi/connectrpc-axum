@@ -14,8 +14,8 @@
 
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_client::{
-    ConnectClient, ConnectResponse as ClientResponse, FnInterceptor, HeaderInterceptor, UnaryNext,
-    UnaryRequest,
+    ConnectClient, ConnectResponse as ClientResponse, HeaderInterceptor, InterceptContext,
+    Interceptor,
 };
 use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
 use std::net::SocketAddr;
@@ -117,21 +117,17 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // ========================================================================
-    // Test 2: Unary call with FnInterceptor
+    // Test 2: Unary call with closure Interceptor
     // ========================================================================
-    println!("Test 2: Unary call with FnInterceptor...");
+    println!("Test 2: Unary call with closure Interceptor...");
     {
         let client = ConnectClient::builder(&base_url)
             .use_json()
-            .with_interceptor(FnInterceptor::unary(
-                |mut req: UnaryRequest, next: UnaryNext| {
-                    Box::pin(async move {
-                        req.headers
-                            .insert("x-custom-header", "fn-interceptor-value".parse().unwrap());
-                        next.call(req).await
-                    })
-                },
-            ))
+            .with_interceptor(Interceptor::new(|ctx: &mut InterceptContext<'_>| {
+                ctx.headers
+                    .insert("x-custom-header", "fn-interceptor-value".parse().unwrap());
+                Ok(())
+            }))
             .build()?;
 
         let request = HelloRequest {
@@ -145,7 +141,7 @@ async fn main() -> anyhow::Result<()> {
             .await?;
 
         if response.message.contains("Hello, FnTest!") {
-            println!("  PASS: Unary call with FnInterceptor succeeded");
+            println!("  PASS: Unary call with closure Interceptor succeeded");
             println!("  Response: {}", response.message);
             passed += 1;
         } else {
@@ -270,7 +266,7 @@ async fn main() -> anyhow::Result<()> {
         println!();
         println!("Issue #29 (RPC-level interceptors): RESOLVED");
         println!("  - HeaderInterceptor adds headers to requests");
-        println!("  - FnInterceptor allows custom logic");
+        println!("  - Interceptor closure allows custom logic");
         println!("  - Interceptors can be chained");
         println!("  - Works with both JSON and Proto encoding");
         println!();

@@ -10,16 +10,16 @@ use std::task::{Context, Poll};
 use base64::Engine;
 use bytes::{Bytes, BytesMut};
 use connectrpc_axum_core::{
-    envelope_flags, parse_envelope_header, process_envelope_payload, Code, CompressionEncoding,
-    ErrorDetail, ENVELOPE_HEADER_SIZE,
+    Code, CompressionEncoding, ENVELOPE_HEADER_SIZE, ErrorDetail, envelope_flags,
+    parse_envelope_header, process_envelope_payload,
 };
 
 use crate::ClientError;
 use crate::response::Metadata;
 use futures::Stream;
 use prost::Message;
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 /// Decoded streaming frame result.
 enum DecodedFrame<T> {
@@ -297,7 +297,9 @@ struct EndStreamErrorDetail {
 /// Parse an EndStream frame payload.
 ///
 /// Returns `(error, trailers)` where both are optional.
-fn parse_end_stream(payload: &[u8]) -> Result<(Option<ClientError>, Option<Metadata>), ClientError> {
+fn parse_end_stream(
+    payload: &[u8],
+) -> Result<(Option<ClientError>, Option<Metadata>), ClientError> {
     // Empty payload is valid (no error, no trailers)
     if payload.is_empty() || payload == b"{}" {
         return Ok((None, None));
@@ -361,8 +363,8 @@ fn parse_error_detail(detail: &EndStreamErrorDetail) -> Option<ErrorDetail> {
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use futures::stream;
     use futures::StreamExt;
+    use futures::stream;
 
     // Helper to create a frame
     fn make_frame(flags: u8, payload: &[u8]) -> Bytes {
@@ -374,7 +376,7 @@ mod tests {
     }
 
     // A simple test message type that implements both Message and Deserialize
-    #[derive(Clone, PartialEq)]
+    #[derive(Clone, PartialEq, Default)]
     struct TestMessage {
         value: String,
     }
@@ -384,14 +386,6 @@ mod tests {
             f.debug_struct("TestMessage")
                 .field("value", &self.value)
                 .finish()
-        }
-    }
-
-    impl Default for TestMessage {
-        fn default() -> Self {
-            Self {
-                value: String::new(),
-            }
         }
     }
 
@@ -405,7 +399,9 @@ mod tests {
                 value: String,
             }
             let helper = Helper::deserialize(deserializer)?;
-            Ok(TestMessage { value: helper.value })
+            Ok(TestMessage {
+                value: helper.value,
+            })
         }
     }
 
@@ -485,11 +481,8 @@ mod tests {
         all_data.extend_from_slice(&end_frame);
 
         let stream = stream::iter(vec![Ok::<_, ClientError>(Bytes::from(all_data))]);
-        let mut decoder = FrameDecoder::<_, TestMessage>::new(
-            stream,
-            false,
-            CompressionEncoding::Identity,
-        );
+        let mut decoder =
+            FrameDecoder::<_, TestMessage>::new(stream, false, CompressionEncoding::Identity);
 
         let msg1 = decoder.next().await.unwrap().unwrap();
         assert_eq!(msg1.value, "one");
@@ -510,11 +503,8 @@ mod tests {
         all_data.extend_from_slice(&end_frame);
 
         let stream = stream::iter(vec![Ok::<_, ClientError>(Bytes::from(all_data))]);
-        let mut decoder = FrameDecoder::<_, TestMessage>::new(
-            stream,
-            false,
-            CompressionEncoding::Identity,
-        );
+        let mut decoder =
+            FrameDecoder::<_, TestMessage>::new(stream, false, CompressionEncoding::Identity);
 
         // First message should succeed
         let msg = decoder.next().await.unwrap().unwrap();
@@ -536,11 +526,8 @@ mod tests {
         all_data.extend_from_slice(&end_frame);
 
         let stream = stream::iter(vec![Ok::<_, ClientError>(Bytes::from(all_data))]);
-        let mut decoder = FrameDecoder::<_, TestMessage>::new(
-            stream,
-            false,
-            CompressionEncoding::Identity,
-        );
+        let mut decoder =
+            FrameDecoder::<_, TestMessage>::new(stream, false, CompressionEncoding::Identity);
 
         // Consume message
         let _ = decoder.next().await;
@@ -569,17 +556,10 @@ mod tests {
         let chunk2 = Bytes::copy_from_slice(&all_data[3..10]);
         let chunk3 = Bytes::copy_from_slice(&all_data[10..]);
 
-        let stream = stream::iter(vec![
-            Ok::<_, ClientError>(chunk1),
-            Ok(chunk2),
-            Ok(chunk3),
-        ]);
+        let stream = stream::iter(vec![Ok::<_, ClientError>(chunk1), Ok(chunk2), Ok(chunk3)]);
 
-        let mut decoder = FrameDecoder::<_, TestMessage>::new(
-            stream,
-            false,
-            CompressionEncoding::Identity,
-        );
+        let mut decoder =
+            FrameDecoder::<_, TestMessage>::new(stream, false, CompressionEncoding::Identity);
 
         let msg = decoder.next().await.unwrap().unwrap();
         assert_eq!(msg.value, "hello");
@@ -622,12 +602,24 @@ mod tests {
     fn test_conformance_frame_flags() {
         // Message frame uncompressed
         let msg_frame = make_frame(0x00, b"test");
-        assert_eq!(msg_frame[0] & 0x01, 0x00, "Message flag should indicate uncompressed");
-        assert_eq!(msg_frame[0] & 0x02, 0x00, "Message flag should not have end-stream bit");
+        assert_eq!(
+            msg_frame[0] & 0x01,
+            0x00,
+            "Message flag should indicate uncompressed"
+        );
+        assert_eq!(
+            msg_frame[0] & 0x02,
+            0x00,
+            "Message flag should not have end-stream bit"
+        );
 
         // End stream frame
         let end_frame = make_frame(0x02, b"{}");
-        assert_eq!(end_frame[0] & 0x02, 0x02, "End stream flag should have end-stream bit");
+        assert_eq!(
+            end_frame[0] & 0x02,
+            0x02,
+            "End stream flag should have end-stream bit"
+        );
     }
 
     /// Verify length encoding is big-endian 4-byte unsigned integer
@@ -643,14 +635,15 @@ mod tests {
 
         for payload in &payloads {
             let frame = make_frame(0x00, payload);
-            let encoded_length = u32::from_be_bytes([
-                frame[1], frame[2], frame[3], frame[4]
-            ]) as usize;
+            let encoded_length =
+                u32::from_be_bytes([frame[1], frame[2], frame[3], frame[4]]) as usize;
 
             assert_eq!(
-                encoded_length, payload.len(),
+                encoded_length,
+                payload.len(),
                 "Encoded length {} should match payload length {}",
-                encoded_length, payload.len()
+                encoded_length,
+                payload.len()
             );
         }
     }
@@ -659,6 +652,10 @@ mod tests {
     #[test]
     fn test_conformance_minimum_frame_size() {
         let empty_frame = make_frame(0x00, b"");
-        assert_eq!(empty_frame.len(), 5, "Empty payload frame should be exactly 5 bytes");
+        assert_eq!(
+            empty_frame.len(),
+            5,
+            "Empty payload frame should be exactly 5 bytes"
+        );
     }
 }

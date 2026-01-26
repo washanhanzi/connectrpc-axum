@@ -12,15 +12,11 @@ use connectrpc_axum_core::{Code, CompressionConfig, CompressionEncoding, wrap_en
 use tracing::info_span;
 
 use crate::ClientError;
-use crate::config::{
-    duration_to_timeout_header, CallOptions, InterceptorChain, StreamType, StreamingRequest,
-    UnaryFunc, UnaryRequest, UnaryResponse,
-};
+use crate::config::{CallOptions, Intercept, InterceptContext, duration_to_timeout_header};
 use crate::transport::{HyperTransport, TransportBody};
 use futures::{Stream, StreamExt};
 use prost::Message;
 use serde::{Serialize, de::DeserializeOwned};
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::builder::ClientBuilder;
@@ -55,6 +51,9 @@ fn is_reserved_header(name: &http::header::HeaderName) -> bool {
 
 /// Connect RPC client.
 ///
+/// The client is generic over the interceptor type `I`, which defaults to `()`
+/// (no interceptors). This enables zero-cost interceptor composition at compile time.
+///
 /// Use [`ClientBuilder`] or [`ConnectClient::builder`] to create an instance.
 ///
 /// # Example
@@ -72,7 +71,7 @@ fn is_reserved_header(name: &http::header::HeaderName) -> bool {
 /// ).await?;
 /// ```
 #[derive(Debug, Clone)]
-pub struct ConnectClient {
+pub struct ConnectClient<I = ()> {
     /// HTTP transport.
     transport: HyperTransport,
     /// Base URL for the service.
@@ -87,18 +86,20 @@ pub struct ConnectClient {
     accept_encoding: Option<CompressionEncoding>,
     /// Default timeout for RPC calls.
     default_timeout: Option<Duration>,
-    /// Interceptor chain for RPC calls.
-    interceptors: InterceptorChain,
+    /// Interceptor chain for RPC calls (compile-time composed).
+    interceptors: I,
 }
 
-impl ConnectClient {
+impl ConnectClient<()> {
     /// Create a new ClientBuilder with the given base URL.
     ///
     /// This is a convenience method equivalent to `ClientBuilder::new(base_url)`.
-    pub fn builder<S: Into<String>>(base_url: S) -> ClientBuilder {
+    pub fn builder<S: Into<String>>(base_url: S) -> ClientBuilder<()> {
         ClientBuilder::new(base_url)
     }
+}
 
+impl<I: Intercept> ConnectClient<I> {
     /// Create a new ConnectClient.
     ///
     /// This is called by [`ClientBuilder::build`]. Prefer using the builder API.
@@ -110,7 +111,7 @@ impl ConnectClient {
         request_encoding: CompressionEncoding,
         accept_encoding: Option<CompressionEncoding>,
         default_timeout: Option<Duration>,
-        interceptors: InterceptorChain,
+        interceptors: I,
     ) -> Self {
         Self {
             transport,
@@ -156,99 +157,6 @@ impl ConnectClient {
         } else {
             "application/connect+json"
         }
-    }
-
-    /// Create the base unary function that performs the actual HTTP call.
-    ///
-    /// This function is wrapped by interceptors to create the final call chain.
-    fn base_unary_func(&self) -> UnaryFunc {
-        let transport = self.transport.clone();
-        let base_url = self.base_url.clone();
-        let accept_encoding = self.accept_encoding;
-
-        Arc::new(move |request: UnaryRequest| {
-            let transport = transport.clone();
-            let base_url = base_url.clone();
-
-            Box::pin(async move {
-                // Build URL (strip leading slash from procedure to avoid double slashes)
-                let procedure = request.procedure.strip_prefix('/').unwrap_or(&request.procedure);
-                let url = format!("{}/{}", base_url, procedure);
-
-                // Build HTTP request
-                let mut req_builder = http::Request::builder().method(Method::POST).uri(&url);
-
-                // Copy headers from UnaryRequest
-                for (name, value) in request.headers.iter() {
-                    req_builder = req_builder.header(name, value);
-                }
-
-                // Add Accept-Encoding if configured
-                if let Some(accept) = accept_encoding {
-                    req_builder = req_builder.header(header::ACCEPT_ENCODING, accept.as_str());
-                }
-
-                // Build request with body
-                let req = req_builder
-                    .body(TransportBody::full(request.body))
-                    .map_err(|e| {
-                        ClientError::Protocol(format!("failed to build request: {}", e))
-                    })?;
-
-                // Send request
-                let response = transport.request(req).await?;
-
-                // Check response status
-                let status = response.status();
-                let headers = response.headers().clone();
-
-                if !status.is_success() {
-                    let body_bytes = response
-                        .into_body()
-                        .collect()
-                        .await
-                        .map_err(|e| {
-                            ClientError::Transport(format!("failed to read error body: {}", e))
-                        })?
-                        .to_bytes();
-                    return Err(decompress_and_parse_error(status, &headers, body_bytes));
-                }
-
-                // Handle response decompression
-                let content_encoding = headers
-                    .get(header::CONTENT_ENCODING)
-                    .and_then(|v| v.to_str().ok());
-
-                let response_encoding = CompressionEncoding::from_header(content_encoding)
-                    .ok_or_else(|| {
-                        ClientError::Protocol(format!(
-                            "unsupported response encoding: {:?}",
-                            content_encoding
-                        ))
-                    })?;
-
-                // Get response body
-                let body_bytes = response
-                    .into_body()
-                    .collect()
-                    .await
-                    .map_err(|e| {
-                        ClientError::Transport(format!("failed to read response body: {}", e))
-                    })?
-                    .to_bytes();
-
-                // Decompress if needed
-                let body_bytes = if let Some(codec) = response_encoding.codec() {
-                    codec
-                        .decompress(&body_bytes)
-                        .map_err(|e| ClientError::Decode(format!("decompression failed: {}", e)))?
-                } else {
-                    body_bytes
-                };
-
-                Ok(UnaryResponse::new(headers, body_bytes))
-            })
-        })
     }
 
     /// Encode a message for sending.
@@ -387,28 +295,94 @@ impl ConnectClient {
             }
         }
 
-        // 4. Create UnaryRequest
-        let unary_request = UnaryRequest::new(procedure, headers, body);
+        // 4. Apply interceptors
+        {
+            let mut ctx = InterceptContext::new(procedure, &mut headers);
+            self.interceptors.before_request(&mut ctx)?;
+        }
 
-        // 5. Get base function and wrap with interceptors
-        let base_func = self.base_unary_func();
-        let wrapped_func = self.interceptors.wrap_unary(base_func);
+        // 5. Build URL (strip leading slash from procedure to avoid double slashes)
+        let procedure = procedure.strip_prefix('/').unwrap_or(procedure);
+        let url = format!("{}/{}", self.base_url, procedure);
 
-        // 6. Call through interceptor chain (with client-side timeout if configured)
-        let call_future = wrapped_func(unary_request);
-        let unary_response = if let Some(t) = self.default_timeout {
-            timeout(t, call_future).await.map_err(|_| {
-                ClientError::new(Code::DeadlineExceeded, "client timeout exceeded")
-            })??
+        // 6. Build HTTP request
+        let mut req_builder = Request::builder().method(Method::POST).uri(&url);
+
+        // Copy headers
+        for (name, value) in headers.iter() {
+            req_builder = req_builder.header(name, value);
+        }
+
+        // Add Accept-Encoding if configured
+        if let Some(accept) = self.accept_encoding {
+            req_builder = req_builder.header(header::ACCEPT_ENCODING, accept.as_str());
+        }
+
+        // Build request with body
+        let req = req_builder
+            .body(TransportBody::full(body))
+            .map_err(|e| ClientError::Protocol(format!("failed to build request: {}", e)))?;
+
+        // 7. Send request (with client-side timeout if configured)
+        let response = if let Some(t) = self.default_timeout {
+            timeout(t, self.transport.request(req))
+                .await
+                .map_err(|_| ClientError::new(Code::DeadlineExceeded, "client timeout exceeded"))??
         } else {
-            call_future.await?
+            self.transport.request(req).await?
         };
 
-        // 7. Decode response
-        let message = self.decode_message(&unary_response.body)?;
+        // 8. Check response status
+        let status = response.status();
+        let response_headers = response.headers().clone();
 
-        // 8. Extract metadata
-        let metadata = Metadata::new(unary_response.headers);
+        // Apply after_response interceptors
+        self.interceptors.after_response(&response_headers);
+
+        if !status.is_success() {
+            let body_bytes = response
+                .into_body()
+                .collect()
+                .await
+                .map_err(|e| ClientError::Transport(format!("failed to read error body: {}", e)))?
+                .to_bytes();
+            return Err(decompress_and_parse_error(status, &response_headers, body_bytes));
+        }
+
+        // 9. Handle response decompression
+        let content_encoding = response_headers
+            .get(header::CONTENT_ENCODING)
+            .and_then(|v| v.to_str().ok());
+
+        let response_encoding = CompressionEncoding::from_header(content_encoding).ok_or_else(|| {
+            ClientError::Protocol(format!(
+                "unsupported response encoding: {:?}",
+                content_encoding
+            ))
+        })?;
+
+        // 10. Get response body
+        let body_bytes = response
+            .into_body()
+            .collect()
+            .await
+            .map_err(|e| ClientError::Transport(format!("failed to read response body: {}", e)))?
+            .to_bytes();
+
+        // Decompress if needed
+        let body_bytes = if let Some(codec) = response_encoding.codec() {
+            codec
+                .decompress(&body_bytes)
+                .map_err(|e| ClientError::Decode(format!("decompression failed: {}", e)))?
+        } else {
+            body_bytes
+        };
+
+        // 11. Decode response
+        let message = self.decode_message(&body_bytes)?;
+
+        // 12. Extract metadata
+        let metadata = Metadata::new(response_headers);
 
         Ok(ConnectResponse::new(message, metadata))
     }
@@ -500,28 +474,94 @@ impl ConnectClient {
             }
         }
 
-        // 4. Create UnaryRequest
-        let unary_request = UnaryRequest::new(procedure, headers, body);
+        // 4. Apply interceptors
+        {
+            let mut ctx = InterceptContext::new(procedure, &mut headers);
+            self.interceptors.before_request(&mut ctx)?;
+        }
 
-        // 5. Get base function and wrap with interceptors
-        let base_func = self.base_unary_func();
-        let wrapped_func = self.interceptors.wrap_unary(base_func);
+        // 5. Build URL (strip leading slash from procedure to avoid double slashes)
+        let procedure = procedure.strip_prefix('/').unwrap_or(procedure);
+        let url = format!("{}/{}", self.base_url, procedure);
 
-        // 6. Call through interceptor chain (with client-side timeout if configured)
-        let call_future = wrapped_func(unary_request);
-        let unary_response = if let Some(t) = effective_timeout {
-            timeout(t, call_future).await.map_err(|_| {
-                ClientError::new(Code::DeadlineExceeded, "client timeout exceeded")
-            })??
+        // 6. Build HTTP request
+        let mut req_builder = Request::builder().method(Method::POST).uri(&url);
+
+        // Copy headers
+        for (name, value) in headers.iter() {
+            req_builder = req_builder.header(name, value);
+        }
+
+        // Add Accept-Encoding if configured
+        if let Some(accept) = self.accept_encoding {
+            req_builder = req_builder.header(header::ACCEPT_ENCODING, accept.as_str());
+        }
+
+        // Build request with body
+        let req = req_builder
+            .body(TransportBody::full(body))
+            .map_err(|e| ClientError::Protocol(format!("failed to build request: {}", e)))?;
+
+        // 7. Send request (with client-side timeout if configured)
+        let response = if let Some(t) = effective_timeout {
+            timeout(t, self.transport.request(req))
+                .await
+                .map_err(|_| ClientError::new(Code::DeadlineExceeded, "client timeout exceeded"))??
         } else {
-            call_future.await?
+            self.transport.request(req).await?
         };
 
-        // 7. Decode response
-        let message = self.decode_message(&unary_response.body)?;
+        // 8. Check response status
+        let status = response.status();
+        let response_headers = response.headers().clone();
 
-        // 8. Extract metadata
-        let metadata = Metadata::new(unary_response.headers);
+        // Apply after_response interceptors
+        self.interceptors.after_response(&response_headers);
+
+        if !status.is_success() {
+            let body_bytes = response
+                .into_body()
+                .collect()
+                .await
+                .map_err(|e| ClientError::Transport(format!("failed to read error body: {}", e)))?
+                .to_bytes();
+            return Err(decompress_and_parse_error(status, &response_headers, body_bytes));
+        }
+
+        // 9. Handle response decompression
+        let content_encoding = response_headers
+            .get(header::CONTENT_ENCODING)
+            .and_then(|v| v.to_str().ok());
+
+        let response_encoding = CompressionEncoding::from_header(content_encoding).ok_or_else(|| {
+            ClientError::Protocol(format!(
+                "unsupported response encoding: {:?}",
+                content_encoding
+            ))
+        })?;
+
+        // 10. Get response body
+        let body_bytes = response
+            .into_body()
+            .collect()
+            .await
+            .map_err(|e| ClientError::Transport(format!("failed to read response body: {}", e)))?
+            .to_bytes();
+
+        // Decompress if needed
+        let body_bytes = if let Some(codec) = response_encoding.codec() {
+            codec
+                .decompress(&body_bytes)
+                .map_err(|e| ClientError::Decode(format!("decompression failed: {}", e)))?
+        } else {
+            body_bytes
+        };
+
+        // 11. Decode response
+        let message = self.decode_message(&body_bytes)?;
+
+        // 12. Extract metadata
+        let metadata = Metadata::new(response_headers);
 
         Ok(ConnectResponse::new(message, metadata))
     }
@@ -641,15 +681,11 @@ impl ConnectClient {
             }
         }
 
-        // Apply streaming interceptors
+        // Apply interceptors
         let mut interceptor_headers = http::HeaderMap::new();
         {
-            let mut req = StreamingRequest::new(
-                procedure,
-                StreamType::ServerStream,
-                &mut interceptor_headers,
-            );
-            self.interceptors.apply_streaming(&mut req);
+            let mut ctx = InterceptContext::new(procedure, &mut interceptor_headers);
+            self.interceptors.before_request(&mut ctx)?;
         }
         for (name, value) in interceptor_headers.iter() {
             req_builder = req_builder.header(name, value);
@@ -810,15 +846,11 @@ impl ConnectClient {
             }
         }
 
-        // Apply streaming interceptors
+        // Apply interceptors
         let mut interceptor_headers = http::HeaderMap::new();
         {
-            let mut req = StreamingRequest::new(
-                procedure,
-                StreamType::ServerStream,
-                &mut interceptor_headers,
-            );
-            self.interceptors.apply_streaming(&mut req);
+            let mut ctx = InterceptContext::new(procedure, &mut interceptor_headers);
+            self.interceptors.before_request(&mut ctx)?;
         }
         for (name, value) in interceptor_headers.iter() {
             req_builder = req_builder.header(name, value);
@@ -985,15 +1017,11 @@ impl ConnectClient {
             }
         }
 
-        // Apply streaming interceptors
+        // Apply interceptors
         let mut interceptor_headers = http::HeaderMap::new();
         {
-            let mut req = StreamingRequest::new(
-                procedure,
-                StreamType::ClientStream,
-                &mut interceptor_headers,
-            );
-            self.interceptors.apply_streaming(&mut req);
+            let mut ctx = InterceptContext::new(procedure, &mut interceptor_headers);
+            self.interceptors.before_request(&mut ctx)?;
         }
         for (name, value) in interceptor_headers.iter() {
             req_builder = req_builder.header(name, value);
@@ -1135,7 +1163,7 @@ impl ConnectClient {
             request,
             self.use_proto,
             self.request_encoding,
-            self.compression.clone(),
+            self.compression,
         );
 
         // 3. Create streaming body
@@ -1161,10 +1189,10 @@ impl ConnectClient {
 
         // Add Connect-Timeout-Ms header (options timeout overrides default)
         let effective_timeout = options.timeout.or(self.default_timeout);
-        if let Some(t) = effective_timeout {
-            if let Some(timeout_ms) = duration_to_timeout_header(t) {
-                req_builder = req_builder.header(CONNECT_TIMEOUT_HEADER, timeout_ms);
-            }
+        if let Some(t) = effective_timeout
+            && let Some(timeout_ms) = duration_to_timeout_header(t)
+        {
+            req_builder = req_builder.header(CONNECT_TIMEOUT_HEADER, timeout_ms);
         }
 
         // Add custom headers from options (skip reserved protocol headers)
@@ -1174,15 +1202,11 @@ impl ConnectClient {
             }
         }
 
-        // Apply streaming interceptors
+        // Apply interceptors
         let mut interceptor_headers = http::HeaderMap::new();
         {
-            let mut req = StreamingRequest::new(
-                procedure,
-                StreamType::ClientStream,
-                &mut interceptor_headers,
-            );
-            self.interceptors.apply_streaming(&mut req);
+            let mut ctx = InterceptContext::new(procedure, &mut interceptor_headers);
+            self.interceptors.before_request(&mut ctx)?;
         }
         for (name, value) in interceptor_headers.iter() {
             req_builder = req_builder.header(name, value);
@@ -1404,12 +1428,11 @@ impl ConnectClient {
             }
         }
 
-        // Apply streaming interceptors
+        // Apply interceptors
         let mut interceptor_headers = http::HeaderMap::new();
         {
-            let mut req =
-                StreamingRequest::new(procedure, StreamType::BidiStream, &mut interceptor_headers);
-            self.interceptors.apply_streaming(&mut req);
+            let mut ctx = InterceptContext::new(procedure, &mut interceptor_headers);
+            self.interceptors.before_request(&mut ctx)?;
         }
         for (name, value) in interceptor_headers.iter() {
             req_builder = req_builder.header(name, value);
@@ -1591,12 +1614,11 @@ impl ConnectClient {
             }
         }
 
-        // Apply streaming interceptors
+        // Apply interceptors
         let mut interceptor_headers = http::HeaderMap::new();
         {
-            let mut req =
-                StreamingRequest::new(procedure, StreamType::BidiStream, &mut interceptor_headers);
-            self.interceptors.apply_streaming(&mut req);
+            let mut ctx = InterceptContext::new(procedure, &mut interceptor_headers);
+            self.interceptors.before_request(&mut ctx)?;
         }
         for (name, value) in interceptor_headers.iter() {
             req_builder = req_builder.header(name, value);

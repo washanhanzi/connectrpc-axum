@@ -236,8 +236,8 @@ mod tests {
     use super::*;
     use bytes::Bytes;
     use connectrpc_axum_core::CompressionEncoding;
-    use futures::stream;
     use futures::StreamExt;
+    use futures::stream;
 
     // Helper to create a frame
     fn make_frame(flags: u8, payload: &[u8]) -> Bytes {
@@ -249,7 +249,7 @@ mod tests {
     }
 
     // A simple test message type that implements both Message and Deserialize
-    #[derive(Clone, PartialEq)]
+    #[derive(Clone, PartialEq, Default)]
     struct TestMessage {
         value: String,
     }
@@ -259,14 +259,6 @@ mod tests {
             f.debug_struct("TestMessage")
                 .field("value", &self.value)
                 .finish()
-        }
-    }
-
-    impl Default for TestMessage {
-        fn default() -> Self {
-            Self {
-                value: String::new(),
-            }
         }
     }
 
@@ -280,7 +272,9 @@ mod tests {
                 value: String,
             }
             let helper = Helper::deserialize(deserializer)?;
-            Ok(TestMessage { value: helper.value })
+            Ok(TestMessage {
+                value: helper.value,
+            })
         }
     }
 
@@ -333,11 +327,8 @@ mod tests {
         all_data.extend_from_slice(&end_frame);
 
         let byte_stream = stream::iter(vec![Ok::<_, ClientError>(Bytes::from(all_data))]);
-        let decoder = FrameDecoder::<_, TestMessage>::new(
-            byte_stream,
-            false,
-            CompressionEncoding::Identity,
-        );
+        let decoder =
+            FrameDecoder::<_, TestMessage>::new(byte_stream, false, CompressionEncoding::Identity);
         let mut streaming = Streaming::new(decoder);
 
         let msg = streaming.next().await.unwrap().unwrap();
@@ -357,11 +348,8 @@ mod tests {
         all_data.extend_from_slice(&end_frame);
 
         let byte_stream = stream::iter(vec![Ok::<_, ClientError>(Bytes::from(all_data))]);
-        let decoder = FrameDecoder::<_, TestMessage>::new(
-            byte_stream,
-            false,
-            CompressionEncoding::Identity,
-        );
+        let decoder =
+            FrameDecoder::<_, TestMessage>::new(byte_stream, false, CompressionEncoding::Identity);
         let mut streaming = Streaming::new(decoder);
 
         // Consume stream
@@ -387,11 +375,8 @@ mod tests {
         all_data.extend_from_slice(&end_frame);
 
         let byte_stream = stream::iter(vec![Ok::<_, ClientError>(Bytes::from(all_data))]);
-        let decoder = FrameDecoder::<_, TestMessage>::new(
-            byte_stream,
-            false,
-            CompressionEncoding::Identity,
-        );
+        let decoder =
+            FrameDecoder::<_, TestMessage>::new(byte_stream, false, CompressionEncoding::Identity);
         let mut streaming = Streaming::new(decoder);
 
         // Read first message
@@ -417,11 +402,8 @@ mod tests {
         all_data.extend_from_slice(&end_frame);
 
         let byte_stream = stream::iter(vec![Ok::<_, ClientError>(Bytes::from(all_data))]);
-        let decoder = FrameDecoder::<_, TestMessage>::new(
-            byte_stream,
-            false,
-            CompressionEncoding::Identity,
-        );
+        let decoder =
+            FrameDecoder::<_, TestMessage>::new(byte_stream, false, CompressionEncoding::Identity);
         let mut streaming = Streaming::new(decoder);
 
         // Drain with timeout (should complete quickly since stream is finite)

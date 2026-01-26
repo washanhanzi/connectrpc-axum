@@ -9,8 +9,8 @@ use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use connectrpc_axum_core::{
-    compress_payload, envelope_flags, wrap_envelope, CompressionConfig, CompressionEncoding,
-    ENVELOPE_HEADER_SIZE,
+    CompressionConfig, CompressionEncoding, ENVELOPE_HEADER_SIZE, compress_payload, envelope_flags,
+    wrap_envelope,
 };
 
 use crate::ClientError;
@@ -226,11 +226,11 @@ where
 mod tests {
     use super::*;
     use connectrpc_axum_core::CompressionEncoding;
-    use futures::stream;
     use futures::StreamExt;
+    use futures::stream;
 
     // A simple test message type that implements both Message and Serialize
-    #[derive(Clone, PartialEq)]
+    #[derive(Clone, PartialEq, Default)]
     struct TestMessage {
         value: String,
     }
@@ -240,14 +240,6 @@ mod tests {
             f.debug_struct("TestMessage")
                 .field("value", &self.value)
                 .finish()
-        }
-    }
-
-    impl Default for TestMessage {
-        fn default() -> Self {
-            Self {
-                value: String::new(),
-            }
         }
     }
 

@@ -9,257 +9,151 @@
 //! # Example
 //!
 //! ```ignore
-//! use connectrpc_axum_client::{ConnectClient, HeaderInterceptor};
+//! use connectrpc_axum_client::{HeaderInterceptor, Interceptor, InterceptContext};
 //!
-//! // Create an interceptor that adds an auth header
-//! let auth_interceptor = HeaderInterceptor::new("authorization", "Bearer token123");
+//! // Simple header interceptor
+//! let auth = HeaderInterceptor::new("authorization", "Bearer token123");
+//!
+//! // Custom interceptor with closure
+//! let logging = Interceptor::new(|ctx: &mut InterceptContext<'_>| {
+//!     println!("Calling: {}", ctx.procedure);
+//!     Ok(())
+//! });
 //!
 //! let client = ConnectClient::builder("http://localhost:3000")
-//!     .with_interceptor(auth_interceptor)
+//!     .with_interceptor(auth)
+//!     .with_interceptor(logging)
 //!     .build()?;
 //! ```
 
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
-
-use bytes::Bytes;
 use http::HeaderMap;
 
 use crate::ClientError;
 
-/// Type alias for a boxed future returning a result.
-pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+// ============================================================================
+// Intercept Trait
+// ============================================================================
 
-/// A unary RPC request with headers and body.
-///
-/// This is a type-erased request that interceptors can modify before
-/// it's sent to the server.
-#[derive(Debug, Clone)]
-pub struct UnaryRequest {
-    /// The procedure being called (e.g., "package.Service/Method").
-    pub procedure: String,
-    /// HTTP headers for the request.
-    pub headers: HeaderMap,
-    /// Request body (encoded message).
-    pub body: Bytes,
-}
-
-impl UnaryRequest {
-    /// Create a new unary request.
-    pub fn new(procedure: impl Into<String>, headers: HeaderMap, body: Bytes) -> Self {
-        Self {
-            procedure: procedure.into(),
-            headers,
-            body,
-        }
-    }
-
-    /// Get a mutable reference to the headers.
-    pub fn headers_mut(&mut self) -> &mut HeaderMap {
-        &mut self.headers
-    }
-}
-
-/// The type of streaming RPC call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StreamType {
-    /// Server streaming: client sends one request, server sends multiple responses.
-    ServerStream,
-    /// Client streaming: client sends multiple requests, server sends one response.
-    ClientStream,
-    /// Bidirectional streaming: both client and server send multiple messages.
-    BidiStream,
-}
-
-impl std::fmt::Display for StreamType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            StreamType::ServerStream => write!(f, "server_stream"),
-            StreamType::ClientStream => write!(f, "client_stream"),
-            StreamType::BidiStream => write!(f, "bidi_stream"),
-        }
-    }
-}
-
-/// A streaming RPC request context.
-///
-/// Provides request context for streaming interceptors, similar to how
-/// [`UnaryRequest`] provides context for unary interceptors.
+/// Context for an RPC call that interceptors can inspect and modify.
 #[derive(Debug)]
-pub struct StreamingRequest<'a> {
+pub struct InterceptContext<'a> {
     /// The procedure being called (e.g., "package.Service/Method").
     pub procedure: &'a str,
-    /// The type of streaming call.
-    pub stream_type: StreamType,
     /// HTTP headers for the request (mutable).
     pub headers: &'a mut HeaderMap,
 }
 
-impl<'a> StreamingRequest<'a> {
-    /// Create a new streaming request context.
-    pub fn new(procedure: &'a str, stream_type: StreamType, headers: &'a mut HeaderMap) -> Self {
-        Self {
-            procedure,
-            stream_type,
-            headers,
-        }
+impl<'a> InterceptContext<'a> {
+    /// Create a new intercept context.
+    pub fn new(procedure: &'a str, headers: &'a mut HeaderMap) -> Self {
+        Self { procedure, headers }
     }
 }
 
-/// A unary RPC response with headers and body.
+/// Trait for intercepting RPC calls.
 ///
-/// This is a type-erased response that interceptors can inspect or modify.
-#[derive(Debug, Clone)]
-pub struct UnaryResponse {
-    /// HTTP headers from the response.
-    pub headers: HeaderMap,
-    /// Response body (encoded message).
-    pub body: Bytes,
-}
-
-impl UnaryResponse {
-    /// Create a new unary response.
-    pub fn new(headers: HeaderMap, body: Bytes) -> Self {
-        Self { headers, body }
-    }
-
-    /// Get a mutable reference to the headers.
-    pub fn headers_mut(&mut self) -> &mut HeaderMap {
-        &mut self.headers
-    }
-}
-
-/// The signature of a unary RPC call.
+/// Implementations can modify headers, log calls, or return errors to abort.
 ///
-/// Interceptors wrap this function to add logic before and after the call.
-pub type UnaryFunc =
-    Arc<dyn Fn(UnaryRequest) -> BoxFuture<'static, Result<UnaryResponse, ClientError>> + Send + Sync>;
-
-/// The "next" function in the interceptor chain.
+/// # Generic Composition
 ///
-/// Call this to proceed to the next interceptor or the actual RPC call.
-#[derive(Clone)]
-pub struct UnaryNext {
-    inner: UnaryFunc,
-}
-
-impl UnaryNext {
-    /// Create a new UnaryNext wrapping a function.
-    pub(crate) fn new(inner: UnaryFunc) -> Self {
-        Self { inner }
-    }
-
-    /// Call the next interceptor or the actual RPC.
-    pub async fn call(self, request: UnaryRequest) -> Result<UnaryResponse, ClientError> {
-        (self.inner)(request).await
-    }
-}
-
-/// An interceptor that can wrap unary and streaming RPC calls.
+/// Interceptors can be composed at compile time using the [`Chain`] combinator,
+/// which eliminates dynamic dispatch overhead. The unit type `()` serves as the
+/// base case (no-op interceptor).
 ///
-/// This is the main interceptor trait. Implement this to create custom
-/// interceptors that can handle all RPC types.
+/// ```ignore
+/// use connectrpc_axum_client::{HeaderInterceptor, Chain};
 ///
-/// For simpler use cases, use [`HeaderInterceptor`] which just adds headers.
-pub trait Interceptor: Send + Sync {
-    /// Wrap a unary RPC call.
+/// // Compose interceptors at compile time
+/// let auth = HeaderInterceptor::new("authorization", "Bearer token");
+/// let trace = HeaderInterceptor::new("x-trace-id", "123");
+/// let chain: Chain<HeaderInterceptor, HeaderInterceptor> = Chain(auth, trace);
+/// ```
+pub trait Intercept: Send + Sync {
+    /// Called before the RPC request is sent.
     ///
-    /// The default implementation passes through to the next function unchanged.
-    fn wrap_unary(&self, next: UnaryFunc) -> UnaryFunc {
-        next
+    /// Interceptors can modify headers or return an error to abort the call.
+    fn before_request(&self, ctx: &mut InterceptContext<'_>) -> Result<(), ClientError> {
+        let _ = ctx;
+        Ok(())
     }
 
-    /// Wrap a streaming client call.
+    /// Called after the RPC response is received.
     ///
-    /// The default implementation passes through unchanged.
-    /// Streaming interceptors can modify headers and access request context
-    /// (procedure name and stream type) before the stream starts.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use connectrpc_axum_client::{Interceptor, StreamingRequest, StreamType};
-    ///
-    /// struct LoggingInterceptor;
-    ///
-    /// impl Interceptor for LoggingInterceptor {
-    ///     fn wrap_streaming(&self, request: &mut StreamingRequest<'_>) {
-    ///         println!("Streaming call to {} ({})", request.procedure, request.stream_type);
-    ///         request.headers.insert("x-logged", "true".parse().unwrap());
-    ///     }
-    /// }
-    /// ```
-    fn wrap_streaming(&self, request: &mut StreamingRequest<'_>) {
-        let _ = request;
+    /// Interceptors can inspect response headers.
+    fn after_response(&self, headers: &HeaderMap) {
+        let _ = headers;
     }
 }
 
-/// A chain of interceptors that are applied in order.
-#[derive(Clone)]
-pub struct InterceptorChain {
-    interceptors: Vec<Arc<dyn Interceptor>>,
+// ============================================================================
+// Base Case: Unit Type
+// ============================================================================
+
+/// The unit type implements `Intercept` as a no-op, serving as the base case
+/// for generic interceptor chains.
+impl Intercept for () {
+    #[inline]
+    fn before_request(&self, _ctx: &mut InterceptContext<'_>) -> Result<(), ClientError> {
+        Ok(())
+    }
+
+    #[inline]
+    fn after_response(&self, _headers: &HeaderMap) {}
 }
 
-impl std::fmt::Debug for InterceptorChain {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("InterceptorChain")
-            .field("count", &self.interceptors.len())
-            .finish()
+// ============================================================================
+// Chain Combinator
+// ============================================================================
+
+/// A compile-time chain of two interceptors.
+///
+/// `Chain<A, B>` applies interceptor `A` first, then `B` for requests.
+/// For responses, they are applied in reverse order (`B` then `A`).
+///
+/// This enables zero-cost interceptor composition without dynamic dispatch.
+///
+/// # Example
+///
+/// ```ignore
+/// use connectrpc_axum_client::{HeaderInterceptor, Chain, Intercept, InterceptContext};
+///
+/// let auth = HeaderInterceptor::new("authorization", "Bearer token");
+/// let trace = HeaderInterceptor::new("x-trace-id", "abc123");
+///
+/// // Chain them together
+/// let interceptors = Chain(auth, trace);
+///
+/// // Use with ClientBuilder (this is done automatically)
+/// let client = ConnectClient::builder("http://localhost:3000")
+///     .with_interceptor(HeaderInterceptor::new("authorization", "Bearer token"))
+///     .with_interceptor(HeaderInterceptor::new("x-trace-id", "abc123"))
+///     .build()?;
+/// ```
+#[derive(Clone, Debug)]
+pub struct Chain<A, B>(pub A, pub B);
+
+impl<A, B> Intercept for Chain<A, B>
+where
+    A: Intercept,
+    B: Intercept,
+{
+    #[inline]
+    fn before_request(&self, ctx: &mut InterceptContext<'_>) -> Result<(), ClientError> {
+        self.0.before_request(ctx)?;
+        self.1.before_request(ctx)
+    }
+
+    #[inline]
+    fn after_response(&self, headers: &HeaderMap) {
+        // Reverse order for responses (like middleware unwinding)
+        self.1.after_response(headers);
+        self.0.after_response(headers);
     }
 }
 
-impl InterceptorChain {
-    /// Create a new empty interceptor chain.
-    pub fn new() -> Self {
-        Self {
-            interceptors: Vec::new(),
-        }
-    }
-
-    /// Add an interceptor to the chain.
-    pub fn push(&mut self, interceptor: Arc<dyn Interceptor>) {
-        self.interceptors.push(interceptor);
-    }
-
-    /// Check if the chain is empty.
-    pub fn is_empty(&self) -> bool {
-        self.interceptors.is_empty()
-    }
-
-    /// Get the number of interceptors in the chain.
-    pub fn len(&self) -> usize {
-        self.interceptors.len()
-    }
-
-    /// Wrap a unary function with all interceptors in the chain.
-    ///
-    /// Interceptors are applied in reverse order so that the first interceptor
-    /// added is the first to process the request.
-    pub fn wrap_unary(&self, next: UnaryFunc) -> UnaryFunc {
-        let mut wrapped = next;
-        // Apply in reverse order so first interceptor acts first
-        for interceptor in self.interceptors.iter().rev() {
-            wrapped = interceptor.wrap_unary(wrapped);
-        }
-        wrapped
-    }
-
-    /// Apply all interceptors' streaming modifications.
-    ///
-    /// This gives each interceptor access to the procedure, stream type, and headers.
-    pub fn apply_streaming(&self, request: &mut StreamingRequest<'_>) {
-        for interceptor in &self.interceptors {
-            interceptor.wrap_streaming(request);
-        }
-    }
-}
-
-impl Default for InterceptorChain {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// ============================================================================
+// Header Interceptor
+// ============================================================================
 
 /// A simple interceptor that adds headers to all requests.
 ///
@@ -273,7 +167,7 @@ impl Default for InterceptorChain {
 ///     .with_interceptor(auth)
 ///     .build()?;
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct HeaderInterceptor {
     name: http::HeaderName,
     value: http::HeaderValue,
@@ -309,89 +203,68 @@ impl HeaderInterceptor {
     }
 }
 
-impl Interceptor for HeaderInterceptor {
-    fn wrap_unary(&self, next: UnaryFunc) -> UnaryFunc {
-        let name = self.name.clone();
-        let value = self.value.clone();
-        Arc::new(move |mut request: UnaryRequest| {
-            request.headers.insert(name.clone(), value.clone());
-            next(request)
-        })
-    }
-
-    fn wrap_streaming(&self, request: &mut StreamingRequest<'_>) {
-        request.headers.insert(self.name.clone(), self.value.clone());
+impl Intercept for HeaderInterceptor {
+    fn before_request(&self, ctx: &mut InterceptContext<'_>) -> Result<(), ClientError> {
+        ctx.headers.insert(self.name.clone(), self.value.clone());
+        Ok(())
     }
 }
 
-/// A function-based unary interceptor.
-///
-/// This allows creating interceptors from closures that can access the request
-/// and response.
+// ============================================================================
+// Closure Interceptor
+// ============================================================================
+
+/// A wrapper that adapts a closure to the `Intercept` trait.
 ///
 /// # Example
 ///
 /// ```ignore
-/// use connectrpc_axum_client::{FnInterceptor, UnaryRequest, UnaryNext};
+/// use connectrpc_axum_client::{Interceptor, InterceptContext};
 ///
-/// let logging = FnInterceptor::unary(|req: UnaryRequest, next: UnaryNext| {
-///     Box::pin(async move {
-///         println!("Calling: {}", req.procedure);
-///         let result = next.call(req).await;
-///         println!("Call completed");
-///         result
-///     })
+/// let logging = Interceptor::new(|ctx: &mut InterceptContext<'_>| {
+///     println!("Calling: {}", ctx.procedure);
+///     Ok(())
 /// });
 /// ```
-pub struct FnInterceptor<F> {
-    func: F,
+pub struct Interceptor<F> {
+    before: F,
 }
 
-impl<F> FnInterceptor<F>
+impl<F> Interceptor<F>
 where
-    F: Fn(UnaryRequest, UnaryNext) -> BoxFuture<'static, Result<UnaryResponse, ClientError>>
-        + Send
-        + Sync
-        + Clone
-        + 'static,
+    F: Fn(&mut InterceptContext<'_>) -> Result<(), ClientError> + Send + Sync,
 {
-    /// Create a new function-based unary interceptor.
-    pub fn unary(func: F) -> Self {
-        Self { func }
+    /// Create a new interceptor from a closure.
+    pub fn new(before: F) -> Self {
+        Self { before }
     }
 }
 
-impl<F> Interceptor for FnInterceptor<F>
-where
-    F: Fn(UnaryRequest, UnaryNext) -> BoxFuture<'static, Result<UnaryResponse, ClientError>>
-        + Send
-        + Sync
-        + Clone
-        + 'static,
-{
-    fn wrap_unary(&self, next: UnaryFunc) -> UnaryFunc {
-        let func = self.func.clone();
-        Arc::new(move |request: UnaryRequest| {
-            let func = func.clone();
-            let next = UnaryNext::new(next.clone());
-            func(request, next)
-        })
-    }
-}
-
-impl<F> Clone for FnInterceptor<F>
+impl<F> Clone for Interceptor<F>
 where
     F: Clone,
 {
     fn clone(&self) -> Self {
         Self {
-            func: self.func.clone(),
+            before: self.before.clone(),
         }
     }
 }
 
-/// Convenience type alias for creating unary interceptor functions.
-pub type UnaryInterceptorFunc<F> = FnInterceptor<F>;
+impl<F> std::fmt::Debug for Interceptor<F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Interceptor").finish()
+    }
+}
+
+impl<F> Intercept for Interceptor<F>
+where
+    F: Fn(&mut InterceptContext<'_>) -> Result<(), ClientError> + Send + Sync,
+{
+    fn before_request(&self, ctx: &mut InterceptContext<'_>) -> Result<(), ClientError> {
+        (self.before)(ctx)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -401,110 +274,82 @@ mod tests {
     fn test_header_interceptor() {
         let interceptor = HeaderInterceptor::new("x-custom-header", "test-value");
         let mut headers = HeaderMap::new();
-        let mut request = StreamingRequest::new("test/Method", StreamType::ServerStream, &mut headers);
-        interceptor.wrap_streaming(&mut request);
+        let mut ctx = InterceptContext::new("test/Method", &mut headers);
+
+        interceptor.before_request(&mut ctx).unwrap();
+
         assert_eq!(headers.get("x-custom-header").unwrap(), "test-value");
     }
 
     #[test]
-    fn test_interceptor_chain_empty() {
-        let chain = InterceptorChain::new();
-        assert!(chain.is_empty());
-        assert_eq!(chain.len(), 0);
+    fn test_unit_interceptor_noop() {
+        // Unit type is a no-op interceptor
+        let interceptor = ();
+        let mut headers = HeaderMap::new();
+        let mut ctx = InterceptContext::new("test/Method", &mut headers);
+
+        interceptor.before_request(&mut ctx).unwrap();
+        assert!(headers.is_empty()); // No headers added
     }
 
     #[test]
-    fn test_interceptor_chain_push() {
-        let mut chain = InterceptorChain::new();
-        let interceptor = HeaderInterceptor::new("x-test", "value");
-        chain.push(Arc::new(interceptor));
-        assert!(!chain.is_empty());
-        assert_eq!(chain.len(), 1);
+    fn test_chain_interceptors() {
+        // Chain two interceptors together
+        let first = HeaderInterceptor::new("x-first", "1");
+        let second = HeaderInterceptor::new("x-second", "2");
+        let chain = Chain(first, second);
+
+        let mut headers = HeaderMap::new();
+        let mut ctx = InterceptContext::new("test/Method", &mut headers);
+
+        chain.before_request(&mut ctx).unwrap();
+
+        assert_eq!(headers.get("x-first").unwrap(), "1");
+        assert_eq!(headers.get("x-second").unwrap(), "2");
     }
 
-    #[tokio::test]
-    async fn test_header_interceptor_unary() {
-        let interceptor = HeaderInterceptor::new("x-auth", "bearer-token");
+    #[test]
+    fn test_chain_with_unit_base() {
+        // Chain with () as base (typical usage via builder)
+        let chain = Chain((), HeaderInterceptor::new("x-header", "value"));
 
-        // Create a mock "next" function that captures the request
-        let captured = Arc::new(std::sync::Mutex::new(None));
-        let captured_clone = captured.clone();
+        let mut headers = HeaderMap::new();
+        let mut ctx = InterceptContext::new("test/Method", &mut headers);
 
-        let next: UnaryFunc = Arc::new(move |req: UnaryRequest| {
-            let captured = captured_clone.clone();
-            Box::pin(async move {
-                *captured.lock().unwrap() = Some(req.headers.clone());
-                Ok(UnaryResponse::new(HeaderMap::new(), Bytes::new()))
-            })
-        });
+        chain.before_request(&mut ctx).unwrap();
 
-        let wrapped = interceptor.wrap_unary(next);
-        let request = UnaryRequest::new("test/Method", HeaderMap::new(), Bytes::new());
-        let _ = wrapped(request).await;
-
-        let captured_headers = captured.lock().unwrap().take().unwrap();
-        assert_eq!(captured_headers.get("x-auth").unwrap(), "bearer-token");
+        assert_eq!(headers.get("x-header").unwrap(), "value");
     }
 
-    #[tokio::test]
-    async fn test_fn_interceptor() {
-        let interceptor = FnInterceptor::unary(|mut req, next| {
-            Box::pin(async move {
-                req.headers
-                    .insert("x-modified", "true".parse().unwrap());
-                next.call(req).await
-            })
-        });
+    #[test]
+    fn test_nested_chain() {
+        // Nested chains (like from multiple with_interceptor calls)
+        let chain = Chain(
+            Chain((), HeaderInterceptor::new("x-first", "1")),
+            HeaderInterceptor::new("x-second", "2"),
+        );
 
-        let captured = Arc::new(std::sync::Mutex::new(None));
-        let captured_clone = captured.clone();
+        let mut headers = HeaderMap::new();
+        let mut ctx = InterceptContext::new("test/Method", &mut headers);
 
-        let next: UnaryFunc = Arc::new(move |req: UnaryRequest| {
-            let captured = captured_clone.clone();
-            Box::pin(async move {
-                *captured.lock().unwrap() = Some(req.headers.clone());
-                Ok(UnaryResponse::new(HeaderMap::new(), Bytes::new()))
-            })
-        });
+        chain.before_request(&mut ctx).unwrap();
 
-        let wrapped = interceptor.wrap_unary(next);
-        let request = UnaryRequest::new("test/Method", HeaderMap::new(), Bytes::new());
-        let _ = wrapped(request).await;
-
-        let captured_headers = captured.lock().unwrap().take().unwrap();
-        assert_eq!(captured_headers.get("x-modified").unwrap(), "true");
+        assert_eq!(headers.get("x-first").unwrap(), "1");
+        assert_eq!(headers.get("x-second").unwrap(), "2");
     }
 
-    #[tokio::test]
-    async fn test_interceptor_chain_order() {
-        // Test that interceptors are applied in the correct order
-        // First interceptor should see the request first
-        let mut chain = InterceptorChain::new();
-
-        let interceptor1 = HeaderInterceptor::new("x-first", "1");
-        let interceptor2 = HeaderInterceptor::new("x-second", "2");
-
-        chain.push(Arc::new(interceptor1));
-        chain.push(Arc::new(interceptor2));
-
-        let captured = Arc::new(std::sync::Mutex::new(None));
-        let captured_clone = captured.clone();
-
-        let next: UnaryFunc = Arc::new(move |req: UnaryRequest| {
-            let captured = captured_clone.clone();
-            Box::pin(async move {
-                *captured.lock().unwrap() = Some(req.headers.clone());
-                Ok(UnaryResponse::new(HeaderMap::new(), Bytes::new()))
-            })
+    #[test]
+    fn test_closure_interceptor() {
+        let interceptor = Interceptor::new(|ctx: &mut InterceptContext<'_>| {
+            ctx.headers.insert("x-custom", "value".parse().unwrap());
+            Ok(())
         });
 
-        let wrapped = chain.wrap_unary(next);
-        let request = UnaryRequest::new("test/Method", HeaderMap::new(), Bytes::new());
-        let _ = wrapped(request).await;
+        let mut headers = HeaderMap::new();
+        let mut ctx = InterceptContext::new("test/Method", &mut headers);
 
-        let captured_headers = captured.lock().unwrap().take().unwrap();
-        // Both headers should be present
-        assert_eq!(captured_headers.get("x-first").unwrap(), "1");
-        assert_eq!(captured_headers.get("x-second").unwrap(), "2");
+        interceptor.before_request(&mut ctx).unwrap();
+
+        assert_eq!(headers.get("x-custom").unwrap(), "value");
     }
 }

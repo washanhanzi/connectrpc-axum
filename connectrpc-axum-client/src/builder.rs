@@ -3,13 +3,17 @@
 //! Provides a fluent API for configuring and building a [`ConnectClient`].
 
 use crate::client::ConnectClient;
-use crate::config::{Interceptor, InterceptorChain};
+use crate::config::{Chain, Intercept};
 use crate::transport::{HyperTransport, HyperTransportBuilder, TlsClientConfig};
 use connectrpc_axum_core::{CompressionConfig, CompressionEncoding};
-use std::sync::Arc;
 use std::time::Duration;
 
 /// Builder for creating a [`ConnectClient`].
+///
+/// The builder is generic over the interceptor type `I`, which defaults to `()`
+/// (no interceptors). Each call to [`with_interceptor`](Self::with_interceptor)
+/// wraps the existing interceptors in a [`Chain`], building up a compile-time
+/// chain of interceptors with zero dynamic dispatch.
 ///
 /// # Example
 ///
@@ -21,7 +25,7 @@ use std::time::Duration;
 ///     .accept_encoding(CompressionEncoding::Gzip)
 ///     .build()?;
 /// ```
-pub struct ClientBuilder {
+pub struct ClientBuilder<I = ()> {
     /// Base URL for the service (e.g., "http://localhost:3000").
     base_url: String,
     /// Optional pre-configured transport.
@@ -38,11 +42,11 @@ pub struct ClientBuilder {
     accept_encoding: Option<CompressionEncoding>,
     /// Default timeout for RPC calls.
     default_timeout: Option<Duration>,
-    /// Interceptor chain for RPC calls.
-    interceptors: InterceptorChain,
+    /// Interceptor chain for RPC calls (compile-time composed).
+    interceptors: I,
 }
 
-impl std::fmt::Debug for ClientBuilder {
+impl<I> std::fmt::Debug for ClientBuilder<I> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ClientBuilder")
             .field("base_url", &self.base_url)
@@ -52,12 +56,11 @@ impl std::fmt::Debug for ClientBuilder {
             .field("request_encoding", &self.request_encoding)
             .field("accept_encoding", &self.accept_encoding)
             .field("default_timeout", &self.default_timeout)
-            .field("interceptors", &self.interceptors.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
-impl ClientBuilder {
+impl ClientBuilder<()> {
     /// Create a new ClientBuilder with the given base URL.
     ///
     /// The base URL should include the scheme and host, e.g., "http://localhost:3000".
@@ -78,9 +81,12 @@ impl ClientBuilder {
             request_encoding: CompressionEncoding::Identity,
             accept_encoding: None,
             default_timeout: None,
-            interceptors: InterceptorChain::new(),
+            interceptors: (),
         }
     }
+}
+
+impl<I: Intercept> ClientBuilder<I> {
 
     /// Use a pre-configured HyperTransport.
     ///
@@ -222,6 +228,9 @@ impl ClientBuilder {
     /// added is the first to process outgoing requests and the last to process
     /// incoming responses.
     ///
+    /// This method returns a new builder with the interceptor added to a compile-time
+    /// [`Chain`]. This enables zero-cost interceptor composition without dynamic dispatch.
+    ///
     /// # Example
     ///
     /// ```ignore
@@ -234,9 +243,18 @@ impl ClientBuilder {
     ///     .with_interceptor(auth_interceptor)
     ///     .build()?;
     /// ```
-    pub fn with_interceptor<I: Interceptor + 'static>(mut self, interceptor: I) -> Self {
-        self.interceptors.push(Arc::new(interceptor));
-        self
+    pub fn with_interceptor<J: Intercept>(self, interceptor: J) -> ClientBuilder<Chain<I, J>> {
+        ClientBuilder {
+            base_url: self.base_url,
+            transport: self.transport,
+            transport_builder: self.transport_builder,
+            use_proto: self.use_proto,
+            compression: self.compression,
+            request_encoding: self.request_encoding,
+            accept_encoding: self.accept_encoding,
+            default_timeout: self.default_timeout,
+            interceptors: Chain(self.interceptors, interceptor),
+        }
     }
 
     /// Enable HTTP/2 prior knowledge (h2c) for unencrypted connections.
@@ -358,7 +376,7 @@ impl ClientBuilder {
     /// # Errors
     ///
     /// Returns an error if the HTTP transport cannot be created.
-    pub fn build(self) -> Result<ConnectClient, ClientBuildError> {
+    pub fn build(self) -> Result<ConnectClient<I>, ClientBuildError> {
         // Create or use provided transport
         let transport = match self.transport {
             Some(t) => t,
