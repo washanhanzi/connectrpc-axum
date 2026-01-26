@@ -16,7 +16,7 @@ use rustls::ClientConfig;
 use tower_service::Service;
 
 use super::body::TransportBody;
-use super::connector::{build_https_connector, default_tls_config, danger_accept_invalid_certs_config};
+use super::connector::{build_https_connector, danger_accept_invalid_certs_config};
 use crate::ClientError;
 
 /// Type alias for the hyper client with HTTPS connector.
@@ -260,16 +260,23 @@ impl HyperTransportBuilder {
     }
 
     /// Build the transport.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no custom TLS config is provided and TLS features are not enabled.
+    /// Either enable the `tls` feature or provide a custom config via `tls_config()`.
     pub fn build(self) -> Result<HyperTransport, ClientError> {
         // Create TLS config
         let tls_config = if self.danger_accept_invalid_certs {
-            danger_accept_invalid_certs_config()
+            Some(danger_accept_invalid_certs_config())
         } else {
-            self.tls_config.unwrap_or_else(default_tls_config)
+            self.tls_config
         };
 
         // Create HTTPS connector
-        let https_connector = build_https_connector(Some(tls_config));
+        // If tls_config is None, build_https_connector will use default config
+        // (if TLS features enabled) or panic with helpful message
+        let https_connector = build_https_connector(tls_config);
 
         // Create client builder
         let mut builder = Client::builder(TokioExecutor::new());

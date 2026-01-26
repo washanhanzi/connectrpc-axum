@@ -1,6 +1,6 @@
 [package]
 name = "connectrpc-axum-client"
-version = "0.1.0-alpha.1"
+version = "0.1.0-beta.1"
 edition = "2024"
 description = "Connect protocol client for connectrpc-axum"
 repository = "https://github.com/washanhanzi/connectrpc-axum"
@@ -21,9 +21,7 @@ hyper-util = { version = "0.1", features = [
 ] }
 hyper-rustls = { version = "0.27", default-features = false, features = [
     "http2",
-    "ring",
     "tls12",
-    "webpki-tokio",
 ] }
 http-body = { workspace = true }
 http-body-util = { workspace = true }
@@ -31,11 +29,19 @@ tower = { workspace = true }
 tower-service = "0.3"
 rustls = { version = "0.23", default-features = false, features = [
     "std",
-    "ring",
     "tls12",
 ] }
-webpki-roots = "1"
 pin-project-lite = "0.2"
+
+# TLS - crypto providers (optional)
+# ring is the default, aws-lc-rs is an alternative
+# Users must enable one of these for TLS support
+
+# TLS - root certificates (optional)
+# native-roots uses system certs, webpki-roots bundles Mozilla certs
+# Users must enable one of these for TLS support
+rustls-native-certs = { version = "0.8", optional = true }
+webpki-roots = { version = "1", optional = true }
 
 # Serialization
 bytes = { workspace = true }
@@ -68,7 +74,21 @@ base64 = { workspace = true }
 tracing = { workspace = true, optional = true }
 
 [features]
-default = []
+default = ["tls"]
+
+# TLS with sensible defaults (ring + native roots)
+# Most users should just use this
+tls = ["tls-ring", "tls-native-roots"]
+
+# TLS crypto providers - choose one
+tls-ring = ["rustls/ring", "hyper-rustls/ring"]
+tls-aws-lc = ["rustls/aws-lc-rs", "hyper-rustls/aws-lc-rs"]
+
+# TLS root certificates - choose one
+tls-native-roots = ["dep:rustls-native-certs", "hyper-rustls/native-tokio"]
+tls-webpki-roots = ["dep:webpki-roots", "hyper-rustls/webpki-tokio"]
+
+# Compression features
 compression-gzip-stream = [
     "dep:flate2",
     "connectrpc-axum-core/compression-gzip-stream",
@@ -91,6 +111,7 @@ compression-full-stream = [
     "compression-br-stream",
     "compression-zstd-stream",
 ]
+
 # Enable tracing instrumentation for RPC calls
 tracing = ["dep:tracing"]
 

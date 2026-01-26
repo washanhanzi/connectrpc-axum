@@ -1,6 +1,6 @@
 [package]
 name = "connectrpc-axum-core"
-version = "0.1.0-alpha.1"
+version = "0.1.0-beta.1"
 edition = "2024"
 description = "Core protocol types for connectrpc-axum (shared between client and server)"
 repository = "https://github.com/washanhanzi/connectrpc-axum"
@@ -25,4 +25,9 @@ compression-gzip-stream = ["dep:flate2"]
 compression-deflate-stream = ["dep:flate2"]
 compression-br-stream = ["dep:brotli"]
 compression-zstd-stream = ["dep:zstd"]
-compression-full-stream = ["compression-gzip-stream", "compression-deflate-stream", "compression-br-stream", "compression-zstd-stream"]
+compression-full-stream = [
+    "compression-gzip-stream",
+    "compression-deflate-stream",
+    "compression-br-stream",
+    "compression-zstd-stream",
+]
