@@ -22,12 +22,11 @@ pub fn generate_connect_client(
     service: &Service,
     method_info: &[MethodInfo],
 ) -> proc_macro2::TokenStream {
-    // Service name constant (e.g., "hello.HelloWorldService")
-    let service_name_const = format_ident!(
-        "{}_SERVICE_NAME",
-        service.name.to_case(Case::UpperSnake)
+    // Client module name (e.g., hello_world_service_connect_client)
+    let client_module_name = format_ident!(
+        "{}_connect_client",
+        service.name.to_case(Case::Snake)
     );
-    let full_service_name = format!("{}.{}", service.package, service.proto_name);
 
     // Procedures module name (e.g., hello_world_service_procedures)
     let procedures_mod_name = format_ident!(
@@ -57,7 +56,7 @@ pub fn generate_connect_client(
         .map(|(method_name, request_type, response_type, _path, _, is_ss, is_cs, _, _)| {
             // Reference the procedure constant instead of hardcoding the path
             let const_name = format_ident!("{}", method_name.to_string().to_uppercase());
-            let procedure_path = quote! { #procedures_mod_name::#const_name };
+            let procedure_path = quote! { super::#procedures_mod_name::#const_name };
 
             match (*is_ss, *is_cs) {
                 (false, false) => {
@@ -89,7 +88,7 @@ pub fn generate_connect_client(
                             connectrpc_axum_client::ConnectResponse<
                                 connectrpc_axum_client::Streaming<
                                     connectrpc_axum_client::FrameDecoder<
-                                        impl ::futures::Stream<Item = Result<connectrpc_axum_client::Bytes, connectrpc_axum_client::ClientError>> + Unpin,
+                                        impl ::futures::Stream<Item = Result<connectrpc_axum_client::Bytes, connectrpc_axum_client::ClientError>> + Unpin + use<'_>,
                                         #response_type
                                     >
                                 >
@@ -148,7 +147,7 @@ pub fn generate_connect_client(
                             connectrpc_axum_client::ConnectResponse<
                                 connectrpc_axum_client::Streaming<
                                     connectrpc_axum_client::FrameDecoder<
-                                        impl ::futures::Stream<Item = Result<connectrpc_axum_client::Bytes, connectrpc_axum_client::ClientError>> + Unpin,
+                                        impl ::futures::Stream<Item = Result<connectrpc_axum_client::Bytes, connectrpc_axum_client::ClientError>> + Unpin + use<'_, S>,
                                         #response_type
                                     >
                                 >
@@ -167,120 +166,145 @@ pub fn generate_connect_client(
         .collect();
 
     quote! {
-        /// Service name constant.
-        pub const #service_name_const: &str = #full_service_name;
-
         /// Procedure path constants for the service.
+        #[allow(dead_code)]
         pub mod #procedures_mod_name {
             #(#procedure_constants)*
         }
 
-        /// Generated typed client for the Connect RPC service.
-        ///
-        /// This client provides typed methods for each RPC, wrapping the underlying
-        /// [`ConnectClient`](connectrpc_axum_client::ConnectClient).
-        ///
-        /// # Example
-        ///
-        /// ```ignore
-        /// let client = #client_name::new("http://localhost:3000")?;
-        /// let response = client.say_hello(&request).await?;
-        /// println!("Response: {:?}", response.into_inner());
-        /// ```
-        #[derive(Debug, Clone)]
-        pub struct #client_name {
-            inner: connectrpc_axum_client::ConnectClient,
-        }
+        /// Generated Connect RPC client module.
+        #[allow(dead_code)]
+        pub mod #client_module_name {
+            #[allow(unused_imports)]
+            use super::*;
 
-        impl #client_name {
-            /// Create a new client with default settings.
+            /// Generated typed client for the Connect RPC service.
             ///
-            /// Uses JSON encoding by default. For protobuf or other options,
-            /// use [`builder()`](Self::builder) instead.
-            pub fn new<S: Into<String>>(base_url: S) -> Result<Self, connectrpc_axum_client::ClientBuildError> {
-                Self::builder(base_url).build()
+            /// This client provides typed methods for each RPC, wrapping the underlying
+            /// [`ConnectClient`](connectrpc_axum_client::ConnectClient).
+            ///
+            /// # Example
+            ///
+            /// ```ignore
+            /// // Simple usage (panics on error)
+            /// let client = #client_name::new("http://localhost:3000");
+            ///
+            /// // With error handling
+            /// let client = #client_name::builder("http://localhost:3000").build()?;
+            ///
+            /// let response = client.say_hello(&request).await?;
+            /// println!("Response: {:?}", response.into_inner());
+            /// ```
+            #[derive(Debug, Clone)]
+            pub struct #client_name {
+                inner: connectrpc_axum_client::ConnectClient,
             }
 
-            /// Create a new client builder with the given base URL.
-            pub fn builder<S: Into<String>>(base_url: S) -> #client_builder_name {
-                #client_builder_name {
-                    inner: connectrpc_axum_client::ConnectClient::builder(base_url),
+            impl #client_name {
+                /// Create a new client with default settings.
+                ///
+                /// Uses JSON encoding by default.
+                ///
+                /// # Panics
+                ///
+                /// Panics if the client cannot be built (e.g., TLS initialization failure).
+                /// Use [`builder()`](Self::builder) if you need to handle errors.
+                pub fn new<S: Into<String>>(base_url: S) -> Self {
+                    Self::builder(base_url).build().expect("failed to build client")
                 }
+
+                /// Create a new client builder with the given base URL.
+                ///
+                /// Use builder methods to configure the client, then call `build()` to create it.
+                ///
+                /// # Example
+                ///
+                /// ```ignore
+                /// let client = #client_name::builder("http://localhost:3000")
+                ///     .use_proto()
+                ///     .timeout(std::time::Duration::from_secs(30))
+                ///     .build()?;
+                /// ```
+                pub fn builder<S: Into<String>>(base_url: S) -> #client_builder_name {
+                    #client_builder_name {
+                        inner: connectrpc_axum_client::ConnectClient::builder(base_url),
+                    }
+                }
+
+                /// Get the underlying [`ConnectClient`](connectrpc_axum_client::ConnectClient).
+                ///
+                /// Useful for advanced use cases like making dynamic calls.
+                pub fn inner(&self) -> &connectrpc_axum_client::ConnectClient {
+                    &self.inner
+                }
+
+                #(#client_methods)*
             }
 
-            /// Get the underlying [`ConnectClient`](connectrpc_axum_client::ConnectClient).
-            ///
-            /// Useful for advanced use cases like making dynamic calls.
-            pub fn inner(&self) -> &connectrpc_axum_client::ConnectClient {
-                &self.inner
+            /// Builder for configuring a [`#client_name`].
+            #[derive(Debug)]
+            pub struct #client_builder_name {
+                inner: connectrpc_axum_client::ClientBuilder,
             }
 
-            #(#client_methods)*
-        }
+            impl #client_builder_name {
+                /// Use protobuf encoding for requests and responses.
+                pub fn use_proto(mut self) -> Self {
+                    self.inner = self.inner.use_proto();
+                    self
+                }
 
-        /// Builder for configuring a [`#client_name`].
-        #[derive(Debug)]
-        pub struct #client_builder_name {
-            inner: connectrpc_axum_client::ClientBuilder,
-        }
+                /// Use JSON encoding for requests and responses (default).
+                pub fn use_json(mut self) -> Self {
+                    self.inner = self.inner.use_json();
+                    self
+                }
 
-        impl #client_builder_name {
-            /// Use protobuf encoding for requests and responses.
-            pub fn use_proto(mut self) -> Self {
-                self.inner = self.inner.use_proto();
-                self
-            }
+                /// Use a pre-configured HTTP transport.
+                pub fn with_transport(mut self, transport: connectrpc_axum_client::HyperTransport) -> Self {
+                    self.inner = self.inner.with_transport(transport);
+                    self
+                }
 
-            /// Use JSON encoding for requests and responses (default).
-            pub fn use_json(mut self) -> Self {
-                self.inner = self.inner.use_json();
-                self
-            }
+                /// Configure compression for outgoing requests.
+                pub fn compression(mut self, config: connectrpc_axum_client::CompressionConfig) -> Self {
+                    self.inner = self.inner.compression(config);
+                    self
+                }
 
-            /// Use a pre-configured HTTP transport.
-            pub fn with_transport(mut self, transport: connectrpc_axum_client::HyperTransport) -> Self {
-                self.inner = self.inner.with_transport(transport);
-                self
-            }
+                /// Set the compression encoding for outgoing request bodies.
+                pub fn request_encoding(mut self, encoding: connectrpc_axum_client::CompressionEncoding) -> Self {
+                    self.inner = self.inner.request_encoding(encoding);
+                    self
+                }
 
-            /// Configure compression for outgoing requests.
-            pub fn compression(mut self, config: connectrpc_axum_client::CompressionConfig) -> Self {
-                self.inner = self.inner.compression(config);
-                self
-            }
+                /// Set the accepted compression encoding for responses.
+                pub fn accept_encoding(mut self, encoding: connectrpc_axum_client::CompressionEncoding) -> Self {
+                    self.inner = self.inner.accept_encoding(encoding);
+                    self
+                }
 
-            /// Set the compression encoding for outgoing request bodies.
-            pub fn request_encoding(mut self, encoding: connectrpc_axum_client::CompressionEncoding) -> Self {
-                self.inner = self.inner.request_encoding(encoding);
-                self
-            }
+                /// Set the default timeout for all requests.
+                pub fn timeout(mut self, timeout: ::std::time::Duration) -> Self {
+                    self.inner = self.inner.timeout(timeout);
+                    self
+                }
 
-            /// Set the accepted compression encoding for responses.
-            pub fn accept_encoding(mut self, encoding: connectrpc_axum_client::CompressionEncoding) -> Self {
-                self.inner = self.inner.accept_encoding(encoding);
-                self
-            }
+                /// Enable HTTP/2 prior knowledge (h2c) for plain HTTP URLs.
+                ///
+                /// Required for bidirectional streaming over `http://` URLs.
+                /// For `https://` URLs, HTTP/2 is negotiated via ALPN automatically.
+                pub fn http2_prior_knowledge(mut self) -> Self {
+                    self.inner = self.inner.http2_prior_knowledge();
+                    self
+                }
 
-            /// Set the default timeout for all requests.
-            pub fn timeout(mut self, timeout: ::std::time::Duration) -> Self {
-                self.inner = self.inner.timeout(timeout);
-                self
-            }
-
-            /// Enable HTTP/2 prior knowledge (h2c) for plain HTTP URLs.
-            ///
-            /// Required for bidirectional streaming over `http://` URLs.
-            /// For `https://` URLs, HTTP/2 is negotiated via ALPN automatically.
-            pub fn http2_prior_knowledge(mut self) -> Self {
-                self.inner = self.inner.http2_prior_knowledge();
-                self
-            }
-
-            /// Build the client.
-            pub fn build(self) -> Result<#client_name, connectrpc_axum_client::ClientBuildError> {
-                Ok(#client_name {
-                    inner: self.inner.build()?,
-                })
+                /// Build the client.
+                pub fn build(self) -> Result<#client_name, connectrpc_axum_client::ClientBuildError> {
+                    Ok(#client_name {
+                        inner: self.inner.build()?,
+                    })
+                }
             }
         }
     }

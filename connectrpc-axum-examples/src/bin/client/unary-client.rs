@@ -18,7 +18,10 @@
 //!   cargo run --bin unary-client --no-default-features -- http://localhost:8080
 
 use connectrpc_axum_client::ClientError;
-use connectrpc_axum_examples::{HelloRequest, HelloWorldServiceClient};
+use connectrpc_axum_examples::{
+    HelloRequest,
+    hello_world_service_connect_client::HelloWorldServiceClient,
+};
 use std::env;
 
 #[tokio::main]
@@ -78,7 +81,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 3: Default name (None)
     println!("Test 3: Unary call with default name...");
     {
-        let client = HelloWorldServiceClient::new(&base_url)?;
+        let client = HelloWorldServiceClient::builder(&base_url).build()?;
 
         let request = HelloRequest {
             name: None,
@@ -95,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 4: Response wrapper methods
     println!("Test 4: ConnectResponse wrapper methods...");
     {
-        let client = HelloWorldServiceClient::new(&base_url)?;
+        let client = HelloWorldServiceClient::builder(&base_url).build()?;
 
         let request = HelloRequest {
             name: Some("Charlie".to_string()),
@@ -121,7 +124,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 5: into_parts
     println!("Test 5: ConnectResponse::into_parts()...");
     {
-        let client = HelloWorldServiceClient::new(&base_url)?;
+        let client = HelloWorldServiceClient::builder(&base_url).build()?;
 
         let request = HelloRequest {
             name: Some("Diana".to_string()),
@@ -140,7 +143,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 6: Multiple sequential calls
     println!("Test 6: Multiple sequential calls...");
     {
-        let client = HelloWorldServiceClient::new(&base_url)?;
+        let client = HelloWorldServiceClient::builder(&base_url).build()?;
 
         for i in 1..=3 {
             let request = HelloRequest {

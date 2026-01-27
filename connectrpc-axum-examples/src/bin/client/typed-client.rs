@@ -23,8 +23,9 @@
 //!   cargo run --bin typed-client --no-default-features -- http://localhost:8080
 
 use connectrpc_axum_examples::{
-    HELLO_WORLD_SERVICE_SERVICE_NAME, HelloRequest, HelloResponse, HelloWorldServiceClient,
+    HelloRequest, HelloResponse,
     hello_world_service_procedures,
+    hello_world_service_connect_client::HelloWorldServiceClient,
 };
 use std::env;
 
@@ -38,11 +39,10 @@ async fn main() -> anyhow::Result<()> {
 
     println!("=== Typed Connect RPC Client Example ===");
     println!("Server URL: {}", base_url);
-    println!("Service Name: {}", HELLO_WORLD_SERVICE_SERVICE_NAME);
     println!();
 
     // Create a typed client with default settings (JSON encoding)
-    let client = HelloWorldServiceClient::new(&base_url)?;
+    let client = HelloWorldServiceClient::builder(&base_url).build()?;
 
     // Test 1: Basic typed call
     println!("Test 1: Typed say_hello() call...");

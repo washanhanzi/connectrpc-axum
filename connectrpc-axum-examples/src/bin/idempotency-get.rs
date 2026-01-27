@@ -17,7 +17,7 @@
 //!   POST: curl -X POST http://localhost:3000/hello.HelloWorldService/GetGreeting -H 'Content-Type: application/json' -d '{"name": "Alice"}'
 
 use connectrpc_axum::prelude::*;
-use connectrpc_axum_examples::{helloworldservice, HelloRequest, HelloResponse};
+use connectrpc_axum_examples::{hello_world_service_connect, HelloRequest, HelloResponse};
 // SocketAddr now provided by server_addr()
 
 /// Handler for the idempotent GetGreeting RPC.
@@ -36,7 +36,7 @@ async fn get_greeting(
 async fn main() -> anyhow::Result<()> {
     // Using the service builder - GET is automatically enabled for GetGreeting
     // because it's marked with `idempotency_level = NO_SIDE_EFFECTS` in the proto
-    let router = helloworldservice::HelloWorldServiceBuilder::new()
+    let router = hello_world_service_connect::HelloWorldServiceBuilder::new()
         .get_greeting(get_greeting)
         .build_connect();
 

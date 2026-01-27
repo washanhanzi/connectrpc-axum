@@ -12,7 +12,7 @@
 
 use axum::extract::State;
 use connectrpc_axum::prelude::*;
-use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
+use connectrpc_axum_examples::{HelloRequest, HelloResponse, hello_world_service_connect};
 use futures::Stream;
 // SocketAddr now provided by server_addr()
 use std::sync::{Arc, atomic::AtomicUsize};
@@ -75,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Build both Connect router and gRPC server from same handlers
     let (connect_router, grpc_server) =
-        helloworldservice::HelloWorldServiceTonicCompatibleBuilder::new()
+        hello_world_service_connect::HelloWorldServiceTonicCompatibleBuilder::new()
             .say_hello_stream(say_hello_stream)
             .with_state(app_state)
             .build();

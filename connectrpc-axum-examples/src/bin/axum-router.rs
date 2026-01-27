@@ -13,7 +13,7 @@
 use axum::{Json, Router, routing::get};
 use connectrpc_axum::MakeServiceBuilder;
 use connectrpc_axum::prelude::*;
-use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
+use connectrpc_axum_examples::{HelloRequest, HelloResponse, hello_world_service_connect};
 use serde::Serialize;
 // SocketAddr now provided by server_addr()
 
@@ -46,7 +46,7 @@ async fn metrics() -> &'static str {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Build Connect router for RPC services (without layer - MakeServiceBuilder will apply it)
-    let connect_router = helloworldservice::HelloWorldServiceBuilder::new()
+    let connect_router = hello_world_service_connect::HelloWorldServiceBuilder::new()
         .say_hello(say_hello)
         .build();
 

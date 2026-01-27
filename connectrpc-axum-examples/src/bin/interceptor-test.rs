@@ -17,7 +17,7 @@ use connectrpc_axum_client::{
     ConnectClient, ConnectResponse as ClientResponse, HeaderInterceptor, InterceptContext,
     Interceptor,
 };
-use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
+use connectrpc_axum_examples::{HelloRequest, HelloResponse, hello_world_service_connect};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
@@ -50,7 +50,7 @@ async fn say_hello(
 // ============================================================================
 
 async fn run_server(addr: SocketAddr) {
-    let router = helloworldservice::HelloWorldServiceBuilder::new()
+    let router = hello_world_service_connect::HelloWorldServiceBuilder::new()
         .say_hello(say_hello)
         .build();
 

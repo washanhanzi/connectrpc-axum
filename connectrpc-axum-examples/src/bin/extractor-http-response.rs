@@ -25,7 +25,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use connectrpc_axum::prelude::*;
-use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
+use connectrpc_axum_examples::{HelloRequest, HelloResponse, hello_world_service_connect};
 // SocketAddr now provided by server_addr()
 
 /// Custom rejection type that returns a plain HTTP 401 response.
@@ -80,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
     // Enable tracing to see the warning from handle_extractor_rejection
     tracing_subscriber::fmt::init();
 
-    let router = helloworldservice::HelloWorldServiceBuilder::new()
+    let router = hello_world_service_connect::HelloWorldServiceBuilder::new()
         .say_hello(say_hello)
         .build_connect();
 

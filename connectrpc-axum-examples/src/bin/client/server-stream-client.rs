@@ -23,7 +23,10 @@
 //!   cargo run --bin server-stream-client --no-default-features -- http://localhost:8080
 
 use connectrpc_axum_client::ClientError;
-use connectrpc_axum_examples::{HelloRequest, HelloResponse, HelloWorldServiceClient};
+use connectrpc_axum_examples::{
+    HelloRequest, HelloResponse,
+    hello_world_service_connect_client::HelloWorldServiceClient,
+};
 use futures::StreamExt;
 use std::env;
 
@@ -151,7 +154,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 3: Empty stream (no hobbies, but server still sends some messages)
     println!("Test 3: Server stream with default name...");
     {
-        let client = HelloWorldServiceClient::new(&base_url)?;
+        let client = HelloWorldServiceClient::builder(&base_url).build()?;
 
         let request = HelloRequest {
             name: None,
@@ -215,7 +218,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 5: Collect all messages at once using collect
     println!("Test 5: Collect all messages with collect()...");
     {
-        let client = HelloWorldServiceClient::new(&base_url)?;
+        let client = HelloWorldServiceClient::builder(&base_url).build()?;
 
         let request = HelloRequest {
             name: Some("Collector".to_string()),
@@ -239,7 +242,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 6: is_finished() check
     println!("Test 6: is_finished() works correctly...");
     {
-        let client = HelloWorldServiceClient::new(&base_url)?;
+        let client = HelloWorldServiceClient::builder(&base_url).build()?;
 
         let request = HelloRequest {
             name: Some("Finisher".to_string()),
@@ -271,7 +274,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 7: Verify trailers with custom server that sends them
     println!("Test 7: Trailers access after stream consumption...");
     {
-        let client = HelloWorldServiceClient::new(&base_url)?;
+        let client = HelloWorldServiceClient::builder(&base_url).build()?;
 
         let request = HelloRequest {
             name: Some("Trailer".to_string()),

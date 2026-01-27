@@ -10,7 +10,7 @@
 //! Test with: ./client connect-bidi
 
 use connectrpc_axum::prelude::*;
-use connectrpc_axum_examples::{EchoRequest, EchoResponse, echoservice};
+use connectrpc_axum_examples::{EchoRequest, EchoResponse, echo_service_connect};
 use futures::{Stream, StreamExt};
 // SocketAddr now provided by server_addr()
 use std::sync::Arc;
@@ -72,7 +72,7 @@ async fn echo_bidi_stream(
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Use generated builder - works for ALL streaming types including bidi streaming
-    let router = echoservice::EchoServiceBuilder::new()
+    let router = echo_service_connect::EchoServiceBuilder::new()
         .echo_bidi_stream(echo_bidi_stream)
         .build();
 

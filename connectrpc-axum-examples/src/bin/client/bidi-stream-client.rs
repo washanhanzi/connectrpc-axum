@@ -17,8 +17,11 @@
 //!   # Or specify a custom server URL:
 //!   cargo run --bin bidi-stream-client --no-default-features -- http://localhost:8080
 
-use connectrpc_axum_client::ClientError;
-use connectrpc_axum_examples::{EchoRequest, EchoServiceClient, EchoServiceClientBuilder};
+use connectrpc_axum_client::{ClientBuildError, ClientError};
+use connectrpc_axum_examples::{
+    EchoRequest,
+    echo_service_connect_client::EchoServiceClient,
+};
 use futures::{stream, StreamExt};
 use std::env;
 use std::time::Duration;
@@ -28,16 +31,24 @@ use std::time::Duration;
 /// For bidirectional streaming over plain HTTP (http://), we need to enable
 /// HTTP/2 prior knowledge (h2c) since HTTP/1.1 doesn't support full-duplex
 /// communication. For HTTPS URLs, HTTP/2 is negotiated via ALPN automatically.
-fn bidi_client_builder(base_url: &str) -> EchoServiceClientBuilder {
+fn bidi_client(base_url: &str, use_proto: bool) -> Result<EchoServiceClient, ClientBuildError> {
     let builder = EchoServiceClient::builder(base_url);
 
     // Enable HTTP/2 prior knowledge for http:// URLs (required for bidi streaming)
-    // For https:// URLs, HTTP/2 is negotiated via ALPN
-    if base_url.starts_with("http://") {
+    let builder = if base_url.starts_with("http://") {
         builder.http2_prior_knowledge()
     } else {
         builder
-    }
+    };
+
+    // Select encoding
+    let builder = if use_proto {
+        builder.use_proto()
+    } else {
+        builder.use_json()
+    };
+
+    builder.build()
 }
 
 #[tokio::main]
@@ -55,7 +66,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 1: Bidi streaming with JSON encoding
     println!("Test 1: Bidi streaming with JSON encoding...");
     {
-        let client = bidi_client_builder(&base_url).use_json().build()?;
+        let client = bidi_client(&base_url, false)?;
 
         let messages = vec![
             EchoRequest {
@@ -105,7 +116,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 2: Bidi streaming with Proto encoding
     println!("Test 2: Bidi streaming with Proto encoding...");
     {
-        let client = bidi_client_builder(&base_url).use_proto().build()?;
+        let client = bidi_client(&base_url, true)?;
 
         let messages = vec![
             EchoRequest {
@@ -141,7 +152,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 3: Bidi streaming with single message
     println!("Test 3: Bidi streaming with single message...");
     {
-        let client = bidi_client_builder(&base_url).use_json().build()?;
+        let client = bidi_client(&base_url, false)?;
 
         let messages = vec![EchoRequest {
             message: "single".to_string(),
@@ -169,9 +180,7 @@ async fn main() -> anyhow::Result<()> {
     {
         // Note: For connection error test, we still need http2_prior_knowledge
         // because the error happens at the transport level, not protocol negotiation
-        let client = bidi_client_builder("http://127.0.0.1:1")
-            .use_json()
-            .build()?;
+        let client = bidi_client("http://127.0.0.1:1", false)?;
 
         let messages = vec![EchoRequest {
             message: "test".to_string(),
@@ -202,7 +211,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 5: Collect all messages using StreamExt
     println!("Test 5: Collect all messages using StreamExt...");
     {
-        let client = bidi_client_builder(&base_url).use_json().build()?;
+        let client = bidi_client(&base_url, false)?;
 
         let messages = vec![
             EchoRequest {
@@ -235,7 +244,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 6: is_finished() works correctly
     println!("Test 6: is_finished() works correctly...");
     {
-        let client = bidi_client_builder(&base_url).use_json().build()?;
+        let client = bidi_client(&base_url, false)?;
 
         let messages = vec![EchoRequest {
             message: "finish-test".to_string(),
@@ -264,7 +273,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 7: Trailers access after stream consumption
     println!("Test 7: Trailers access after stream consumption...");
     {
-        let client = bidi_client_builder(&base_url).use_json().build()?;
+        let client = bidi_client(&base_url, false)?;
 
         let messages = vec![EchoRequest {
             message: "trailers-test".to_string(),
@@ -289,7 +298,13 @@ async fn main() -> anyhow::Result<()> {
     println!("Test 8: Timeout configuration...");
     {
         // Create a client with a 30-second timeout
-        let client = bidi_client_builder(&base_url)
+        let builder = EchoServiceClient::builder(&base_url);
+        let builder = if base_url.starts_with("http://") {
+            builder.http2_prior_knowledge()
+        } else {
+            builder
+        };
+        let client = builder
             .use_json()
             .timeout(Duration::from_secs(30))
             .build()?;

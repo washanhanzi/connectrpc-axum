@@ -1,6 +1,6 @@
 use connectrpc_axum::CompressionConfig;
 use connectrpc_axum::prelude::*;
-use connectrpc_axum_examples::{EchoRequest, EchoResponse, echoservice};
+use connectrpc_axum_examples::{EchoRequest, EchoResponse, echo_service_connect};
 use futures::StreamExt;
 // SocketAddr now provided by server_addr()
 
@@ -32,7 +32,7 @@ async fn echo_client_stream(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let router = echoservice::EchoServiceBuilder::new()
+    let router = echo_service_connect::EchoServiceBuilder::new()
         .echo_client_stream(echo_client_stream)
         .build();
 

@@ -8,7 +8,7 @@
 //! Test with: go test -v -run TestErrorDetails
 
 use connectrpc_axum::prelude::*;
-use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
+use connectrpc_axum_examples::{HelloRequest, HelloResponse, hello_world_service_connect};
 use prost::Message;
 // SocketAddr now provided by server_addr()
 
@@ -56,7 +56,7 @@ fn encode_retry_info(seconds: i64) -> Vec<u8> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let router = helloworldservice::HelloWorldServiceBuilder::new()
+    let router = hello_world_service_connect::HelloWorldServiceBuilder::new()
         .say_hello(say_hello)
         .build_connect();
 

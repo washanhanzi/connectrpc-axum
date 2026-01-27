@@ -9,7 +9,7 @@
 //! Test with: cd go-client && go test -v -run TestEndStreamMetadata
 
 use connectrpc_axum::prelude::*;
-use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
+use connectrpc_axum_examples::{HelloRequest, HelloResponse, hello_world_service_connect};
 use futures::stream::BoxStream;
 // SocketAddr now provided by server_addr()
 
@@ -83,7 +83,7 @@ async fn say_hello_stream_with_metadata(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let router = helloworldservice::HelloWorldServiceBuilder::new()
+    let router = hello_world_service_connect::HelloWorldServiceBuilder::new()
         .say_hello_stream(say_hello_stream_with_metadata)
         .build();
 

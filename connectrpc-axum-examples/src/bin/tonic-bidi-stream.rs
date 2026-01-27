@@ -11,7 +11,7 @@
 use axum::extract::State;
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{
-    EchoRequest, EchoResponse, HelloRequest, HelloResponse, echo_service_server, helloworldservice,
+    EchoRequest, EchoResponse, HelloRequest, HelloResponse, echo_service_server, hello_world_service_connect,
 };
 use futures::{Stream, StreamExt};
 // SocketAddr now provided by server_addr()
@@ -145,7 +145,7 @@ async fn main() -> anyhow::Result<()> {
     let app_state = AppState::default();
 
     // Build Connect router for HelloWorldService (unary only, for comparison)
-    let hello_router = helloworldservice::HelloWorldServiceBuilder::new()
+    let hello_router = hello_world_service_connect::HelloWorldServiceBuilder::new()
         .say_hello(say_hello)
         .with_state(app_state.clone())
         .build();

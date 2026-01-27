@@ -1,6 +1,6 @@
 use connectrpc_axum::CompressionConfig;
 use connectrpc_axum::prelude::*;
-use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
+use connectrpc_axum_examples::{HelloRequest, HelloResponse, hello_world_service_connect};
 // SocketAddr now provided by server_addr()
 
 async fn say_hello(
@@ -25,7 +25,7 @@ async fn say_hello(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let router = helloworldservice::HelloWorldServiceBuilder::new()
+    let router = hello_world_service_connect::HelloWorldServiceBuilder::new()
         .say_hello(say_hello)
         .build();
 

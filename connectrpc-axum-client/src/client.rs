@@ -623,7 +623,10 @@ impl<I: Intercept> ConnectClient<I> {
     ) -> Result<
         ConnectResponse<
             Streaming<
-                FrameDecoder<impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin, Res>,
+                FrameDecoder<
+                    impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin + use<'_, I, Req, Res>,
+                    Res,
+                >,
             >,
         >,
         ClientError,
@@ -781,7 +784,12 @@ impl<I: Intercept> ConnectClient<I> {
         options: CallOptions,
     ) -> Result<
         ConnectResponse<
-            Streaming<FrameDecoder<impl Stream<Item = Result<Bytes, ClientError>> + Unpin, Res>>,
+            Streaming<
+                FrameDecoder<
+                    impl Stream<Item = Result<Bytes, ClientError>> + Unpin + use<'_, I, Req, Res>,
+                    Res,
+                >,
+            >,
         >,
         ClientError,
     >
@@ -1368,7 +1376,10 @@ impl<I: Intercept> ConnectClient<I> {
     ) -> Result<
         ConnectResponse<
             Streaming<
-                FrameDecoder<impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin, Res>,
+                FrameDecoder<
+                    impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin + use<'_, I, Req, Res, S>,
+                    Res,
+                >,
             >,
         >,
         ClientError,
@@ -1546,7 +1557,10 @@ impl<I: Intercept> ConnectClient<I> {
     ) -> Result<
         ConnectResponse<
             Streaming<
-                FrameDecoder<impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin, Res>,
+                FrameDecoder<
+                    impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin + use<'_, I, Req, Res, S>,
+                    Res,
+                >,
             >,
         >,
         ClientError,

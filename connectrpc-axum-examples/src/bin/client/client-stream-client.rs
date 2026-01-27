@@ -18,7 +18,10 @@
 //!   cargo run --bin client-stream-client --no-default-features -- http://localhost:8080
 
 use connectrpc_axum_client::ClientError;
-use connectrpc_axum_examples::{EchoRequest, EchoServiceClient};
+use connectrpc_axum_examples::{
+    EchoRequest,
+    echo_service_connect_client::EchoServiceClient,
+};
 use futures::stream;
 use std::env;
 
@@ -104,7 +107,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 3: Client streaming with single message
     println!("Test 3: Client streaming with single message...");
     {
-        let client = EchoServiceClient::new(&base_url)?;
+        let client = EchoServiceClient::builder(&base_url).build()?;
 
         let messages = vec![EchoRequest {
             message: "only one".to_string(),
@@ -125,7 +128,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 4: Client streaming with empty stream
     println!("Test 4: Client streaming with empty stream...");
     {
-        let client = EchoServiceClient::new(&base_url)?;
+        let client = EchoServiceClient::builder(&base_url).build()?;
 
         let messages: Vec<EchoRequest> = vec![];
         let request_stream = stream::iter(messages);
@@ -143,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 5: Response wrapper methods
     println!("Test 5: Response wrapper methods (into_parts)...");
     {
-        let client = EchoServiceClient::new(&base_url)?;
+        let client = EchoServiceClient::builder(&base_url).build()?;
 
         let messages = vec![EchoRequest {
             message: "test".to_string(),
@@ -189,7 +192,7 @@ async fn main() -> anyhow::Result<()> {
     // Test 7: Multiple sequential client streaming calls
     println!("Test 7: Multiple sequential client streaming calls...");
     {
-        let client = EchoServiceClient::new(&base_url)?;
+        let client = EchoServiceClient::builder(&base_url).build()?;
 
         for i in 1..=3 {
             let messages: Vec<EchoRequest> = (1..=i)

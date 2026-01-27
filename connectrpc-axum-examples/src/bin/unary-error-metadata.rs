@@ -7,7 +7,7 @@
 //! Test with Go client: go test -v -run TestUnaryErrorMetadata
 
 use connectrpc_axum::prelude::*;
-use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
+use connectrpc_axum_examples::{HelloRequest, HelloResponse, hello_world_service_connect};
 // SocketAddr now provided by server_addr()
 
 /// Handler that returns errors with custom metadata based on input
@@ -54,7 +54,7 @@ async fn say_hello(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let router = helloworldservice::HelloWorldServiceBuilder::new()
+    let router = hello_world_service_connect::HelloWorldServiceBuilder::new()
         .say_hello(say_hello)
         .build_connect();
 

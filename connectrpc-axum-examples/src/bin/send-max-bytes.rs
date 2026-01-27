@@ -8,7 +8,7 @@
 
 use connectrpc_axum::prelude::*;
 use connectrpc_axum::{MakeServiceBuilder, MessageLimits};
-use connectrpc_axum_examples::{HelloRequest, HelloResponse, helloworldservice};
+use connectrpc_axum_examples::{HelloRequest, HelloResponse, hello_world_service_connect};
 // SocketAddr now provided by server_addr()
 
 // Base64 string with high entropy to avoid compression dropping below send_max_bytes.
@@ -90,7 +90,7 @@ async fn say_hello_stream(
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Build router without ConnectLayer (we'll add it via MakeServiceBuilder)
-    let router = helloworldservice::HelloWorldServiceBuilder::new()
+    let router = hello_world_service_connect::HelloWorldServiceBuilder::new()
         .say_hello(say_hello)
         .say_hello_stream(say_hello_stream)
         .build();
