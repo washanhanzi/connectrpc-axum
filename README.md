@@ -1,7 +1,9 @@
 # ConnectRPC Axum
 
-[![connectrpc-axum](https://img.shields.io/crates/v/connectrpc-axum.svg)](https://crates.io/crates/connectrpc-axum)
-[![connectrpc-axum-build](https://img.shields.io/crates/v/connectrpc-axum-build.svg)](https://crates.io/crates/connectrpc-axum-build)
+[![connectrpc-axum](https://img.shields.io/crates/v/connectrpc-axum?label=connectrpc-axum)](https://crates.io/crates/connectrpc-axum)
+[![connectrpc-axum-build](https://img.shields.io/crates/v/connectrpc-axum-build?label=connectrpc-axum-build)](https://crates.io/crates/connectrpc-axum-build)
+[![connectrpc-axum-client](https://img.shields.io/crates/v/connectrpc-axum-client?label=connectrpc-axum-client)](https://crates.io/crates/connectrpc-axum-client)
+[![connectrpc-axum-core](https://img.shields.io/crates/v/connectrpc-axum-core?label=connectrpc-axum-core)](https://crates.io/crates/connectrpc-axum-core)
 [![Documentation](https://docs.rs/connectrpc-axum/badge.svg)](https://docs.rs/connectrpc-axum)
 [![License](https://img.shields.io/crates/l/connectrpc-axum.svg)](LICENSE)
 
