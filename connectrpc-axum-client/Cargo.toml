@@ -8,7 +8,7 @@ license = "MIT"
 
 [dependencies]
 # Core protocol types
-connectrpc-axum-core = { path = "../connectrpc-axum-core" }
+connectrpc-axum-core = { workspace = true }
 
 # HTTP client (hyper-based)
 hyper = { version = "1.6", features = ["client", "http1", "http2"] }
