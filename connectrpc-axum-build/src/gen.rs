@@ -33,20 +33,28 @@ fn is_no_side_effects(level: Option<i32>) -> bool {
 
 #[derive(Default)]
 pub struct AxumConnectServiceGenerator {
+    include_connect_server: bool,
     include_tonic: bool,
     include_connect_client: bool,
 }
 
 impl AxumConnectServiceGenerator {
-    pub fn with_tonic(include_tonic: bool) -> Self {
-        Self {
-            include_tonic,
-            include_connect_client: false,
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    pub fn with_connect_client(mut self, include_connect_client: bool) -> Self {
-        self.include_connect_client = include_connect_client;
+    pub fn with_connect_server(mut self, include: bool) -> Self {
+        self.include_connect_server = include;
+        self
+    }
+
+    pub fn with_tonic(mut self, include: bool) -> Self {
+        self.include_tonic = include;
+        self
+    }
+
+    pub fn with_connect_client(mut self, include: bool) -> Self {
+        self.include_connect_client = include;
         self
     }
 }
@@ -169,75 +177,78 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
             (quote! {}, quote! {})
         };
 
-        let routes_fn = quote! {
-            #[allow(dead_code)]
-            pub mod #service_module_name {
-                #[allow(unused_imports)]
-                use super::*;
+        // Generate server module only if connect server or tonic is enabled
+        if self.include_connect_server || self.include_tonic {
+            let routes_fn = quote! {
+                #[allow(dead_code)]
+                pub mod #service_module_name {
+                    #[allow(unused_imports)]
+                    use super::*;
 
-                /// Connect-only service builder (flexible extractors)
-                pub struct #service_builder_name<S = ()> {
-                    pub router: axum::Router<S>,
-                }
+                    /// Connect-only service builder (flexible extractors)
+                    pub struct #service_builder_name<S = ()> {
+                        pub router: axum::Router<S>,
+                    }
 
-                impl<S> #service_builder_name<S>
-                where
-                    S: Clone + Send + Sync + 'static,
-                {
-                    pub fn new() -> Self {
-                        Self {
-                            router: axum::Router::new(),
+                    impl<S> #service_builder_name<S>
+                    where
+                        S: Clone + Send + Sync + 'static,
+                    {
+                        pub fn new() -> Self {
+                            Self {
+                                router: axum::Router::new(),
+                            }
+                        }
+
+                        /// Apply state to router, transforming to builder with new state
+                        pub fn with_state<S2>(self, state: S) -> #service_builder_name<S2> {
+                            #service_builder_name {
+                                router: self.router.with_state(state),
+                            }
+                        }
+
+                        #(#connect_builder_methods)*
+                    }
+
+                    impl #service_builder_name<()> {
+                        /// Build the final Connect RPC router with all registered handlers.
+                        ///
+                        /// Use [`MakeServiceBuilder`] to apply [`ConnectLayer`] and combine
+                        /// with other services.
+                        ///
+                        /// [`MakeServiceBuilder`]: connectrpc_axum::MakeServiceBuilder
+                        /// [`ConnectLayer`]: connectrpc_axum::ConnectLayer
+                        pub fn build(self) -> axum::Router<()> {
+                            self.router
+                        }
+
+                        /// Build with default layers applied via [`MakeServiceBuilder`].
+                        ///
+                        /// This is a convenience method that wraps the router with
+                        /// `MakeServiceBuilder::new()` which provides:
+                        /// - Default gzip compression/decompression
+                        /// - [`ConnectLayer`] with default settings
+                        ///
+                        /// For custom configuration, use [`build()`] and configure
+                        /// `MakeServiceBuilder` manually.
+                        ///
+                        /// [`MakeServiceBuilder`]: connectrpc_axum::MakeServiceBuilder
+                        /// [`ConnectLayer`]: connectrpc_axum::ConnectLayer
+                        pub fn build_connect(self) -> axum::Router<()> {
+                            connectrpc_axum::MakeServiceBuilder::new()
+                                .add_router(self.router)
+                                .build()
                         }
                     }
 
-                    /// Apply state to router, transforming to builder with new state
-                    pub fn with_state<S2>(self, state: S) -> #service_builder_name<S2> {
-                        #service_builder_name {
-                            router: self.router.with_state(state),
-                        }
-                    }
-
-                    #(#connect_builder_methods)*
+                    #tonic_module_bits
                 }
 
-                impl #service_builder_name<()> {
-                    /// Build the final Connect RPC router with all registered handlers.
-                    ///
-                    /// Use [`MakeServiceBuilder`] to apply [`ConnectLayer`] and combine
-                    /// with other services.
-                    ///
-                    /// [`MakeServiceBuilder`]: connectrpc_axum::MakeServiceBuilder
-                    /// [`ConnectLayer`]: connectrpc_axum::ConnectLayer
-                    pub fn build(self) -> axum::Router<()> {
-                        self.router
-                    }
+                #tonic_out_of_module
+            };
 
-                    /// Build with default layers applied via [`MakeServiceBuilder`].
-                    ///
-                    /// This is a convenience method that wraps the router with
-                    /// `MakeServiceBuilder::new()` which provides:
-                    /// - Default gzip compression/decompression
-                    /// - [`ConnectLayer`] with default settings
-                    ///
-                    /// For custom configuration, use [`build()`] and configure
-                    /// `MakeServiceBuilder` manually.
-                    ///
-                    /// [`MakeServiceBuilder`]: connectrpc_axum::MakeServiceBuilder
-                    /// [`ConnectLayer`]: connectrpc_axum::ConnectLayer
-                    pub fn build_connect(self) -> axum::Router<()> {
-                        connectrpc_axum::MakeServiceBuilder::new()
-                            .add_router(self.router)
-                            .build()
-                    }
-                }
-
-                #tonic_module_bits
-            }
-
-            #tonic_out_of_module
-        };
-
-        buf.push_str(&routes_fn.to_string());
+            buf.push_str(&routes_fn.to_string());
+        }
 
         // Generate Connect client code if enabled
         if self.include_connect_client {

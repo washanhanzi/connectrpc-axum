@@ -104,20 +104,24 @@ Add the dependency to your `Cargo.toml`:
 pbjson-types = "0.8"
 ```
 
-## Types Only (No Handlers)
+## Client Only (No Server)
 
-Use `.no_handlers()` to generate only message types with serde support, skipping Connect handler generation:
+Use `.no_connect_server()` to skip generating Connect server code. This is useful when building a client-only application:
 
 ```rust
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     connectrpc_axum_build::compile_dir("proto")
-        .no_handlers()
+        .no_connect_server()
+        .with_connect_client()  // Generate typed Connect client
         .compile()?;
     Ok(())
 }
 ```
 
-This is useful when you only need the protobuf types for serialization/deserialization without building a Connect server.
+This generates:
+- Message types with serde support
+- Typed Connect client (if `.with_connect_client()` is called)
+- Tonic client (if `.with_tonic_client()` is called)
 
 ## Tonic Configuration
 
@@ -185,7 +189,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-**Note:** `.no_handlers()` and `.with_tonic()` cannot be combined - the compiler enforces valid method chains at compile time.
+**Note:** `.no_connect_server()` and `.with_tonic()` cannot be combined - the compiler enforces valid method chains at compile time.
 
 ## Generated Code
 

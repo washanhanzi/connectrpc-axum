@@ -22,7 +22,67 @@ For compression support:
 connectrpc-axum-client = { version = "0.1", features = ["compression-gzip-stream"] }
 ```
 
-## Quick Start
+## Quick Start with Generated Client
+
+The recommended way to use the client is with the generated typed client from `connectrpc-axum-build`:
+
+```rust
+use my_proto::hello_world_service_connect_client::HelloWorldServiceClient;
+
+// Simple usage (panics on error)
+let client = HelloWorldServiceClient::new("http://localhost:3000");
+
+// With error handling
+let client = HelloWorldServiceClient::builder("http://localhost:3000")
+    .use_proto()
+    .timeout(Duration::from_secs(30))
+    .build()?;
+
+// Make typed RPC calls
+let response = client.say_hello(&HelloRequest {
+    name: Some("Alice".to_string())
+}).await?;
+
+println!("Response: {:?}", response.into_inner());
+```
+
+### Generated Module Structure
+
+For a service named `HelloWorldService`, the generated code creates:
+
+```rust
+// Procedure path constants (at root level)
+pub mod hello_world_service_procedures {
+    pub const SAY_HELLO: &str = "/hello.HelloWorldService/SayHello";
+}
+
+// Client module
+pub mod hello_world_service_connect_client {
+    pub struct HelloWorldServiceClient { ... }
+    pub struct HelloWorldServiceClientBuilder { ... }
+}
+```
+
+### new() vs builder()
+
+Following the same pattern as `reqwest`:
+
+- **`new(url)`** - Creates a client with default settings. Panics on error (e.g., TLS initialization failure).
+- **`builder(url).build()?`** - Returns `Result`, allowing you to handle errors gracefully.
+
+```rust
+// Simple usage - panics on error
+let client = HelloWorldServiceClient::new("http://localhost:3000");
+
+// With error handling
+let client = HelloWorldServiceClient::builder("http://localhost:3000")
+    .use_proto()
+    .build()?;
+```
+
+## Low-Level Client
+
+For dynamic calls or when not using code generation, use `ConnectClient` directly:
 
 ```rust
 use connectrpc_axum_client::ConnectClient;

@@ -56,27 +56,31 @@ pub struct CompileBuilder<Connect = Enabled, Tonic = Disabled, TonicClient = Dis
 // ============================================================================
 
 impl<T, TC, CC> CompileBuilder<Enabled, T, TC, CC> {
-    /// Skip generating Connect service handlers.
+    /// Skip generating Connect server code.
     ///
     /// When called, only message types and serde implementations are generated.
     /// No Connect service builders (e.g., `HelloWorldServiceBuilder`) will be created.
     ///
     /// **Note:** After calling this, `with_tonic()` is no longer available since
-    /// tonic server stubs depend on handler builders.
+    /// tonic server stubs depend on the Connect service module.
     ///
-    /// Use this when you only need protobuf message types with JSON serialization support.
+    /// Use this when you only need:
+    /// - Protobuf message types with JSON serialization
+    /// - Connect client (via `with_connect_client()`)
+    /// - Tonic client (via `with_tonic_client()`)
     ///
     /// # Example
     ///
     /// ```rust,ignore
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     connectrpc_axum_build::compile_dir("proto")
-    ///         .no_handlers()  // Only generate message types + serde
+    ///         .no_connect_server()  // Skip server code
+    ///         .with_connect_client() // Generate client code
     ///         .compile()?;
     ///     Ok(())
     /// }
     /// ```
-    pub fn no_handlers(self) -> CompileBuilder<Disabled, Disabled, TC, Disabled> {
+    pub fn no_connect_server(self) -> CompileBuilder<Disabled, Disabled, TC, Disabled> {
         CompileBuilder {
             includes_dir: self.includes_dir,
             out_dir: self.out_dir,
@@ -98,8 +102,8 @@ impl<T, TC, CC> CompileBuilder<Enabled, T, TC, CC> {
 impl<TC, CC> CompileBuilder<Enabled, Disabled, TC, CC> {
     /// Enable generating tonic gRPC server stubs (second pass) + tonic-compatible helpers in first pass.
     ///
-    /// **Note:** After calling this, `no_handlers()` is no longer available since
-    /// tonic server stubs depend on handler builders.
+    /// **Note:** After calling this, `no_connect_server()` is no longer available since
+    /// tonic server stubs depend on the Connect service module.
     pub fn with_tonic(self) -> CompileBuilder<Enabled, Enabled, TC, CC> {
         CompileBuilder {
             includes_dir: self.includes_dir,
@@ -337,8 +341,8 @@ impl<C, T, TC> CompileBuilder<C, T, TC, Disabled> {
     /// The generated client wraps [`ConnectClient`](connectrpc_axum_client::ConnectClient)
     /// and provides a more ergonomic API.
     ///
-    /// This can be used independently of server handlers. Use `no_handlers()` first
-    /// if you only want client code without server handlers.
+    /// This can be used independently of server code. Use `no_connect_server()` first
+    /// if you only want client code without server code.
     ///
     /// # Example
     ///
@@ -428,7 +432,9 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBu
 
         // Generate connect (and tonic-compatible wrapper builders if requested) in first pass
         if generate_handlers || connect_client {
-            let service_generator = AxumConnectServiceGenerator::with_tonic(grpc)
+            let service_generator = AxumConnectServiceGenerator::new()
+                .with_connect_server(generate_handlers)
+                .with_tonic(grpc)
                 .with_connect_client(connect_client);
             config.service_generator(Box::new(service_generator));
         }
