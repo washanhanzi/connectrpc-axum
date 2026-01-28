@@ -13,7 +13,18 @@ connectrpc-axum bridges the Connect protocol with Axum's handler model through m
 | `connectrpc-axum-core` | Shared protocol types - compression, error codes, envelope framing |
 | `connectrpc-axum-build` | Build-time code generation from proto files |
 
-The core modules in the runtime library:
+The core modules in the client library:
+
+| Module | Purpose |
+|--------|---------|
+| `client.rs` | `ConnectClient<I>` - main client type, generic over interceptor chain |
+| `builder.rs` | `ClientBuilder<I>` - fluent API for client configuration |
+| `config/interceptor.rs` | Unified interceptor system (`Interceptor`, `MessageInterceptor`) |
+| `transport/` | HTTP transport abstraction (`HyperTransport`) |
+| `request.rs` | Request encoding, `FrameEncoder` for streaming |
+| `response.rs` | Response types, `Streaming<T>`, `FrameDecoder` |
+
+The core modules in the server runtime library:
 
 | Module | Purpose |
 |--------|---------|
@@ -243,3 +254,77 @@ For mixed Connect/gRPC deployments, `ContentTypeSwitch` routes by `Content-Type`
 - Otherwise → Axum routes (Connect protocol)
 
 See `service_builder.rs` for the implementation.
+
+## Client Interceptor System
+
+The client provides a unified interceptor system for cross-cutting concerns like authentication, logging, and message transformation.
+
+### Trait Hierarchy
+
+Two user-facing traits, both internally unified:
+
+| Trait | Purpose | Use Case |
+|-------|---------|----------|
+| `Interceptor` | Header-level access only | Auth headers, trace IDs, logging procedure names |
+| `MessageInterceptor` | Typed message access | Validation, message transformation, per-message logging |
+
+Both traits are wrapped internally to `InterceptorInternal` via adapter types:
+- `HeaderWrapper<I>` - wraps `Interceptor` implementations
+- `MessageWrapper<I>` - wraps `MessageInterceptor` implementations
+
+This enables zero-cost composition via `Chain<A, B>` without dynamic dispatch.
+
+### Context Types
+
+Interceptors receive context objects with relevant information:
+
+| Type | Fields | Used In |
+|------|--------|---------|
+| `RequestContext` | `procedure`, `headers` (mutable) | `on_request` |
+| `ResponseContext` | `procedure`, `headers` (read-only) | `on_response` |
+| `StreamContext` | `procedure`, `stream_type`, `request_headers`, `response_headers` | Streaming methods |
+
+### Builder API
+
+`ConnectClient` and `ClientBuilder` use a single type parameter `I` for the interceptor chain (defaults to `()`):
+
+```rust
+// No interceptors
+let client = ConnectClient::builder("http://localhost:3000")
+    .build()?;
+
+// With header-level interceptor
+let client = ConnectClient::builder("http://localhost:3000")
+    .with_interceptor(AuthInterceptor::new("Bearer token"))
+    .build()?;
+
+// With message-level interceptor
+let client = ConnectClient::builder("http://localhost:3000")
+    .with_message_interceptor(LoggingInterceptor)
+    .build()?;
+
+// Chaining multiple interceptors
+let client = ConnectClient::builder("http://localhost:3000")
+    .with_interceptor(AuthInterceptor::new("Bearer token"))
+    .with_message_interceptor(ValidationInterceptor)
+    .with_interceptor(TracingInterceptor)
+    .build()?;
+```
+
+Each `with_interceptor` or `with_message_interceptor` call wraps the interceptor and composes it with the existing chain:
+- `with_interceptor(i)` returns `ClientBuilder<Chain<I, HeaderWrapper<J>>>`
+- `with_message_interceptor(i)` returns `ClientBuilder<Chain<I, MessageWrapper<J>>>`
+
+### Convenience Types
+
+| Type | Purpose |
+|------|---------|
+| `HeaderInterceptor` | Add a single header to all requests |
+| `ClosureInterceptor` | Quick header-level interception via closure |
+
+### Execution Order
+
+For requests, interceptors run in the order added (first added = first to run).
+For responses, interceptors run in reverse order (middleware unwinding pattern).
+
+See `config/interceptor.rs` for the implementation.

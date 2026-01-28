@@ -327,7 +327,10 @@ Non-retryable errors are returned immediately:
 
 ## Interceptors
 
-Add cross-cutting logic to all RPC calls:
+Add cross-cutting logic to all RPC calls. The interceptor system provides two traits:
+
+- **`Interceptor`** - Header-level access only (simple, no message bounds)
+- **`MessageInterceptor`** - Full typed message access
 
 ### Header Interceptor
 
@@ -343,21 +346,17 @@ let client = ConnectClient::builder("http://localhost:3000")
     .build()?;
 ```
 
-### Function Interceptor
+### Closure Interceptor
 
-Create custom interceptors with closures:
+Create quick header-level interceptors with closures:
 
 ```rust
-use connectrpc_axum_client::{FnInterceptor, UnaryRequest, UnaryNext};
+use connectrpc_axum_client::{ClosureInterceptor, RequestContext};
 
-let logging = FnInterceptor::unary(|req: UnaryRequest, next: UnaryNext| {
-    Box::pin(async move {
-        println!("Calling: {}", req.procedure);
-        let start = std::time::Instant::now();
-        let result = next.call(req).await;
-        println!("Call completed in {:?}", start.elapsed());
-        result
-    })
+let logging = ClosureInterceptor::new(|ctx: &mut RequestContext| {
+    println!("Calling: {}", ctx.procedure);
+    ctx.headers.insert("x-request-id", "abc-123".parse().unwrap());
+    Ok(())
 });
 
 let client = ConnectClient::builder("http://localhost:3000")
@@ -367,27 +366,108 @@ let client = ConnectClient::builder("http://localhost:3000")
 
 ### Custom Interceptor Trait
 
-Implement the `Interceptor` trait for full control:
+Implement the `Interceptor` trait for header-level cross-cutting concerns:
 
 ```rust
-use connectrpc_axum_client::{Interceptor, UnaryFunc, StreamingRequest};
-use std::sync::Arc;
+use connectrpc_axum_client::{Interceptor, RequestContext, ResponseContext, ClientError};
 
-struct MetricsInterceptor;
+#[derive(Clone)]
+struct AuthInterceptor {
+    token: String,
+}
 
-impl Interceptor for MetricsInterceptor {
-    fn wrap_unary(&self, next: UnaryFunc) -> UnaryFunc {
-        Arc::new(move |request| {
-            // Add metrics logic
-            next(request)
-        })
+impl Interceptor for AuthInterceptor {
+    fn on_request(&self, ctx: &mut RequestContext) -> Result<(), ClientError> {
+        ctx.headers.insert("authorization", self.token.parse().unwrap());
+        Ok(())
     }
 
-    fn wrap_streaming(&self, request: &mut StreamingRequest<'_>) {
-        // Add headers for streaming calls
-        request.headers.insert("x-traced", "true".parse().unwrap());
+    fn on_response(&self, ctx: &ResponseContext) -> Result<(), ClientError> {
+        // Inspect response headers
+        if let Some(value) = ctx.headers.get("x-ratelimit-remaining") {
+            println!("Rate limit remaining: {:?}", value);
+        }
+        Ok(())
     }
 }
+```
+
+### Message Interceptor
+
+Implement `MessageInterceptor` for typed access to request/response messages:
+
+```rust
+use connectrpc_axum_client::{MessageInterceptor, RequestContext, ResponseContext, StreamContext, ClientError};
+use prost::Message;
+
+#[derive(Clone)]
+struct LoggingInterceptor;
+
+impl MessageInterceptor for LoggingInterceptor {
+    fn on_request<Req>(
+        &self,
+        ctx: &mut RequestContext,
+        request: &mut Req,
+    ) -> Result<(), ClientError>
+    where
+        Req: Message + serde::Serialize + 'static,
+    {
+        println!("Calling {} with {} bytes", ctx.procedure, request.encoded_len());
+        Ok(())
+    }
+
+    fn on_response<Res>(
+        &self,
+        ctx: &ResponseContext,
+        response: &mut Res,
+    ) -> Result<(), ClientError>
+    where
+        Res: Message + serde::de::DeserializeOwned + Default + 'static,
+    {
+        println!("Response from {} with {} bytes", ctx.procedure, response.encoded_len());
+        Ok(())
+    }
+
+    fn on_stream_send<Req>(
+        &self,
+        ctx: &StreamContext,
+        request: &mut Req,
+    ) -> Result<(), ClientError>
+    where
+        Req: Message + serde::Serialize + 'static,
+    {
+        println!("Streaming message to {}", ctx.procedure);
+        Ok(())
+    }
+
+    fn on_stream_receive<Res>(
+        &self,
+        ctx: &StreamContext,
+        response: &mut Res,
+    ) -> Result<(), ClientError>
+    where
+        Res: Message + serde::de::DeserializeOwned + Default + 'static,
+    {
+        println!("Received stream message from {}", ctx.procedure);
+        Ok(())
+    }
+}
+
+let client = ConnectClient::builder("http://localhost:3000")
+    .with_message_interceptor(LoggingInterceptor)
+    .build()?;
+```
+
+### Chaining Interceptors
+
+Multiple interceptors can be chained. They execute in order for requests and reverse order for responses:
+
+```rust
+let client = ConnectClient::builder("http://localhost:3000")
+    .with_interceptor(AuthInterceptor { token: "Bearer xyz".into() })
+    .with_interceptor(HeaderInterceptor::new("x-api-version", "v1"))
+    .with_message_interceptor(LoggingInterceptor)
+    .build()?;
 ```
 
 ## Error Handling
