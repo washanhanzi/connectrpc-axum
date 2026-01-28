@@ -3,17 +3,22 @@
 //! Provides a fluent API for configuring and building a [`ConnectClient`].
 
 use crate::client::ConnectClient;
-use crate::config::{Chain, Intercept};
+use crate::config::{Chain, HeaderWrapper, Interceptor, InterceptorInternal, MessageInterceptor, MessageWrapper};
 use crate::transport::{HyperTransport, HyperTransportBuilder, TlsClientConfig};
 use connectrpc_axum_core::{CompressionConfig, CompressionEncoding};
 use std::time::Duration;
 
 /// Builder for creating a [`ConnectClient`].
 ///
-/// The builder is generic over the interceptor type `I`, which defaults to `()`
-/// (no interceptors). Each call to [`with_interceptor`](Self::with_interceptor)
-/// wraps the existing interceptors in a [`Chain`], building up a compile-time
-/// chain of interceptors with zero dynamic dispatch.
+/// The builder is generic over `I`: the interceptor chain type.
+/// This defaults to `()` (no interceptors).
+///
+/// Interceptors are added via:
+/// - [`with_interceptor`](Self::with_interceptor): Header-level interceptors (simple, no message bounds)
+/// - [`with_message_interceptor`](Self::with_message_interceptor): Message-level interceptors (typed access)
+///
+/// Both are internally wrapped and composed via [`Chain`], enabling zero-cost
+/// interceptor composition without dynamic dispatch.
 ///
 /// # Example
 ///
@@ -42,8 +47,8 @@ pub struct ClientBuilder<I = ()> {
     accept_encoding: Option<CompressionEncoding>,
     /// Default timeout for RPC calls.
     default_timeout: Option<Duration>,
-    /// Interceptor chain for RPC calls (compile-time composed).
-    interceptors: I,
+    /// Unified interceptor chain (compile-time composed).
+    interceptor: I,
 }
 
 impl<I> std::fmt::Debug for ClientBuilder<I> {
@@ -81,13 +86,12 @@ impl ClientBuilder<()> {
             request_encoding: CompressionEncoding::Identity,
             accept_encoding: None,
             default_timeout: None,
-            interceptors: (),
+            interceptor: (),
         }
     }
 }
 
-impl<I: Intercept> ClientBuilder<I> {
-
+impl<I: InterceptorInternal> ClientBuilder<I> {
     /// Use a pre-configured HyperTransport.
     ///
     /// This allows you to configure TLS, HTTP/2, connection pooling, etc.
@@ -216,13 +220,13 @@ impl<I: Intercept> ClientBuilder<I> {
         self
     }
 
-    /// Add an interceptor to the client.
+    /// Add a header-level interceptor to the client.
     ///
-    /// Interceptors allow you to add cross-cutting logic to RPC calls, such as:
+    /// Header interceptors can inspect and modify request/response headers
+    /// but don't have access to the message body. Use this for:
     /// - Adding authentication headers
-    /// - Logging and metrics
-    /// - Retry logic
-    /// - Request/response transformation
+    /// - Adding trace/correlation IDs
+    /// - Logging procedure names
     ///
     /// Interceptors are applied in the order they are added. The first interceptor
     /// added is the first to process outgoing requests and the last to process
@@ -230,6 +234,9 @@ impl<I: Intercept> ClientBuilder<I> {
     ///
     /// This method returns a new builder with the interceptor added to a compile-time
     /// [`Chain`]. This enables zero-cost interceptor composition without dynamic dispatch.
+    ///
+    /// For typed message access (inspecting/modifying request and response bodies),
+    /// use [`with_message_interceptor`](Self::with_message_interceptor) instead.
     ///
     /// # Example
     ///
@@ -243,7 +250,7 @@ impl<I: Intercept> ClientBuilder<I> {
     ///     .with_interceptor(auth_interceptor)
     ///     .build()?;
     /// ```
-    pub fn with_interceptor<J: Intercept>(self, interceptor: J) -> ClientBuilder<Chain<I, J>> {
+    pub fn with_interceptor<J: Interceptor>(self, interceptor: J) -> ClientBuilder<Chain<I, HeaderWrapper<J>>> {
         ClientBuilder {
             base_url: self.base_url,
             transport: self.transport,
@@ -253,7 +260,68 @@ impl<I: Intercept> ClientBuilder<I> {
             request_encoding: self.request_encoding,
             accept_encoding: self.accept_encoding,
             default_timeout: self.default_timeout,
-            interceptors: Chain(self.interceptors, interceptor),
+            interceptor: Chain(self.interceptor, HeaderWrapper(interceptor)),
+        }
+    }
+
+    /// Add a message-level interceptor with typed message access.
+    ///
+    /// Unlike header-level interceptors (via [`with_interceptor`](Self::with_interceptor)),
+    /// message interceptors receive the typed request and response messages directly,
+    /// allowing you to:
+    ///
+    /// - Validate request fields before sending
+    /// - Log message contents
+    /// - Transform messages
+    /// - Apply per-message logic for streaming RPCs
+    ///
+    /// Interceptors are applied in the order they are added. The first interceptor
+    /// added is the first to process outgoing requests and the last to process
+    /// incoming responses (middleware unwinding pattern).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use connectrpc_axum_client::{
+    ///     ClientBuilder, MessageInterceptor, RequestContext, ClientError,
+    /// };
+    /// use prost::Message;
+    ///
+    /// #[derive(Clone)]
+    /// struct LoggingInterceptor;
+    ///
+    /// impl MessageInterceptor for LoggingInterceptor {
+    ///     fn on_request<Req>(
+    ///         &self,
+    ///         ctx: &mut RequestContext,
+    ///         request: &mut Req,
+    ///     ) -> Result<(), ClientError>
+    ///     where
+    ///         Req: Message + serde::Serialize + 'static,
+    ///     {
+    ///         println!("Calling {} with {} bytes", ctx.procedure, request.encoded_len());
+    ///         Ok(())
+    ///     }
+    /// }
+    ///
+    /// let client = ClientBuilder::new("http://localhost:3000")
+    ///     .with_message_interceptor(LoggingInterceptor)
+    ///     .build()?;
+    /// ```
+    pub fn with_message_interceptor<J: MessageInterceptor>(
+        self,
+        interceptor: J,
+    ) -> ClientBuilder<Chain<I, MessageWrapper<J>>> {
+        ClientBuilder {
+            base_url: self.base_url,
+            transport: self.transport,
+            transport_builder: self.transport_builder,
+            use_proto: self.use_proto,
+            compression: self.compression,
+            request_encoding: self.request_encoding,
+            accept_encoding: self.accept_encoding,
+            default_timeout: self.default_timeout,
+            interceptor: Chain(self.interceptor, MessageWrapper(interceptor)),
         }
     }
 
@@ -397,7 +465,7 @@ impl<I: Intercept> ClientBuilder<I> {
             self.request_encoding,
             self.accept_encoding,
             self.default_timeout,
-            self.interceptors,
+            self.interceptor,
         ))
     }
 }

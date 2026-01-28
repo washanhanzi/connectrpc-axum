@@ -14,8 +14,8 @@
 
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_client::{
-    ConnectClient, ConnectResponse as ClientResponse, HeaderInterceptor, InterceptContext,
-    Interceptor,
+    ClosureInterceptor, ConnectClient, ConnectResponse as ClientResponse, HeaderInterceptor,
+    RequestContext,
 };
 use connectrpc_axum_examples::{HelloRequest, HelloResponse, hello_world_service_connect};
 use std::net::SocketAddr;
@@ -123,7 +123,7 @@ async fn main() -> anyhow::Result<()> {
     {
         let client = ConnectClient::builder(&base_url)
             .use_json()
-            .with_interceptor(Interceptor::new(|ctx: &mut InterceptContext<'_>| {
+            .with_interceptor(ClosureInterceptor::new(|ctx: &mut RequestContext<'_>| {
                 ctx.headers
                     .insert("x-custom-header", "fn-interceptor-value".parse().unwrap());
                 Ok(())

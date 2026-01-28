@@ -12,7 +12,10 @@ use connectrpc_axum_core::{Code, CompressionConfig, CompressionEncoding, wrap_en
 use tracing::info_span;
 
 use crate::ClientError;
-use crate::config::{CallOptions, Intercept, InterceptContext, duration_to_timeout_header};
+use crate::config::{
+    CallOptions, InterceptorInternal, RequestContext, ResponseContext,
+    duration_to_timeout_header,
+};
 use crate::transport::{HyperTransport, TransportBody};
 use futures::{Stream, StreamExt};
 use prost::Message;
@@ -51,8 +54,15 @@ fn is_reserved_header(name: &http::header::HeaderName) -> bool {
 
 /// Connect RPC client.
 ///
-/// The client is generic over the interceptor type `I`, which defaults to `()`
-/// (no interceptors). This enables zero-cost interceptor composition at compile time.
+/// The client is generic over `I`: the interceptor chain type.
+/// This defaults to `()` (no interceptors).
+///
+/// Interceptors are added via:
+/// - [`ClientBuilder::with_interceptor`]: Header-level interceptors (simple)
+/// - [`ClientBuilder::with_message_interceptor`]: Message-level interceptors (typed access)
+///
+/// Both are internally wrapped and composed via [`Chain`](crate::config::Chain),
+/// enabling zero-cost interceptor composition at compile time.
 ///
 /// Use [`ClientBuilder`] or [`ConnectClient::builder`] to create an instance.
 ///
@@ -86,8 +96,8 @@ pub struct ConnectClient<I = ()> {
     accept_encoding: Option<CompressionEncoding>,
     /// Default timeout for RPC calls.
     default_timeout: Option<Duration>,
-    /// Interceptor chain for RPC calls (compile-time composed).
-    interceptors: I,
+    /// Unified interceptor chain (compile-time composed).
+    interceptor: I,
 }
 
 impl ConnectClient<()> {
@@ -99,7 +109,7 @@ impl ConnectClient<()> {
     }
 }
 
-impl<I: Intercept> ConnectClient<I> {
+impl<I: InterceptorInternal> ConnectClient<I> {
     /// Create a new ConnectClient.
     ///
     /// This is called by [`ClientBuilder::build`]. Prefer using the builder API.
@@ -111,7 +121,7 @@ impl<I: Intercept> ConnectClient<I> {
         request_encoding: CompressionEncoding,
         accept_encoding: Option<CompressionEncoding>,
         default_timeout: Option<Duration>,
-        interceptors: I,
+        interceptor: I,
     ) -> Self {
         Self {
             transport,
@@ -121,7 +131,7 @@ impl<I: Intercept> ConnectClient<I> {
             request_encoding,
             accept_encoding,
             default_timeout,
-            interceptors,
+            interceptor,
         }
     }
 
@@ -250,8 +260,8 @@ impl<I: Intercept> ConnectClient<I> {
         request: &Req,
     ) -> Result<ConnectResponse<Res>, ClientError>
     where
-        Req: Message + Serialize,
-        Res: Message + DeserializeOwned + Default,
+        Req: Message + Serialize + Clone + 'static,
+        Res: Message + DeserializeOwned + Default + 'static,
     {
         #[cfg(feature = "tracing")]
         let _span = info_span!(
@@ -263,13 +273,7 @@ impl<I: Intercept> ConnectClient<I> {
         )
         .entered();
 
-        // 1. Encode request body
-        let body = self.encode_message(request)?;
-
-        // 2. Maybe compress
-        let (body, compressed) = self.maybe_compress(body)?;
-
-        // 3. Build headers
+        // 1. Build headers (before RPC interceptor so it can modify them)
         let mut headers = http::HeaderMap::new();
         headers.insert(
             http::header::CONTENT_TYPE,
@@ -280,6 +284,26 @@ impl<I: Intercept> ConnectClient<I> {
             CONNECT_PROTOCOL_VERSION.parse().unwrap(),
         );
 
+        // Add Connect-Timeout-Ms header if timeout is configured
+        if let Some(t) = self.default_timeout {
+            if let Some(timeout_ms) = duration_to_timeout_header(t) {
+                headers.insert(CONNECT_TIMEOUT_HEADER, timeout_ms.parse().unwrap());
+            }
+        }
+
+        // 2. Apply interceptor to request
+        let mut request = request.clone();
+        {
+            let mut ctx = RequestContext::new(procedure, &mut headers);
+            self.interceptor.intercept_request(&mut ctx, &mut request)?;
+        }
+
+        // 3. Encode request body
+        let body = self.encode_message(&request)?;
+
+        // 5. Maybe compress
+        let (body, compressed) = self.maybe_compress(body)?;
+
         // Add Content-Encoding if compressed
         if compressed {
             headers.insert(
@@ -288,24 +312,11 @@ impl<I: Intercept> ConnectClient<I> {
             );
         }
 
-        // Add Connect-Timeout-Ms header if timeout is configured
-        if let Some(t) = self.default_timeout {
-            if let Some(timeout_ms) = duration_to_timeout_header(t) {
-                headers.insert(CONNECT_TIMEOUT_HEADER, timeout_ms.parse().unwrap());
-            }
-        }
-
-        // 4. Apply interceptors
-        {
-            let mut ctx = InterceptContext::new(procedure, &mut headers);
-            self.interceptors.before_request(&mut ctx)?;
-        }
-
-        // 5. Build URL (strip leading slash from procedure to avoid double slashes)
+        // 6. Build URL (strip leading slash from procedure to avoid double slashes)
         let procedure = procedure.strip_prefix('/').unwrap_or(procedure);
         let url = format!("{}/{}", self.base_url, procedure);
 
-        // 6. Build HTTP request
+        // 7. Build HTTP request
         let mut req_builder = Request::builder().method(Method::POST).uri(&url);
 
         // Copy headers
@@ -323,7 +334,7 @@ impl<I: Intercept> ConnectClient<I> {
             .body(TransportBody::full(body))
             .map_err(|e| ClientError::Protocol(format!("failed to build request: {}", e)))?;
 
-        // 7. Send request (with client-side timeout if configured)
+        // 8. Send request (with client-side timeout if configured)
         let response = if let Some(t) = self.default_timeout {
             timeout(t, self.transport.request(req))
                 .await
@@ -332,12 +343,9 @@ impl<I: Intercept> ConnectClient<I> {
             self.transport.request(req).await?
         };
 
-        // 8. Check response status
+        // 9. Check response status
         let status = response.status();
         let response_headers = response.headers().clone();
-
-        // Apply after_response interceptors
-        self.interceptors.after_response(&response_headers);
 
         if !status.is_success() {
             let body_bytes = response
@@ -349,7 +357,7 @@ impl<I: Intercept> ConnectClient<I> {
             return Err(decompress_and_parse_error(status, &response_headers, body_bytes));
         }
 
-        // 9. Handle response decompression
+        // 10. Handle response decompression
         let content_encoding = response_headers
             .get(header::CONTENT_ENCODING)
             .and_then(|v| v.to_str().ok());
@@ -361,7 +369,7 @@ impl<I: Intercept> ConnectClient<I> {
             ))
         })?;
 
-        // 10. Get response body
+        // 11. Get response body
         let body_bytes = response
             .into_body()
             .collect()
@@ -378,10 +386,16 @@ impl<I: Intercept> ConnectClient<I> {
             body_bytes
         };
 
-        // 11. Decode response
-        let message = self.decode_message(&body_bytes)?;
+        // 12. Decode response
+        let mut message: Res = self.decode_message(&body_bytes)?;
 
-        // 12. Extract metadata
+        // 12. Apply interceptor to response
+        {
+            let ctx = ResponseContext::new(procedure, &response_headers);
+            self.interceptor.intercept_response(&ctx, &mut message)?;
+        }
+
+        // 14. Extract metadata
         let metadata = Metadata::new(response_headers);
 
         Ok(ConnectResponse::new(message, metadata))
@@ -421,8 +435,8 @@ impl<I: Intercept> ConnectClient<I> {
         options: CallOptions,
     ) -> Result<ConnectResponse<Res>, ClientError>
     where
-        Req: Message + Serialize,
-        Res: Message + DeserializeOwned + Default,
+        Req: Message + Serialize + Clone + 'static,
+        Res: Message + DeserializeOwned + Default + 'static,
     {
         #[cfg(feature = "tracing")]
         let _span = info_span!(
@@ -434,13 +448,7 @@ impl<I: Intercept> ConnectClient<I> {
         )
         .entered();
 
-        // 1. Encode request body
-        let body = self.encode_message(request)?;
-
-        // 2. Maybe compress
-        let (body, compressed) = self.maybe_compress(body)?;
-
-        // 3. Build headers
+        // 1. Build headers (before RPC interceptor so it can modify them)
         let mut headers = http::HeaderMap::new();
         headers.insert(
             http::header::CONTENT_TYPE,
@@ -450,14 +458,6 @@ impl<I: Intercept> ConnectClient<I> {
             CONNECT_PROTOCOL_VERSION_HEADER,
             CONNECT_PROTOCOL_VERSION.parse().unwrap(),
         );
-
-        // Add Content-Encoding if compressed
-        if compressed {
-            headers.insert(
-                header::CONTENT_ENCODING,
-                self.request_encoding.as_str().parse().unwrap(),
-            );
-        }
 
         // Add Connect-Timeout-Ms header (options timeout overrides default)
         let effective_timeout = options.timeout.or(self.default_timeout);
@@ -474,17 +474,32 @@ impl<I: Intercept> ConnectClient<I> {
             }
         }
 
-        // 4. Apply interceptors
+        // 2. Apply interceptor to request
+        let mut request = request.clone();
         {
-            let mut ctx = InterceptContext::new(procedure, &mut headers);
-            self.interceptors.before_request(&mut ctx)?;
+            let mut ctx = RequestContext::new(procedure, &mut headers);
+            self.interceptor.intercept_request(&mut ctx, &mut request)?;
         }
 
-        // 5. Build URL (strip leading slash from procedure to avoid double slashes)
+        // 3. Encode request body
+        let body = self.encode_message(&request)?;
+
+        // 5. Maybe compress
+        let (body, compressed) = self.maybe_compress(body)?;
+
+        // Add Content-Encoding if compressed
+        if compressed {
+            headers.insert(
+                header::CONTENT_ENCODING,
+                self.request_encoding.as_str().parse().unwrap(),
+            );
+        }
+
+        // 6. Build URL (strip leading slash from procedure to avoid double slashes)
         let procedure = procedure.strip_prefix('/').unwrap_or(procedure);
         let url = format!("{}/{}", self.base_url, procedure);
 
-        // 6. Build HTTP request
+        // 7. Build HTTP request
         let mut req_builder = Request::builder().method(Method::POST).uri(&url);
 
         // Copy headers
@@ -502,7 +517,7 @@ impl<I: Intercept> ConnectClient<I> {
             .body(TransportBody::full(body))
             .map_err(|e| ClientError::Protocol(format!("failed to build request: {}", e)))?;
 
-        // 7. Send request (with client-side timeout if configured)
+        // 8. Send request (with client-side timeout if configured)
         let response = if let Some(t) = effective_timeout {
             timeout(t, self.transport.request(req))
                 .await
@@ -511,12 +526,9 @@ impl<I: Intercept> ConnectClient<I> {
             self.transport.request(req).await?
         };
 
-        // 8. Check response status
+        // 9. Check response status
         let status = response.status();
         let response_headers = response.headers().clone();
-
-        // Apply after_response interceptors
-        self.interceptors.after_response(&response_headers);
 
         if !status.is_success() {
             let body_bytes = response
@@ -528,7 +540,7 @@ impl<I: Intercept> ConnectClient<I> {
             return Err(decompress_and_parse_error(status, &response_headers, body_bytes));
         }
 
-        // 9. Handle response decompression
+        // 10. Handle response decompression
         let content_encoding = response_headers
             .get(header::CONTENT_ENCODING)
             .and_then(|v| v.to_str().ok());
@@ -540,7 +552,7 @@ impl<I: Intercept> ConnectClient<I> {
             ))
         })?;
 
-        // 10. Get response body
+        // 11. Get response body
         let body_bytes = response
             .into_body()
             .collect()
@@ -557,10 +569,16 @@ impl<I: Intercept> ConnectClient<I> {
             body_bytes
         };
 
-        // 11. Decode response
-        let message = self.decode_message(&body_bytes)?;
+        // 12. Decode response
+        let mut message: Res = self.decode_message(&body_bytes)?;
 
-        // 12. Extract metadata
+        // 12. Apply interceptor to response
+        {
+            let ctx = ResponseContext::new(procedure, &response_headers);
+            self.interceptor.intercept_response(&ctx, &mut message)?;
+        }
+
+        // 14. Extract metadata
         let metadata = Metadata::new(response_headers);
 
         Ok(ConnectResponse::new(message, metadata))
@@ -684,11 +702,12 @@ impl<I: Intercept> ConnectClient<I> {
             }
         }
 
-        // Apply interceptors
+        // Apply interceptors (header-only for streaming initial request)
         let mut interceptor_headers = http::HeaderMap::new();
         {
-            let mut ctx = InterceptContext::new(procedure, &mut interceptor_headers);
-            self.interceptors.before_request(&mut ctx)?;
+            let mut ctx = RequestContext::new(procedure, &mut interceptor_headers);
+            // Use a unit placeholder - streaming interceptors use on_stream_send for messages
+            self.interceptor.intercept_request(&mut ctx, &mut ())?;
         }
         for (name, value) in interceptor_headers.iter() {
             req_builder = req_builder.header(name, value);
@@ -854,11 +873,12 @@ impl<I: Intercept> ConnectClient<I> {
             }
         }
 
-        // Apply interceptors
+        // Apply interceptors (header-only for streaming initial request)
         let mut interceptor_headers = http::HeaderMap::new();
         {
-            let mut ctx = InterceptContext::new(procedure, &mut interceptor_headers);
-            self.interceptors.before_request(&mut ctx)?;
+            let mut ctx = RequestContext::new(procedure, &mut interceptor_headers);
+            // Use a unit placeholder - streaming interceptors use on_stream_send for messages
+            self.interceptor.intercept_request(&mut ctx, &mut ())?;
         }
         for (name, value) in interceptor_headers.iter() {
             req_builder = req_builder.header(name, value);
@@ -1025,11 +1045,12 @@ impl<I: Intercept> ConnectClient<I> {
             }
         }
 
-        // Apply interceptors
+        // Apply interceptors (header-only for streaming initial request)
         let mut interceptor_headers = http::HeaderMap::new();
         {
-            let mut ctx = InterceptContext::new(procedure, &mut interceptor_headers);
-            self.interceptors.before_request(&mut ctx)?;
+            let mut ctx = RequestContext::new(procedure, &mut interceptor_headers);
+            // Use a unit placeholder - streaming interceptors use on_stream_send for messages
+            self.interceptor.intercept_request(&mut ctx, &mut ())?;
         }
         for (name, value) in interceptor_headers.iter() {
             req_builder = req_builder.header(name, value);
@@ -1210,11 +1231,12 @@ impl<I: Intercept> ConnectClient<I> {
             }
         }
 
-        // Apply interceptors
+        // Apply interceptors (header-only for streaming initial request)
         let mut interceptor_headers = http::HeaderMap::new();
         {
-            let mut ctx = InterceptContext::new(procedure, &mut interceptor_headers);
-            self.interceptors.before_request(&mut ctx)?;
+            let mut ctx = RequestContext::new(procedure, &mut interceptor_headers);
+            // Use a unit placeholder - streaming interceptors use on_stream_send for messages
+            self.interceptor.intercept_request(&mut ctx, &mut ())?;
         }
         for (name, value) in interceptor_headers.iter() {
             req_builder = req_builder.header(name, value);
@@ -1439,11 +1461,12 @@ impl<I: Intercept> ConnectClient<I> {
             }
         }
 
-        // Apply interceptors
+        // Apply interceptors (header-only for streaming initial request)
         let mut interceptor_headers = http::HeaderMap::new();
         {
-            let mut ctx = InterceptContext::new(procedure, &mut interceptor_headers);
-            self.interceptors.before_request(&mut ctx)?;
+            let mut ctx = RequestContext::new(procedure, &mut interceptor_headers);
+            // Use a unit placeholder - streaming interceptors use on_stream_send for messages
+            self.interceptor.intercept_request(&mut ctx, &mut ())?;
         }
         for (name, value) in interceptor_headers.iter() {
             req_builder = req_builder.header(name, value);
@@ -1628,11 +1651,12 @@ impl<I: Intercept> ConnectClient<I> {
             }
         }
 
-        // Apply interceptors
+        // Apply interceptors (header-only for streaming initial request)
         let mut interceptor_headers = http::HeaderMap::new();
         {
-            let mut ctx = InterceptContext::new(procedure, &mut interceptor_headers);
-            self.interceptors.before_request(&mut ctx)?;
+            let mut ctx = RequestContext::new(procedure, &mut interceptor_headers);
+            // Use a unit placeholder - streaming interceptors use on_stream_send for messages
+            self.interceptor.intercept_request(&mut ctx, &mut ())?;
         }
         for (name, value) in interceptor_headers.iter() {
             req_builder = req_builder.header(name, value);

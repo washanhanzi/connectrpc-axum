@@ -594,8 +594,9 @@ pub use error::ClientError;
 
 // Re-export from config module
 pub use config::{
-    CallOptions, Chain, ExponentialBackoff, HeaderInterceptor, Intercept, InterceptContext,
-    Interceptor, RetryPolicy, retry, retry_with_policy,
+    CallOptions, Chain, ClosureInterceptor, ExponentialBackoff, HeaderInterceptor, HeaderWrapper,
+    Interceptor, InterceptorInternal, MessageInterceptor, MessageWrapper, RequestContext,
+    ResponseContext, RetryPolicy, StreamContext, StreamType, retry, retry_with_policy,
 };
 
 // Re-export from request module

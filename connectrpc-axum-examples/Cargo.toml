@@ -151,6 +151,11 @@ path = "src/bin/client/bidi-stream-client.rs"
 name = "interceptor-test"
 path = "src/bin/interceptor-test.rs"
 
+# Streaming interceptor client test - verifies interceptors work with all streaming types
+[[bin]]
+name = "streaming-interceptor-client"
+path = "src/bin/client/streaming-interceptor-client.rs"
+
 # Connect protocol bidi streaming server
 [[bin]]
 name = "connect-bidi-stream"
