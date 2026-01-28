@@ -86,11 +86,13 @@ pub fn generate_connect_client(
                             request: &#request_type,
                         ) -> Result<
                             connectrpc_axum_client::ConnectResponse<
-                                connectrpc_axum_client::Streaming<
+                                connectrpc_axum_client::InterceptingStreaming<
                                     connectrpc_axum_client::FrameDecoder<
                                         impl ::futures::Stream<Item = Result<connectrpc_axum_client::Bytes, connectrpc_axum_client::ClientError>> + Unpin + use<'_>,
                                         #response_type
-                                    >
+                                    >,
+                                    #response_type,
+                                    ()
                                 >
                             >,
                             connectrpc_axum_client::ClientError
@@ -145,11 +147,13 @@ pub fn generate_connect_client(
                             request: S,
                         ) -> Result<
                             connectrpc_axum_client::ConnectResponse<
-                                connectrpc_axum_client::Streaming<
+                                connectrpc_axum_client::InterceptingStreaming<
                                     connectrpc_axum_client::FrameDecoder<
                                         impl ::futures::Stream<Item = Result<connectrpc_axum_client::Bytes, connectrpc_axum_client::ClientError>> + Unpin + use<'_, S>,
                                         #response_type
-                                    >
+                                    >,
+                                    #response_type,
+                                    ()
                                 >
                             >,
                             connectrpc_axum_client::ClientError

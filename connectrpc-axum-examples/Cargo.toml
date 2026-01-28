@@ -156,6 +156,11 @@ path = "src/bin/interceptor-test.rs"
 name = "streaming-interceptor-client"
 path = "src/bin/client/streaming-interceptor-client.rs"
 
+# Message-level interceptor test - verifies per-message interception (Issue #29)
+[[bin]]
+name = "message-interceptor-client"
+path = "src/bin/client/message-interceptor-client.rs"
+
 # Connect protocol bidi streaming server
 [[bin]]
 name = "connect-bidi-stream"

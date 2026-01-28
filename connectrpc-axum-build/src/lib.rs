@@ -42,6 +42,8 @@ impl BuildMarker for Disabled {
 pub struct CompileBuilder<Connect = Enabled, Tonic = Disabled, TonicClient = Disabled, ConnectClient = Disabled> {
     includes_dir: PathBuf,
     out_dir: Option<PathBuf>,
+    #[cfg(feature = "fetch-protoc")]
+    protoc_path: Option<PathBuf>,
     prost_config: Option<Box<dyn FnOnce(&mut prost_build::Config)>>,
     #[cfg(feature = "tonic")]
     tonic_config: Option<Box<dyn FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder>>,
@@ -84,6 +86,8 @@ impl<T, TC, CC> CompileBuilder<Enabled, T, TC, CC> {
         CompileBuilder {
             includes_dir: self.includes_dir,
             out_dir: self.out_dir,
+            #[cfg(feature = "fetch-protoc")]
+            protoc_path: self.protoc_path,
             prost_config: self.prost_config,
             #[cfg(feature = "tonic")]
             tonic_config: None,
@@ -108,6 +112,8 @@ impl<TC, CC> CompileBuilder<Enabled, Disabled, TC, CC> {
         CompileBuilder {
             includes_dir: self.includes_dir,
             out_dir: self.out_dir,
+            #[cfg(feature = "fetch-protoc")]
+            protoc_path: self.protoc_path,
             prost_config: self.prost_config,
             tonic_config: self.tonic_config,
             #[cfg(feature = "tonic-client")]
@@ -188,7 +194,7 @@ impl<C, T, TC, CC> CompileBuilder<C, T, TC, CC> {
     /// }
     /// ```
     #[cfg(feature = "fetch-protoc")]
-    pub fn fetch_protoc(self, version: Option<&str>, path: Option<&Path>) -> Result<Self> {
+    pub fn fetch_protoc(mut self, version: Option<&str>, path: Option<&Path>) -> Result<Self> {
         let version = version.unwrap_or("31.1");
         let out_dir = match path {
             Some(p) => p.to_path_buf(),
@@ -202,12 +208,7 @@ impl<C, T, TC, CC> CompileBuilder<C, T, TC, CC> {
         let protoc_path = protoc_fetcher::protoc(version, &out_dir)
             .map_err(|e| std::io::Error::other(format!("failed to fetch protoc: {e}")))?;
 
-        // SAFETY: This is called from build.rs which runs single-threaded before compilation.
-        // No other threads exist that could be reading environment variables concurrently.
-        unsafe {
-            std::env::set_var("PROTOC", protoc_path);
-        }
-
+        self.protoc_path = Some(protoc_path);
         Ok(self)
     }
 
@@ -287,6 +288,8 @@ impl<C, T, CC> CompileBuilder<C, T, Disabled, CC> {
         CompileBuilder {
             includes_dir: self.includes_dir,
             out_dir: self.out_dir,
+            #[cfg(feature = "fetch-protoc")]
+            protoc_path: self.protoc_path,
             prost_config: self.prost_config,
             #[cfg(feature = "tonic")]
             tonic_config: self.tonic_config,
@@ -373,6 +376,8 @@ impl<C, T, TC> CompileBuilder<C, T, TC, Disabled> {
         CompileBuilder {
             includes_dir: self.includes_dir,
             out_dir: self.out_dir,
+            #[cfg(feature = "fetch-protoc")]
+            protoc_path: self.protoc_path,
             prost_config: self.prost_config,
             #[cfg(feature = "tonic")]
             tonic_config: self.tonic_config,
@@ -413,6 +418,12 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBu
         // Apply user's prost configuration first
         if let Some(config_fn) = self.prost_config {
             config_fn(&mut config);
+        }
+
+        // Set protoc executable if fetched (internal config takes precedence)
+        #[cfg(feature = "fetch-protoc")]
+        if let Some(ref protoc) = self.protoc_path {
+            config.protoc_executable(protoc);
         }
 
         // Always generate descriptor set for pbjson-build (internal config takes precedence)
@@ -822,6 +833,8 @@ pub fn compile_dir(includes_dir: impl AsRef<Path>) -> CompileBuilder {
     CompileBuilder {
         includes_dir: includes_dir.as_ref().to_path_buf(),
         out_dir: None,
+        #[cfg(feature = "fetch-protoc")]
+        protoc_path: None,
         prost_config: None,
         #[cfg(feature = "tonic")]
         tonic_config: None,

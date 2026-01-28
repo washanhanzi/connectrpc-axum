@@ -550,6 +550,10 @@ fn get_cross_impl_tests() -> Vec<CrossImplTest> {
             name: "Cross-Impl: Rust Typed Client → Go Server",
             client_bin: "typed-client",
         },
+        CrossImplTest {
+            name: "Cross-Impl: Message Interceptor Client → Go Server",
+            client_bin: "message-interceptor-client",
+        },
     ]
 }
 

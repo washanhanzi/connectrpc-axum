@@ -59,6 +59,7 @@ export default defineConfig({
               ]
             },
             { text: 'Axum Router', link: '/guide/axum-router' },
+            { text: 'Client', link: '/guide/client' },
             {
               text: 'Tonic gRPC',
               link: '/guide/tonic',

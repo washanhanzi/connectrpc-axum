@@ -603,7 +603,10 @@ pub use config::{
 pub use request::FrameEncoder;
 
 // Re-export from response module
-pub use response::{ConnectResponse, FrameDecoder, Metadata, Streaming};
+pub use response::{
+    ConnectResponse, FrameDecoder, InterceptingSendStream, InterceptingStream,
+    InterceptingStreaming, Metadata, Streaming,
+};
 
 // Re-export transport types at the top level for convenience
 pub use transport::{HyperTransport, HyperTransportBuilder, TlsClientConfig, TransportBody};

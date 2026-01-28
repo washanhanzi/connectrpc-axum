@@ -4,6 +4,9 @@
 //! - Issue #28: Interceptors work correctly (streaming tested via existing client tests)
 //! - Issue #29: RPC-level interceptors (not HTTP-level middleware) are implemented
 //!
+//! For per-message streaming interception tests, see:
+//! - message-interceptor-client: Comprehensive test for on_stream_send/on_stream_receive
+//!
 //! For streaming tests with interceptors, use the existing client test binaries
 //! which connect to externally running servers:
 //! - server-stream-client
