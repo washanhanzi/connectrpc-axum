@@ -6,6 +6,17 @@ use std::path::{Path, PathBuf};
 /// Code generation module for service builders.
 mod r#gen;
 
+/// Source of proto files - either auto-discovered from a directory or explicit file list.
+enum ProtoSource {
+    /// Auto-discover all .proto files in this directory recursively.
+    Directory(PathBuf),
+    /// Explicit list of proto files and include directories.
+    Files {
+        protos: Vec<PathBuf>,
+        includes: Vec<PathBuf>,
+    },
+}
+
 // ============================================================================
 // Type-state marker types for phantom data
 // ============================================================================
@@ -39,17 +50,21 @@ impl BuildMarker for Disabled {
 /// - `ConnectClient`: Whether to generate typed Connect RPC client code
 ///
 /// Default state is `CompileBuilder<Enabled, Disabled, Disabled, Disabled>` (Connect handlers only).
+///
+/// Multiple proto sources can be chained together using [`compile_dir`](CompileBuilder::compile_dir)
+/// and [`compile_protos`](CompileBuilder::compile_protos) methods. Each source is compiled
+/// independently while sharing the same configuration.
 pub struct CompileBuilder<Connect = Enabled, Tonic = Disabled, TonicClient = Disabled, ConnectClient = Disabled> {
-    includes_dir: PathBuf,
+    sources: Vec<ProtoSource>,
     out_dir: Option<PathBuf>,
     #[cfg(feature = "fetch-protoc")]
     protoc_path: Option<PathBuf>,
-    prost_config: Option<Box<dyn FnOnce(&mut prost_build::Config)>>,
+    prost_config: Option<Box<dyn Fn(&mut prost_build::Config)>>,
     #[cfg(feature = "tonic")]
-    tonic_config: Option<Box<dyn FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder>>,
+    tonic_config: Option<Box<dyn Fn(tonic_prost_build::Builder) -> tonic_prost_build::Builder>>,
     #[cfg(feature = "tonic-client")]
     tonic_client_config:
-        Option<Box<dyn FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder>>,
+        Option<Box<dyn Fn(tonic_prost_build::Builder) -> tonic_prost_build::Builder>>,
     _marker: PhantomData<(Connect, Tonic, TonicClient, ConnectClient)>,
 }
 
@@ -84,7 +99,7 @@ impl<T, TC, CC> CompileBuilder<Enabled, T, TC, CC> {
     /// ```
     pub fn no_connect_server(self) -> CompileBuilder<Disabled, Disabled, TC, Disabled> {
         CompileBuilder {
-            includes_dir: self.includes_dir,
+            sources: self.sources,
             out_dir: self.out_dir,
             #[cfg(feature = "fetch-protoc")]
             protoc_path: self.protoc_path,
@@ -110,7 +125,7 @@ impl<TC, CC> CompileBuilder<Enabled, Disabled, TC, CC> {
     /// tonic server stubs depend on the Connect service module.
     pub fn with_tonic(self) -> CompileBuilder<Enabled, Enabled, TC, CC> {
         CompileBuilder {
-            includes_dir: self.includes_dir,
+            sources: self.sources,
             out_dir: self.out_dir,
             #[cfg(feature = "fetch-protoc")]
             protoc_path: self.protoc_path,
@@ -161,7 +176,7 @@ impl<C, TC, CC> CompileBuilder<C, Enabled, TC, CC> {
     /// ```
     pub fn with_tonic_prost_config<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder + 'static,
+        F: Fn(tonic_prost_build::Builder) -> tonic_prost_build::Builder + 'static,
     {
         self.tonic_config = Some(Box::new(f));
         self
@@ -173,6 +188,54 @@ impl<C, TC, CC> CompileBuilder<C, Enabled, TC, CC> {
 // ============================================================================
 
 impl<C, T, TC, CC> CompileBuilder<C, T, TC, CC> {
+    /// Add another directory of proto files to compile.
+    ///
+    /// Auto-discovers all `.proto` files in the directory recursively.
+    /// Each source is compiled independently while sharing the same configuration.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     connectrpc_axum_build::compile_dir("proto1")
+    ///         .compile_dir("proto2")  // Add another directory
+    ///         .compile()?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn compile_dir(mut self, dir: impl AsRef<Path>) -> Self {
+        self.sources
+            .push(ProtoSource::Directory(dir.as_ref().to_path_buf()));
+        self
+    }
+
+    /// Add specific proto files to compile.
+    ///
+    /// Each source is compiled independently while sharing the same configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `protos` - Proto files to compile
+    /// * `includes` - Directories to search for imports
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     connectrpc_axum_build::compile_dir("proto")
+    ///         .compile_protos(&["other/service.proto"], &["other"])  // Add explicit files
+    ///         .compile()?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn compile_protos<P: AsRef<Path>>(mut self, protos: &[P], includes: &[P]) -> Self {
+        self.sources.push(ProtoSource::Files {
+            protos: protos.iter().map(|p| p.as_ref().to_path_buf()).collect(),
+            includes: includes.iter().map(|p| p.as_ref().to_path_buf()).collect(),
+        });
+        self
+    }
+
     /// Fetch and configure the protoc compiler.
     ///
     /// Downloads the specified version of protoc and sets the `PROTOC` environment
@@ -234,7 +297,7 @@ impl<C, T, TC, CC> CompileBuilder<C, T, TC, CC> {
     /// ```
     pub fn with_prost_config<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(&mut prost_build::Config) + 'static,
+        F: Fn(&mut prost_build::Config) + 'static,
     {
         self.prost_config = Some(Box::new(f));
         self
@@ -286,7 +349,7 @@ impl<C, T, CC> CompileBuilder<C, T, Disabled, CC> {
     /// ```
     pub fn with_tonic_client(self) -> CompileBuilder<C, T, Enabled, CC> {
         CompileBuilder {
-            includes_dir: self.includes_dir,
+            sources: self.sources,
             out_dir: self.out_dir,
             #[cfg(feature = "fetch-protoc")]
             protoc_path: self.protoc_path,
@@ -326,7 +389,7 @@ impl<C, T, CC> CompileBuilder<C, T, Enabled, CC> {
     /// ```
     pub fn with_tonic_client_config<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(tonic_prost_build::Builder) -> tonic_prost_build::Builder + 'static,
+        F: Fn(tonic_prost_build::Builder) -> tonic_prost_build::Builder + 'static,
     {
         self.tonic_client_config = Some(Box::new(f));
         self
@@ -374,7 +437,7 @@ impl<C, T, TC> CompileBuilder<C, T, TC, Disabled> {
     /// - `HelloWorldServiceClientBuilder` for configuration
     pub fn with_connect_client(self) -> CompileBuilder<C, T, TC, Enabled> {
         CompileBuilder {
-            includes_dir: self.includes_dir,
+            sources: self.sources,
             out_dir: self.out_dir,
             #[cfg(feature = "fetch-protoc")]
             protoc_path: self.protoc_path,
@@ -393,8 +456,26 @@ impl<C, T, TC> CompileBuilder<C, T, TC, Disabled> {
 // ============================================================================
 
 impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBuilder<C, T, TC, CC> {
-    /// Execute code generation.
-    pub fn compile(self) -> Result<()> {
+    /// Execute code generation for all proto sources.
+    ///
+    /// Each source is compiled independently while sharing the same configuration.
+    pub fn compile(&self) -> Result<()> {
+        if self.sources.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "No proto sources specified",
+            ));
+        }
+
+        for source in &self.sources {
+            self.compile_source(source)?;
+        }
+        Ok(())
+    }
+
+    fn compile_source(&self, source: &ProtoSource) -> Result<()> {
+        use std::fs;
+
         let generate_handlers = C::VALUE;
         let grpc = T::VALUE;
         #[cfg(feature = "tonic-client")]
@@ -407,6 +488,9 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBu
         };
         let descriptor_path = format!("{}/descriptor.bin", out_dir);
 
+        // Resolve proto files and includes from the source
+        let (proto_files, includes) = Self::resolve_source(source)?;
+
         // -------- Pass 1: prost + connect (conditionally) --------
         let mut config = prost_build::Config::default();
 
@@ -415,8 +499,8 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBu
             config.out_dir(&out_dir);
         }
 
-        // Apply user's prost configuration first
-        if let Some(config_fn) = self.prost_config {
+        // Apply user's prost configuration
+        if let Some(ref config_fn) = self.prost_config {
             config_fn(&mut config);
         }
 
@@ -429,18 +513,6 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBu
         // Always generate descriptor set for pbjson-build (internal config takes precedence)
         config.file_descriptor_set_path(&descriptor_path);
 
-        let mut proto_files = Vec::new();
-        discover_proto_files(&self.includes_dir, &mut proto_files)?;
-        if proto_files.is_empty() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!(
-                    "No .proto files found in directory: {}",
-                    self.includes_dir.display()
-                ),
-            ));
-        }
-
         // Generate connect (and tonic-compatible wrapper builders if requested) in first pass
         if generate_handlers || connect_client {
             let service_generator = AxumConnectServiceGenerator::new()
@@ -449,18 +521,76 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBu
                 .with_connect_client(connect_client);
             config.service_generator(Box::new(service_generator));
         }
-        config.compile_protos(&proto_files, &[&self.includes_dir])?;
+
+        let include_refs: Vec<&Path> = includes.iter().map(|p| p.as_path()).collect();
+        config.compile_protos(&proto_files, &include_refs)?;
 
         // -------- Pass 1.5: pbjson serde implementations (always) --------
-        // Use pbjson-build to generate proper serde implementations that handle oneof correctly
+        Self::generate_pbjson(&out_dir, &descriptor_path)?;
+
+        // -------- Pass 2: tonic server-only (feature + user requested) --------
+        #[cfg(feature = "tonic")]
+        if grpc {
+            Self::generate_tonic_server(
+                &out_dir,
+                &descriptor_path,
+                &proto_files,
+                &includes,
+                self.tonic_config.as_ref(),
+            )?;
+        }
+
+        // -------- Pass 3: tonic client (feature + user requested) --------
+        #[cfg(feature = "tonic-client")]
+        if grpc_client {
+            Self::generate_tonic_client(
+                &out_dir,
+                &descriptor_path,
+                &proto_files,
+                &includes,
+                self.tonic_client_config.as_ref(),
+            )?;
+        }
+
+        // Clean up descriptor file after all passes complete
+        let _ = fs::remove_file(&descriptor_path);
+
+        Ok(())
+    }
+
+    fn resolve_source(source: &ProtoSource) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
+        match source {
+            ProtoSource::Directory(dir) => {
+                let mut protos = Vec::new();
+                discover_proto_files(dir, &mut protos)?;
+                if protos.is_empty() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("No .proto files found in directory: {}", dir.display()),
+                    ));
+                }
+                Ok((protos, vec![dir.clone()]))
+            }
+            ProtoSource::Files { protos, includes } => {
+                if protos.is_empty() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "No proto files specified",
+                    ));
+                }
+                Ok((protos.clone(), includes.clone()))
+            }
+        }
+    }
+
+    fn generate_pbjson(out_dir: &str, descriptor_path: &str) -> Result<()> {
         use std::fs;
-        let descriptor_bytes = fs::read(&descriptor_path)
+
+        let descriptor_bytes = fs::read(descriptor_path)
             .map_err(|e| std::io::Error::other(format!("read descriptor: {e}")))?;
 
         let mut pbjson_builder = pbjson_build::Builder::new();
-        if self.out_dir.is_some() {
-            pbjson_builder.out_dir(&out_dir);
-        }
+        pbjson_builder.out_dir(out_dir);
         pbjson_builder
             .register_descriptors(&descriptor_bytes)
             .map_err(|e| std::io::Error::other(format!("register descriptors: {e}")))?
@@ -469,7 +599,7 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBu
 
         // Append pbjson serde implementations to main generated files
         // pbjson-build generates {package}.serde.rs files that need to be included
-        for entry in fs::read_dir(&out_dir)? {
+        for entry in fs::read_dir(out_dir)? {
             let entry = entry?;
             let path = entry.path();
             if let Some(file_name) = path.file_name().and_then(|n| n.to_str())
@@ -492,156 +622,163 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBu
             }
         }
 
-        // -------- Pass 2: tonic server-only (feature + user requested) --------
-        #[cfg(feature = "tonic")]
-        if grpc {
-            use prost::Message; // for descriptor decode
+        Ok(())
+    }
 
-            let bytes = fs::read(&descriptor_path)
-                .map_err(|e| std::io::Error::other(format!("read descriptor: {e}")))?;
-            let fds = prost_types::FileDescriptorSet::decode(bytes.as_slice())
-                .map_err(|e| std::io::Error::other(format!("decode descriptor: {e}")))?;
+    #[cfg(feature = "tonic")]
+    fn generate_tonic_server(
+        out_dir: &str,
+        descriptor_path: &str,
+        proto_files: &[PathBuf],
+        includes: &[PathBuf],
+        tonic_config: Option<&Box<dyn Fn(tonic_prost_build::Builder) -> tonic_prost_build::Builder>>,
+    ) -> Result<()> {
+        use prost::Message;
+        use std::fs;
 
-            let type_refs = collect_type_refs(&fds);
+        let bytes = fs::read(descriptor_path)
+            .map_err(|e| std::io::Error::other(format!("read descriptor: {e}")))?;
+        let fds = prost_types::FileDescriptorSet::decode(bytes.as_slice())
+            .map_err(|e| std::io::Error::other(format!("decode descriptor: {e}")))?;
 
-            // Generate tonic server stubs referencing existing types
-            let temp_out_dir = format!("{}/tonic_server", out_dir);
-            fs::create_dir_all(&temp_out_dir)?;
-            let mut builder = tonic_prost_build::configure();
+        let type_refs = collect_type_refs(&fds);
 
-            // Apply user's tonic configuration first
-            if let Some(config_fn) = self.tonic_config {
-                builder = config_fn(builder);
-            }
+        // Generate tonic server stubs referencing existing types
+        let temp_out_dir = format!("{}/tonic_server", out_dir);
+        fs::create_dir_all(&temp_out_dir)?;
+        let mut builder = tonic_prost_build::configure();
 
-            // Apply internal config (takes precedence)
-            builder = builder
-                .build_client(false)
-                .build_server(true)
-                .compile_well_known_types(false)
-                .out_dir(&temp_out_dir);
-
-            // Add extern_path mappings for generated types
-            for tr in &type_refs {
-                builder = builder.extern_path(&tr.full, &tr.rust);
-            }
-            let proto_paths: Vec<&str> = proto_files.iter().map(|p| p.to_str().unwrap()).collect();
-            builder.compile_protos(
-                &proto_paths,
-                &[self.includes_dir.as_path().to_str().unwrap()],
-            )?;
-
-            // Append server code to first-pass files
-            // Iterate generated files in tonic_server/ instead of proto_files
-            // because prost-build generates one file per package, not per proto file
-            for entry in fs::read_dir(&temp_out_dir)? {
-                let entry = entry?;
-                let tonic_file = entry.path();
-
-                // Only process .rs files
-                if tonic_file.extension().and_then(|s| s.to_str()) == Some("rs") {
-                    let filename = tonic_file.file_name().unwrap().to_str().unwrap();
-                    let first_pass_file = format!("{}/{}", out_dir, filename);
-
-                    // Skip if no matching first-pass file (warn instead of error)
-                    if !std::path::Path::new(&first_pass_file).exists() {
-                        println!(
-                            "cargo:warning=Skipping tonic server file '{}': no matching first-pass file. \
-                             This may indicate mismatched package declarations between prost-build and tonic-build.",
-                            filename
-                        );
-                        continue;
-                    }
-
-                    // Append tonic server code to first-pass file
-                    let mut content = fs::read_to_string(&first_pass_file)?;
-                    content.push_str(
-                        "\n// --- Tonic gRPC server stubs (extern_path reused messages) ---\n",
-                    );
-                    content.push_str(&fs::read_to_string(&tonic_file)?);
-                    fs::write(&first_pass_file, content)?;
-                }
-            }
-
-            // Clean up temporary tonic artifacts so include!(concat!(env!("OUT_DIR"), "/<file>.rs")) users don't see extras.
-            let _ = fs::remove_dir_all(&temp_out_dir);
+        // Apply user's tonic configuration
+        if let Some(config_fn) = tonic_config {
+            builder = config_fn(builder);
         }
 
-        // -------- Pass 3: tonic client (feature + user requested) --------
-        #[cfg(feature = "tonic-client")]
-        if grpc_client {
-            use prost::Message; // for descriptor decode
+        // Apply internal config (takes precedence)
+        builder = builder
+            .build_client(false)
+            .build_server(true)
+            .compile_well_known_types(false)
+            .out_dir(&temp_out_dir);
 
-            let bytes = fs::read(&descriptor_path)
-                .map_err(|e| std::io::Error::other(format!("read descriptor: {e}")))?;
-            let fds = prost_types::FileDescriptorSet::decode(bytes.as_slice())
-                .map_err(|e| std::io::Error::other(format!("decode descriptor: {e}")))?;
+        // Add extern_path mappings for generated types
+        for tr in &type_refs {
+            builder = builder.extern_path(&tr.full, &tr.rust);
+        }
+        let proto_paths: Vec<&str> = proto_files.iter().map(|p| p.to_str().unwrap()).collect();
+        let include_strs: Vec<&str> = includes.iter().map(|p| p.to_str().unwrap()).collect();
+        builder.compile_protos(&proto_paths, &include_strs)?;
 
-            let type_refs = collect_type_refs(&fds);
+        // Append server code to first-pass files
+        for entry in fs::read_dir(&temp_out_dir)? {
+            let entry = entry?;
+            let tonic_file = entry.path();
 
-            // Generate tonic client stubs referencing existing types
-            let temp_out_dir = format!("{}/tonic_client", out_dir);
-            fs::create_dir_all(&temp_out_dir)?;
-            let mut builder = tonic_prost_build::configure();
+            // Only process .rs files
+            if tonic_file.extension().and_then(|s| s.to_str()) == Some("rs") {
+                let filename = tonic_file.file_name().unwrap().to_str().unwrap();
+                let first_pass_file = format!("{}/{}", out_dir, filename);
 
-            // Apply user's tonic client configuration first
-            if let Some(config_fn) = self.tonic_client_config {
-                builder = config_fn(builder);
-            }
-
-            // Apply internal config (takes precedence)
-            builder = builder
-                .build_client(true)
-                .build_server(false)
-                .compile_well_known_types(false)
-                .out_dir(&temp_out_dir);
-
-            // Add extern_path mappings for generated types
-            for tr in &type_refs {
-                builder = builder.extern_path(&tr.full, &tr.rust);
-            }
-            let proto_paths: Vec<&str> = proto_files.iter().map(|p| p.to_str().unwrap()).collect();
-            builder.compile_protos(
-                &proto_paths,
-                &[self.includes_dir.as_path().to_str().unwrap()],
-            )?;
-
-            // Append client code to first-pass files
-            for entry in fs::read_dir(&temp_out_dir)? {
-                let entry = entry?;
-                let tonic_file = entry.path();
-
-                // Only process .rs files
-                if tonic_file.extension().and_then(|s| s.to_str()) == Some("rs") {
-                    let filename = tonic_file.file_name().unwrap().to_str().unwrap();
-                    let first_pass_file = format!("{}/{}", out_dir, filename);
-
-                    // Skip if no matching first-pass file (warn instead of error)
-                    if !std::path::Path::new(&first_pass_file).exists() {
-                        println!(
-                            "cargo:warning=Skipping tonic client file '{}': no matching first-pass file. \
-                             This may indicate mismatched package declarations between prost-build and tonic-build.",
-                            filename
-                        );
-                        continue;
-                    }
-
-                    // Append tonic client code to first-pass file
-                    let mut content = fs::read_to_string(&first_pass_file)?;
-                    content.push_str(
-                        "\n// --- Tonic gRPC client stubs (extern_path reused messages) ---\n",
+                // Skip if no matching first-pass file (warn instead of error)
+                if !std::path::Path::new(&first_pass_file).exists() {
+                    println!(
+                        "cargo:warning=Skipping tonic server file '{}': no matching first-pass file. \
+                         This may indicate mismatched package declarations between prost-build and tonic-build.",
+                        filename
                     );
-                    content.push_str(&fs::read_to_string(&tonic_file)?);
-                    fs::write(&first_pass_file, content)?;
+                    continue;
                 }
-            }
 
-            // Clean up temporary tonic client artifacts
-            let _ = fs::remove_dir_all(&temp_out_dir);
+                // Append tonic server code to first-pass file
+                let mut content = fs::read_to_string(&first_pass_file)?;
+                content.push_str(
+                    "\n// --- Tonic gRPC server stubs (extern_path reused messages) ---\n",
+                );
+                content.push_str(&fs::read_to_string(&tonic_file)?);
+                fs::write(&first_pass_file, content)?;
+            }
         }
 
-        // Clean up descriptor file after all passes complete
-        let _ = std::fs::remove_file(&descriptor_path);
+        // Clean up temporary tonic artifacts
+        let _ = fs::remove_dir_all(&temp_out_dir);
+
+        Ok(())
+    }
+
+    #[cfg(feature = "tonic-client")]
+    fn generate_tonic_client(
+        out_dir: &str,
+        descriptor_path: &str,
+        proto_files: &[PathBuf],
+        includes: &[PathBuf],
+        tonic_client_config: Option<&Box<dyn Fn(tonic_prost_build::Builder) -> tonic_prost_build::Builder>>,
+    ) -> Result<()> {
+        use prost::Message;
+        use std::fs;
+
+        let bytes = fs::read(descriptor_path)
+            .map_err(|e| std::io::Error::other(format!("read descriptor: {e}")))?;
+        let fds = prost_types::FileDescriptorSet::decode(bytes.as_slice())
+            .map_err(|e| std::io::Error::other(format!("decode descriptor: {e}")))?;
+
+        let type_refs = collect_type_refs(&fds);
+
+        // Generate tonic client stubs referencing existing types
+        let temp_out_dir = format!("{}/tonic_client", out_dir);
+        fs::create_dir_all(&temp_out_dir)?;
+        let mut builder = tonic_prost_build::configure();
+
+        // Apply user's tonic client configuration
+        if let Some(config_fn) = tonic_client_config {
+            builder = config_fn(builder);
+        }
+
+        // Apply internal config (takes precedence)
+        builder = builder
+            .build_client(true)
+            .build_server(false)
+            .compile_well_known_types(false)
+            .out_dir(&temp_out_dir);
+
+        // Add extern_path mappings for generated types
+        for tr in &type_refs {
+            builder = builder.extern_path(&tr.full, &tr.rust);
+        }
+        let proto_paths: Vec<&str> = proto_files.iter().map(|p| p.to_str().unwrap()).collect();
+        let include_strs: Vec<&str> = includes.iter().map(|p| p.to_str().unwrap()).collect();
+        builder.compile_protos(&proto_paths, &include_strs)?;
+
+        // Append client code to first-pass files
+        for entry in fs::read_dir(&temp_out_dir)? {
+            let entry = entry?;
+            let tonic_file = entry.path();
+
+            // Only process .rs files
+            if tonic_file.extension().and_then(|s| s.to_str()) == Some("rs") {
+                let filename = tonic_file.file_name().unwrap().to_str().unwrap();
+                let first_pass_file = format!("{}/{}", out_dir, filename);
+
+                // Skip if no matching first-pass file (warn instead of error)
+                if !std::path::Path::new(&first_pass_file).exists() {
+                    println!(
+                        "cargo:warning=Skipping tonic client file '{}': no matching first-pass file. \
+                         This may indicate mismatched package declarations between prost-build and tonic-build.",
+                        filename
+                    );
+                    continue;
+                }
+
+                // Append tonic client code to first-pass file
+                let mut content = fs::read_to_string(&first_pass_file)?;
+                content.push_str(
+                    "\n// --- Tonic gRPC client stubs (extern_path reused messages) ---\n",
+                );
+                content.push_str(&fs::read_to_string(&tonic_file)?);
+                fs::write(&first_pass_file, content)?;
+            }
+        }
+
+        // Clean up temporary tonic client artifacts
+        let _ = fs::remove_dir_all(&temp_out_dir);
 
         Ok(())
     }
@@ -788,6 +925,10 @@ fn recurse_enum(
 /// This provides the best developer experience by only requiring the includes path.
 /// Use `.with_prost_config()` if you need custom configuration.
 ///
+/// Multiple sources can be chained using the builder's [`compile_dir`](CompileBuilder::compile_dir)
+/// and [`compile_protos`](CompileBuilder::compile_protos) methods. Each source is compiled
+/// independently while sharing the same configuration.
+///
 /// # Examples
 ///
 /// Basic usage with default configuration:
@@ -829,9 +970,75 @@ fn recurse_enum(
 ///     Ok(())
 /// }
 /// ```
-pub fn compile_dir(includes_dir: impl AsRef<Path>) -> CompileBuilder {
+///
+/// Chaining multiple sources:
+/// ```rust,ignore
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     connectrpc_axum_build::compile_dir("proto1")
+///         .compile_dir("proto2")
+///         .compile_protos(&["other/service.proto"], &["other"])
+///         .with_tonic()
+///         .compile()?;
+///     Ok(())
+/// }
+/// ```
+pub fn compile_dir(dir: impl AsRef<Path>) -> CompileBuilder {
     CompileBuilder {
-        includes_dir: includes_dir.as_ref().to_path_buf(),
+        sources: vec![ProtoSource::Directory(dir.as_ref().to_path_buf())],
+        out_dir: None,
+        #[cfg(feature = "fetch-protoc")]
+        protoc_path: None,
+        prost_config: None,
+        #[cfg(feature = "tonic")]
+        tonic_config: None,
+        #[cfg(feature = "tonic-client")]
+        tonic_client_config: None,
+        _marker: PhantomData,
+    }
+}
+
+/// Compile specific proto files with explicit include directories.
+///
+/// Use this when you need fine-grained control over which proto files to compile
+/// and where to find their dependencies.
+///
+/// Multiple sources can be chained using the builder's [`compile_dir`](CompileBuilder::compile_dir)
+/// and [`compile_protos`](CompileBuilder::compile_protos) methods. Each source is compiled
+/// independently while sharing the same configuration.
+///
+/// # Arguments
+///
+/// * `protos` - Proto files to compile
+/// * `includes` - Directories to search for imports
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     connectrpc_axum_build::compile_protos(
+///         &["proto/service.proto", "proto/messages.proto"],
+///         &["proto", "third_party"],
+///     ).compile()?;
+///     Ok(())
+/// }
+/// ```
+///
+/// Chaining with other sources:
+/// ```rust,ignore
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     connectrpc_axum_build::compile_protos(&["api/v1/service.proto"], &["api"])
+///         .compile_dir("internal/proto")
+///         .with_tonic()
+///         .compile()?;
+///     Ok(())
+/// }
+/// ```
+pub fn compile_protos<P: AsRef<Path>>(protos: &[P], includes: &[P]) -> CompileBuilder {
+    CompileBuilder {
+        sources: vec![ProtoSource::Files {
+            protos: protos.iter().map(|p| p.as_ref().to_path_buf()).collect(),
+            includes: includes.iter().map(|p| p.as_ref().to_path_buf()).collect(),
+        }],
         out_dir: None,
         #[cfg(feature = "fetch-protoc")]
         protoc_path: None,
