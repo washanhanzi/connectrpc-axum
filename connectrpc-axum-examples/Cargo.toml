@@ -58,11 +58,6 @@ required-features = ["tonic"]
 name = "streaming-error-repro"
 path = "src/bin/streaming-error-repro.rs"
 
-# Protocol version validation example
-[[bin]]
-name = "protocol-version"
-path = "src/bin/protocol-version.rs"
-
 # Extractor rejection with ConnectError (Connect protocol encoded)
 [[bin]]
 name = "extractor-connect-error"
@@ -87,11 +82,6 @@ path = "src/bin/unary-error-metadata.rs"
 [[bin]]
 name = "error-details"
 path = "src/bin/error-details.rs"
-
-# Axum router test (verifies add_axum_router bypasses ConnectLayer)
-[[bin]]
-name = "axum-router"
-path = "src/bin/axum-router.rs"
 
 # Streaming compression with gzip (basic test)
 [[bin]]
@@ -146,11 +136,6 @@ path = "src/bin/client/client-stream-client.rs"
 name = "bidi-stream-client"
 path = "src/bin/client/bidi-stream-client.rs"
 
-# Interceptor integration test - verifies #28 and #29 are resolved
-[[bin]]
-name = "interceptor-test"
-path = "src/bin/interceptor-test.rs"
-
 # Streaming interceptor client test - verifies interceptors work with all streaming types
 [[bin]]
 name = "streaming-interceptor-client"
@@ -160,6 +145,11 @@ path = "src/bin/client/streaming-interceptor-client.rs"
 [[bin]]
 name = "message-interceptor-client"
 path = "src/bin/client/message-interceptor-client.rs"
+
+# Typed interceptor test - verifies typed interceptor system on generated clients
+[[bin]]
+name = "typed-interceptor-client"
+path = "src/bin/client/typed-interceptor-client.rs"
 
 # Connect protocol bidi streaming server
 [[bin]]
@@ -171,59 +161,33 @@ path = "src/bin/connect-bidi-stream.rs"
 name = "connect-client-stream"
 path = "src/bin/connect-client-stream.rs"
 
-# Integration test runner - orchestrates all tests with dynamic port allocation
-[[bin]]
-name = "integration-test"
-path = "src/bin/integration-test.rs"
-
 [dependencies]
-# Application dependency for error handling
-anyhow = "1"
-# Application dependency for creating async streams
-async-stream = "0.3.5"
-# Required: Used by generated service builders
-axum = "0.8.0"
-# Required: Core ConnectRPC runtime
+anyhow = { workspace = true }
+async-stream = { workspace = true }
+axum = { workspace = true }
 connectrpc-axum = { path = "../connectrpc-axum" }
-# ConnectRPC client for testing
 connectrpc-axum-client = { path = "../connectrpc-axum-client" }
-# Required: Used by generated code for async streams
-futures = "0.3.31"
-# Application dependency for HTTP server
-hyper = { version = "1.8", features = ["server", "http2"] }
-# Application dependency for HTTP/2 h2c support
-hyper-util = { version = "0.1", features = [
+futures = { workspace = true }
+hyper = { workspace = true, features = ["server", "http2"] }
+hyper-util = { workspace = true, features = [
   "tokio",
   "server",
   "server-auto",
   "http2",
 ] }
-# Required: Used by generated code for JSON serialization
 pbjson = { workspace = true }
-# Required: Used by generated code for well-known types JSON serialization
 pbjson-types = { workspace = true }
-# Required: Used by generated code for message types
 prost = { workspace = true }
-# Required: Used for encoding well-known types (Duration, etc.)
 prost-types = { workspace = true }
-# Required: Used by generated code for serialization
-serde = { version = "1.0", features = ["derive"] }
-# Application dependency for JSON handling
-serde_json = "1"
-# Application dependency for async runtime
-tokio = { version = "1.47", features = ["full"] }
-# Required: Used by generated code for streaming support
-tokio-stream = "0.1"
-# Required when using tonic feature: Used by generated gRPC server code
-tonic = { version = "0.14", optional = true }
-# Required when using tonic feature: Used by generated Tonic code
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-stream = { workspace = true }
+tonic = { workspace = true, optional = true }
 tonic-prost = { workspace = true, optional = true }
-# Required for grpc-web example: gRPC-Web support
-tonic-web = { version = "0.14" }
-# Required: Used by generated service code
+tonic-web = { workspace = true }
 tower = { workspace = true }
-# Application dependency for logging (used in extractor examples)
-tracing-subscriber = "0.3"
+tracing-subscriber = { workspace = true }
 
 [build-dependencies]
 connectrpc-axum-build = { path = "../connectrpc-axum-build" }

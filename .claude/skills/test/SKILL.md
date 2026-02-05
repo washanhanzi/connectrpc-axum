@@ -5,57 +5,122 @@ description: Run the complete test suite for connectrpc-axum. Use when the user 
 
 # test
 
-Run the complete test suite for connectrpc-axum using cargo-make.
+Run the cross-implementation protocol test suite (`connectrpc-axum-test`).
 
 ## Quick Start
 
 ```bash
-# Run all tests (unit + Rust client + Go client)
 cargo make test
 ```
 
-This runs the integration test runner which:
-- Allocates unique ports dynamically for each test (prevents port conflicts)
-- Runs unit tests, Rust client tests, and Go client tests
-- Provides colored output with pass/fail status
-- Ensures proper cleanup of server processes
+## How It Works
 
-## Cargo Make Commands
+Uses Unix domain sockets (Linux abstract sockets or file-based). Each test scenario runs against **all 4 client/server combinations** concurrently:
 
-| Command | Description |
-|---------|-------------|
-| `cargo make test` | Run all tests |
-| `cargo make test-unit` | Run unit tests only |
-| `cargo make test-rust-client` | Run Rust client integration tests (against Rust servers) |
-| `cargo make test-go-client` | Run Go client integration tests (against Rust servers) |
-| `cargo make test-cross-impl` | Run cross-implementation tests (Rust clients against Go server) |
-| `cargo make test-verbose` | Run all tests with verbose output |
-| `cargo make test-filter <pattern>` | Run tests matching a filter |
+- Rust client against Rust server
+- Rust client against Go server
+- Go client against Rust server
+- Go client against Go server
 
-### Examples
+## Architecture
 
-```bash
-# Run all tests (unit + Rust client + Go client + cross-impl)
-cargo make test
+Each test scenario follows this pattern:
 
-# Run only unit tests (fastest)
-cargo make test-unit
+1. **Orchestrator** (`src/<test_name>.rs`): Builds Go binaries, spawns Rust + Go servers, runs all 4 client combos concurrently, reports results.
+2. **Rust server** (`src/<test_name>/server.rs`): Implements the service under test using `connectrpc-axum`.
+3. **Rust client** (`src/<test_name>/client.rs`): Raw HTTP client test cases using `hyper` over Unix sockets.
+4. **Go server** (`go/<test_name>/server/server.go`): Implements the same service using `connect-go`.
+5. **Go client** (`go/<test_name>/client/client.go`): Go HTTP client test cases over Unix sockets.
 
-# Run only Rust client tests (against Rust servers)
-cargo make test-rust-client
+## Source Files
 
-# Run only Go client tests (against Rust servers)
-cargo make test-go-client
+```
+connectrpc-axum-test/
+├── src/
+│   ├── main.rs                          # Entry point, creates TestSockets, calls orchestrators
+│   ├── socket.rs                        # Unix socket abstraction (abstract on Linux, file-based otherwise)
+│   ├── server_timeout.rs                # Orchestrator example
+│   └── server_timeout/
+│       ├── server.rs                    # Rust server
+│       └── client.rs                    # Rust client
+├── go/
+│   └── server_timeout/
+│       ├── server/server.go             # Go server
+│       └── client/client.go             # Go client
+├── proto/
+│   ├── hello.proto                      # HelloWorldService
+│   └── echo.proto                       # EchoService
+├── build.rs                             # Proto compilation via connectrpc-axum-build
+├── Cargo.toml
+├── buf.yaml
+├── buf.gen.yaml
+└── integration-tests.feature            # BDD spec for all test scenarios
+```
 
-# Run only cross-implementation tests (Rust clients against Go server)
-cargo make test-cross-impl
+## Current Test Scenarios (32 total)
 
-# Run with verbose output
-cargo make test-verbose
+| Scenario | Description |
+|----------|-------------|
+| server_timeout | Connect-Timeout-Ms header enforcement |
+| connect_unary | Basic unary request/response |
+| connect_server_stream | Server streaming |
+| connect_client_stream | Client streaming |
+| connect_bidi_stream | Bidirectional streaming |
+| error_details | Structured error details |
+| protocol_version | Connect-Protocol-Version validation |
+| streaming_error | Streaming errors in EndStream frame |
+| send_max_bytes | Unary send size limit |
+| receive_max_bytes | Unary receive size limit (64 bytes) |
+| receive_max_bytes_5mb | Unary receive size limit (5MB) |
+| receive_max_bytes_unlimited | No receive size limit |
+| streaming_send_max_bytes | Streaming send size limit |
+| streaming_receive_max_bytes | Streaming receive size limit |
+| get_request | HTTP GET for idempotent methods |
+| unary_error_metadata | Custom metadata on error responses |
+| endstream_metadata | Metadata in EndStream frames |
+| extractor_connect_error | Custom extractor with ConnectError rejection |
+| extractor_http_response | Custom extractor with plain HTTP rejection |
+| streaming_extractor | Server stream extractor (x-api-key) |
+| streaming_extractor_client | Client stream extractor (x-api-key) |
+| protocol_negotiation | Unsupported content-type returns 415 |
+| axum_router | Plain axum routes alongside Connect RPC |
+| streaming_compression_gzip | Gzip compression on server streams |
+| client_streaming_compression | Gzip compression on client streams |
+| compression_algos | Deflate, brotli, zstd compression (Rust server only) |
+| tonic_unary | Tonic interop: unary via Connect + gRPC |
+| tonic_server_stream | Tonic interop: server streaming via Connect + gRPC |
+| tonic_bidi_server | Tonic interop: bidi + client streaming via gRPC |
+| grpc_web | gRPC-Web protocol support |
+| tonic_extractor | Tonic extractor across Connect + gRPC |
+| idempotency_get_connect_client | connect-go client HTTP GET for idempotent methods |
 
-# Filter tests by name
-cargo make test-filter TestConnectUnary
-cargo make test-filter "Unary"
+## Adding a New Test Scenario
+
+Follow the `server_timeout` pattern:
+
+1. Create orchestrator: `src/<test_name>.rs` (build Go binaries, spawn servers, run clients)
+2. Create Rust server: `src/<test_name>/server.rs`
+3. Create Rust client: `src/<test_name>/client.rs` with `TestCase` structs
+4. Create Go server: `go/<test_name>/server/server.go`
+5. Create Go client: `go/<test_name>/client/client.go`
+6. Register in `src/main.rs`: add module declaration and call `<test_name>::run()`
+7. Document in `integration-tests.feature`
+
+## Output Format
+
+```
+Building Go binaries...
+=== Timeout Integration Tests ===
+  PASS  Rust Server + Go Client
+  PASS  Go Server + Go Client
+  PASS  Rust Server + Rust Client / short timeout fails
+  PASS  Rust Server + Rust Client / long timeout succeeds
+  PASS  Rust Server + Rust Client / no timeout succeeds
+  PASS  Go Server + Rust Client / short timeout fails
+  PASS  Go Server + Rust Client / long timeout succeeds
+  PASS  Go Server + Rust Client / no timeout succeeds
+
+8/8 passed
 ```
 
 ## CI Commands
@@ -64,101 +129,20 @@ cargo make test-filter "Unary"
 # Full CI: fmt-check + clippy + all tests
 cargo make ci
 
-# Quick CI: fmt-check + clippy + unit tests only
+# Quick CI: fmt-check + clippy only
 cargo make ci-quick
-```
-
-## Direct Integration Test Runner (Alternative)
-
-If cargo-make is not installed, run the integration test binary directly:
-
-```bash
-# Run all tests
-cargo run -p connectrpc-axum-examples --bin integration-test
-
-# Run only unit tests
-cargo run -p connectrpc-axum-examples --bin integration-test -- --unit
-
-# Run only Rust client tests
-cargo run -p connectrpc-axum-examples --bin integration-test -- --rust-client
-
-# Run only Go client tests
-cargo run -p connectrpc-axum-examples --bin integration-test -- --go-client
-
-# Filter tests by name
-cargo run -p connectrpc-axum-examples --bin integration-test -- --filter TestConnectUnary
-
-# Verbose output
-cargo run -p connectrpc-axum-examples --bin integration-test -- -v
 ```
 
 ## Success Criteria
 
-The test runner shows a summary:
-
-```
-=== Summary ===
-
-Passed: X
-Failed: 0
-Total: X
-```
-
-All tests should pass (Failed: 0).
-
-## Test Categories
-
-### Unit Tests
-- All crate unit tests and doc tests via `cargo test --workspace`
-
-### Rust Client Tests (against Rust servers)
-| Test | Server | Description |
-|------|--------|-------------|
-| unary-client | connect-unary | Unary calls (JSON + Proto encoding) |
-| server-stream-client | connect-server-stream | Server streaming |
-| client-stream-client | connect-client-stream | Client streaming |
-| bidi-stream-client | connect-bidi-stream | Bidirectional streaming |
-
-### Go Client Tests (against Rust servers)
-| Test | Server | Protocol |
-|------|--------|----------|
-| TestConnectUnary | connect-unary | Connect |
-| TestConnectServerStream | connect-server-stream | Connect |
-| TestTonicUnary* | tonic-unary | Connect + gRPC |
-| TestTonicServerStream* | tonic-server-stream | Connect + gRPC |
-| TestTonicBidiStream* | tonic-bidi-stream | Connect + gRPC |
-| TestGRPCWeb | grpc-web | gRPC-Web |
-| TestProtocolVersion | protocol-version | Connect |
-| TestTimeout | timeout | Connect |
-| TestExtractor* | extractor-* | Connect |
-| TestStreamingErrorHandling | streaming-error-repro | Connect |
-
-### Cross-Implementation Tests (Rust clients against Go server)
-| Rust Client | Description |
-|-------------|-------------|
-| unary-client | Unary calls (JSON + Proto encoding) |
-| server-stream-client | Server streaming |
-| client-stream-client | Client streaming |
-| bidi-stream-client | Bidirectional streaming |
-| typed-client | Typed client API |
-
-The Go server is located in `connectrpc-axum-examples/go-server/` and implements all proto services (HelloWorldService, EchoService) using connect-go.
+All scenarios should show `X/X passed` (zero failures).
 
 ## Failure Handling
 
-**Test runner failures**: Check the failed test name and output shown below it.
+**Test failures**: Check the failed test name and output shown below it.
 
-**Port issues**: The integration test runner uses dynamic ports, so port conflicts should not occur.
+**Build errors**: Run `cargo build -p connectrpc-axum-test` first.
 
-**Build errors**: Run `cargo make build-examples` or `cargo build -p connectrpc-axum-examples --features tonic` first.
+**Go dependency issues**: Run `go mod tidy` in `connectrpc-axum-test/go/`.
 
-**Go dependency issues**: Run `go mod tidy` in `connectrpc-axum-examples/go-client/`.
-
-**cargo-make not installed**: Install with `cargo install cargo-make` or use the direct integration test runner commands above.
-
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PORT` | Server listen port | 3000 |
-| `SERVER_URL` | Client target URL | http://localhost:3000 |
+**cargo-make not installed**: Install with `cargo install cargo-make` or run directly with `cargo run -p connectrpc-axum-test`.

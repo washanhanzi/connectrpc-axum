@@ -17,6 +17,26 @@ pub type MethodInfo = (
     proc_macro2::TokenStream, // idempotency_tokens
 );
 
+/// RPC type classification
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RpcType {
+    Unary,
+    ServerStream,
+    ClientStream,
+    BidiStream,
+}
+
+impl RpcType {
+    fn from_streaming(is_server_streaming: bool, is_client_streaming: bool) -> Self {
+        match (is_server_streaming, is_client_streaming) {
+            (false, false) => RpcType::Unary,
+            (true, false) => RpcType::ServerStream,
+            (false, true) => RpcType::ClientStream,
+            (true, true) => RpcType::BidiStream,
+        }
+    }
+}
+
 /// Generate the Connect RPC client code.
 pub fn generate_connect_client(
     service: &Service,
@@ -50,6 +70,200 @@ pub fn generate_connect_client(
     let client_name = format_ident!("{}Client", service.name);
     let client_builder_name = format_ident!("{}ClientBuilder", service.name);
 
+    // Generate interceptor fields (shared between client and builder structs)
+    let interceptor_fields: Vec<_> = method_info
+        .iter()
+        .map(|(method_name, request_type, response_type, _, _, is_ss, is_cs, _, _)| {
+            let field_name = format_ident!("{}_interceptors", method_name);
+            let rpc_type = RpcType::from_streaming(*is_ss, *is_cs);
+
+            match rpc_type {
+                RpcType::Unary => quote! {
+                    #field_name: connectrpc_axum_client::UnaryInterceptors<#request_type, #response_type>
+                },
+                RpcType::ServerStream => quote! {
+                    #field_name: connectrpc_axum_client::ServerStreamInterceptors<#request_type, #response_type>
+                },
+                RpcType::ClientStream => quote! {
+                    #field_name: connectrpc_axum_client::ClientStreamInterceptors<#request_type, #response_type>
+                },
+                RpcType::BidiStream => quote! {
+                    #field_name: connectrpc_axum_client::BidiStreamInterceptors<#request_type, #response_type>
+                },
+            }
+        })
+        .collect();
+
+    // Generate builder interceptor field initializers (all default)
+    let builder_interceptor_defaults: Vec<_> = method_info
+        .iter()
+        .map(|(method_name, _, _, _, _, _, _, _, _)| {
+            let field_name = format_ident!("{}_interceptors", method_name);
+            quote! { #field_name: Default::default() }
+        })
+        .collect();
+
+    // Generate builder methods for setting interceptors
+    let builder_interceptor_methods: Vec<_> = method_info
+        .iter()
+        .flat_map(|(method_name, request_type, response_type, _, _, is_ss, is_cs, _, _)| {
+            let field_name = format_ident!("{}_interceptors", method_name);
+            let rpc_type = RpcType::from_streaming(*is_ss, *is_cs);
+
+            let mut methods = Vec::new();
+
+            match rpc_type {
+                RpcType::Unary => {
+                    // with_before_{method}
+                    let before_method = format_ident!("with_before_{}", method_name);
+                    methods.push(quote! {
+                        /// Set a "before" interceptor for this method.
+                        ///
+                        /// The interceptor is called before the request is sent, allowing
+                        /// modification of headers and the request body.
+                        pub fn #before_method<I>(mut self, interceptor: I) -> Self
+                        where
+                            I: connectrpc_axum_client::TypedMutInterceptor<#request_type>,
+                        {
+                            self.#field_name.before = Some(::std::sync::Arc::new(interceptor));
+                            self
+                        }
+                    });
+
+                    // with_after_{method}
+                    let after_method = format_ident!("with_after_{}", method_name);
+                    methods.push(quote! {
+                        /// Set an "after" interceptor for this method.
+                        ///
+                        /// The interceptor is called after the response is received, allowing
+                        /// inspection or modification of the response body.
+                        pub fn #after_method<I>(mut self, interceptor: I) -> Self
+                        where
+                            I: for<'a> connectrpc_axum_client::TypedInterceptor<connectrpc_axum_client::ResponseContext<'a>, #response_type>,
+                        {
+                            self.#field_name.after = Some(::std::sync::Arc::new(interceptor));
+                            self
+                        }
+                    });
+                }
+                RpcType::ServerStream => {
+                    // with_before_{method}
+                    let before_method = format_ident!("with_before_{}", method_name);
+                    methods.push(quote! {
+                        /// Set a "before" interceptor for this method.
+                        ///
+                        /// The interceptor is called before the request is sent, allowing
+                        /// modification of headers and the request body.
+                        pub fn #before_method<I>(mut self, interceptor: I) -> Self
+                        where
+                            I: connectrpc_axum_client::TypedMutInterceptor<#request_type>,
+                        {
+                            self.#field_name.before = Some(::std::sync::Arc::new(interceptor));
+                            self
+                        }
+                    });
+
+                    // with_on_receive_{method}
+                    let on_receive_method = format_ident!("with_on_receive_{}", method_name);
+                    methods.push(quote! {
+                        /// Set an "on_receive" interceptor for this method.
+                        ///
+                        /// The interceptor is called for each message received from the server stream.
+                        pub fn #on_receive_method<I>(mut self, interceptor: I) -> Self
+                        where
+                            I: for<'a> connectrpc_axum_client::TypedInterceptor<connectrpc_axum_client::StreamContext<'a>, #response_type>,
+                        {
+                            self.#field_name.on_receive = Some(::std::sync::Arc::new(interceptor));
+                            self
+                        }
+                    });
+                }
+                RpcType::ClientStream => {
+                    // with_on_send_{method}
+                    let on_send_method = format_ident!("with_on_send_{}", method_name);
+                    methods.push(quote! {
+                        /// Set an "on_send" interceptor for this method.
+                        ///
+                        /// The interceptor is called for each message before it is sent to the server.
+                        pub fn #on_send_method<I>(mut self, interceptor: I) -> Self
+                        where
+                            I: for<'a> connectrpc_axum_client::TypedInterceptor<connectrpc_axum_client::StreamContext<'a>, #request_type>,
+                        {
+                            self.#field_name.on_send = Some(::std::sync::Arc::new(interceptor));
+                            self
+                        }
+                    });
+
+                    // with_after_{method}
+                    let after_method = format_ident!("with_after_{}", method_name);
+                    methods.push(quote! {
+                        /// Set an "after" interceptor for this method.
+                        ///
+                        /// The interceptor is called after the final response is received.
+                        pub fn #after_method<I>(mut self, interceptor: I) -> Self
+                        where
+                            I: for<'a> connectrpc_axum_client::TypedInterceptor<connectrpc_axum_client::ResponseContext<'a>, #response_type>,
+                        {
+                            self.#field_name.after = Some(::std::sync::Arc::new(interceptor));
+                            self
+                        }
+                    });
+                }
+                RpcType::BidiStream => {
+                    // with_on_send_{method}
+                    let on_send_method = format_ident!("with_on_send_{}", method_name);
+                    methods.push(quote! {
+                        /// Set an "on_send" interceptor for this method.
+                        ///
+                        /// The interceptor is called for each message before it is sent to the server.
+                        pub fn #on_send_method<I>(mut self, interceptor: I) -> Self
+                        where
+                            I: for<'a> connectrpc_axum_client::TypedInterceptor<connectrpc_axum_client::StreamContext<'a>, #request_type>,
+                        {
+                            self.#field_name.on_send = Some(::std::sync::Arc::new(interceptor));
+                            self
+                        }
+                    });
+
+                    // with_on_receive_{method}
+                    let on_receive_method = format_ident!("with_on_receive_{}", method_name);
+                    methods.push(quote! {
+                        /// Set an "on_receive" interceptor for this method.
+                        ///
+                        /// The interceptor is called for each message received from the server stream.
+                        pub fn #on_receive_method<I>(mut self, interceptor: I) -> Self
+                        where
+                            I: for<'a> connectrpc_axum_client::TypedInterceptor<connectrpc_axum_client::StreamContext<'a>, #response_type>,
+                        {
+                            self.#field_name.on_receive = Some(::std::sync::Arc::new(interceptor));
+                            self
+                        }
+                    });
+                }
+            }
+
+            methods
+        })
+        .collect();
+
+    // Generate interceptor field assignments in build()
+    let build_interceptor_assignments: Vec<_> = method_info
+        .iter()
+        .map(|(method_name, _, _, _, _, _, _, _, _)| {
+            let field_name = format_ident!("{}_interceptors", method_name);
+            quote! { #field_name: self.#field_name }
+        })
+        .collect();
+
+    // Generate interceptor field clone assignments for Clone impl
+    let clone_interceptor_assignments: Vec<_> = method_info
+        .iter()
+        .map(|(method_name, _, _, _, _, _, _, _, _)| {
+            let field_name = format_ident!("{}_interceptors", method_name);
+            quote! { #field_name: self.#field_name.clone() }
+        })
+        .collect();
+
     // Generate typed client methods for all RPC types
     let client_methods: Vec<_> = method_info
         .iter()
@@ -57,10 +271,11 @@ pub fn generate_connect_client(
             // Reference the procedure constant instead of hardcoding the path
             let const_name = format_ident!("{}", method_name.to_string().to_uppercase());
             let procedure_path = quote! { super::#procedures_mod_name::#const_name };
+            let interceptors_field = format_ident!("{}_interceptors", method_name);
+            let rpc_type = RpcType::from_streaming(*is_ss, *is_cs);
 
-            match (*is_ss, *is_cs) {
-                (false, false) => {
-                    // Unary RPC
+            match rpc_type {
+                RpcType::Unary => {
                     quote! {
                         /// Make a unary RPC call to this method.
                         ///
@@ -69,12 +284,34 @@ pub fn generate_connect_client(
                             &self,
                             request: &#request_type,
                         ) -> Result<connectrpc_axum_client::ConnectResponse<#response_type>, connectrpc_axum_client::ClientError> {
-                            self.inner.call_unary(#procedure_path, request).await
+                            let mut request = request.clone();
+
+                            // Before interceptor - may modify headers and request body
+                            let mut interceptor_headers = connectrpc_axum_client::HeaderMap::new();
+                            if let Some(ref interceptor) = self.#interceptors_field.before {
+                                let mut ctx = connectrpc_axum_client::RequestContext::new(#procedure_path, &mut interceptor_headers);
+                                interceptor.intercept(&mut ctx, &mut request)?;
+                            }
+
+                            let options = connectrpc_axum_client::CallOptions::new().headers(interceptor_headers);
+                            let mut response: connectrpc_axum_client::ConnectResponse<#response_type> =
+                                self.inner.call_unary_with_options(#procedure_path, &request, options).await?;
+
+                            // After interceptor
+                            if let Some(ref interceptor) = self.#interceptors_field.after {
+                                let response_headers = response.metadata().headers().clone();
+                                let ctx = connectrpc_axum_client::ResponseContext::new(
+                                    #procedure_path,
+                                    &response_headers,
+                                );
+                                interceptor.intercept(&ctx, response.get_mut())?;
+                            }
+
+                            Ok(response)
                         }
                     }
                 }
-                (true, false) => {
-                    // Server streaming RPC
+                RpcType::ServerStream => {
                     quote! {
                         /// Make a server streaming RPC call to this method.
                         ///
@@ -86,23 +323,47 @@ pub fn generate_connect_client(
                             request: &#request_type,
                         ) -> Result<
                             connectrpc_axum_client::ConnectResponse<
-                                connectrpc_axum_client::InterceptingStreaming<
+                                connectrpc_axum_client::TypedReceiveStreaming<
                                     connectrpc_axum_client::FrameDecoder<
                                         impl ::futures::Stream<Item = Result<connectrpc_axum_client::Bytes, connectrpc_axum_client::ClientError>> + Unpin + use<'_>,
                                         #response_type
                                     >,
-                                    #response_type,
-                                    ()
+                                    #response_type
                                 >
                             >,
                             connectrpc_axum_client::ClientError
                         > {
-                            self.inner.call_server_stream(#procedure_path, request).await
+                            let mut request = request.clone();
+
+                            // Before interceptor - may modify headers and request body
+                            let mut interceptor_headers = connectrpc_axum_client::HeaderMap::new();
+                            if let Some(ref interceptor) = self.#interceptors_field.before {
+                                let mut ctx = connectrpc_axum_client::RequestContext::new(#procedure_path, &mut interceptor_headers);
+                                interceptor.intercept(&mut ctx, &mut request)?;
+                            }
+
+                            let options = connectrpc_axum_client::CallOptions::new().headers(interceptor_headers.clone());
+                            let response = self.inner.call_server_stream_with_options(#procedure_path, &request, options).await?;
+
+                            // Get headers for context
+                            let response_headers = response.metadata().headers().clone();
+
+                            // Wrap the stream with typed interceptor
+                            let on_receive = self.#interceptors_field.on_receive.clone();
+                            Ok(response.map(|streaming| {
+                                connectrpc_axum_client::TypedReceiveStreaming::new(
+                                    streaming.get_inner(),
+                                    on_receive,
+                                    #procedure_path.to_string(),
+                                    connectrpc_axum_client::StreamType::ServerStream,
+                                    interceptor_headers,
+                                    response_headers,
+                                )
+                            }))
                         }
                     }
                 }
-                (false, true) => {
-                    // Client streaming RPC
+                RpcType::ClientStream => {
                     quote! {
                         /// Make a client streaming RPC call to this method.
                         ///
@@ -115,6 +376,11 @@ pub fn generate_connect_client(
                         /// # Returns
                         ///
                         /// Returns a single response wrapped in `ConnectResponse`.
+                        ///
+                        /// # Error Handling
+                        ///
+                        /// If an `on_send` interceptor returns an error, the stream is
+                        /// aborted and the error is returned immediately.
                         pub async fn #method_name<S>(
                             &self,
                             request: S,
@@ -122,12 +388,61 @@ pub fn generate_connect_client(
                         where
                             S: ::futures::Stream<Item = #request_type> + Send + Unpin + 'static,
                         {
-                            self.inner.call_client_stream(#procedure_path, request).await
+                            use ::futures::StreamExt;
+
+                            let on_send = self.#interceptors_field.on_send.clone();
+                            let procedure = #procedure_path.to_string();
+                            let interceptor_error: ::std::sync::Arc<::std::sync::Mutex<Option<connectrpc_axum_client::ClientError>>> =
+                                ::std::sync::Arc::new(::std::sync::Mutex::new(None));
+                            let err_capture = interceptor_error.clone();
+                            let request_headers = connectrpc_axum_client::HeaderMap::new();
+
+                            // Use scan to apply interceptor; abort stream on first error
+                            let wrapped = request.scan((), move |_state, mut msg| {
+                                if let Some(ref i) = on_send {
+                                    let ctx = connectrpc_axum_client::StreamContext::new(
+                                        &procedure,
+                                        connectrpc_axum_client::StreamType::ClientStream,
+                                        &request_headers,
+                                        None,
+                                    );
+                                    match i.intercept(&ctx, &mut msg) {
+                                        Ok(()) => ::std::future::ready(Some(msg)),
+                                        Err(e) => {
+                                            // Store error and terminate stream
+                                            *err_capture.lock().unwrap() = Some(e);
+                                            ::std::future::ready(None)
+                                        }
+                                    }
+                                } else {
+                                    ::std::future::ready(Some(msg))
+                                }
+                            });
+
+                            let options = connectrpc_axum_client::CallOptions::new();
+                            let mut response: connectrpc_axum_client::ConnectResponse<#response_type> =
+                                self.inner.call_client_stream_with_options(#procedure_path, wrapped, options).await?;
+
+                            // Check if on_send interceptor aborted the stream
+                            if let Some(e) = interceptor_error.lock().unwrap().take() {
+                                return Err(e);
+                            }
+
+                            // After interceptor
+                            if let Some(ref interceptor) = self.#interceptors_field.after {
+                                let response_headers = response.metadata().headers().clone();
+                                let ctx = connectrpc_axum_client::ResponseContext::new(
+                                    #procedure_path,
+                                    &response_headers,
+                                );
+                                interceptor.intercept(&ctx, response.get_mut())?;
+                            }
+
+                            Ok(response)
                         }
                     }
                 }
-                (true, true) => {
-                    // Bidirectional streaming RPC
+                RpcType::BidiStream => {
                     quote! {
                         /// Make a bidirectional streaming RPC call to this method.
                         ///
@@ -142,18 +457,23 @@ pub fn generate_connect_client(
                         ///
                         /// Returns a stream of response messages wrapped in `ConnectResponse`.
                         /// After the stream is consumed, trailers are available via `stream.trailers()`.
+                        ///
+                        /// # Error Handling
+                        ///
+                        /// If an `on_send` interceptor returns an error, the send stream is
+                        /// aborted (remaining messages are not sent). If an `on_receive`
+                        /// interceptor returns an error, it is yielded as a stream error item.
                         pub async fn #method_name<S>(
                             &self,
                             request: S,
                         ) -> Result<
                             connectrpc_axum_client::ConnectResponse<
-                                connectrpc_axum_client::InterceptingStreaming<
+                                connectrpc_axum_client::TypedReceiveStreaming<
                                     connectrpc_axum_client::FrameDecoder<
                                         impl ::futures::Stream<Item = Result<connectrpc_axum_client::Bytes, connectrpc_axum_client::ClientError>> + Unpin + use<'_, S>,
                                         #response_type
                                     >,
-                                    #response_type,
-                                    ()
+                                    #response_type
                                 >
                             >,
                             connectrpc_axum_client::ClientError
@@ -161,7 +481,50 @@ pub fn generate_connect_client(
                         where
                             S: ::futures::Stream<Item = #request_type> + Send + Unpin + 'static,
                         {
-                            self.inner.call_bidi_stream(#procedure_path, request).await
+                            use ::futures::StreamExt;
+
+                            // Wrap the input stream with on_send interceptor
+                            let on_send = self.#interceptors_field.on_send.clone();
+                            let procedure = #procedure_path.to_string();
+                            let request_headers = connectrpc_axum_client::HeaderMap::new();
+
+                            // Use scan to apply interceptor; abort stream on first error
+                            let wrapped = request.scan((), move |_state, mut msg| {
+                                if let Some(ref i) = on_send {
+                                    let ctx = connectrpc_axum_client::StreamContext::new(
+                                        &procedure,
+                                        connectrpc_axum_client::StreamType::BidiStream,
+                                        &request_headers,
+                                        None,
+                                    );
+                                    match i.intercept(&ctx, &mut msg) {
+                                        Ok(()) => ::std::future::ready(Some(msg)),
+                                        Err(_e) => ::std::future::ready(None), // Terminate send stream
+                                    }
+                                } else {
+                                    ::std::future::ready(Some(msg))
+                                }
+                            });
+
+                            let options = connectrpc_axum_client::CallOptions::new();
+                            let response = self.inner.call_bidi_stream_with_options(#procedure_path, wrapped, options).await?;
+
+                            // Get headers for context
+                            let response_headers = response.metadata().headers().clone();
+                            let req_headers = connectrpc_axum_client::HeaderMap::new();
+
+                            // Wrap the response stream with typed interceptor
+                            let on_receive = self.#interceptors_field.on_receive.clone();
+                            Ok(response.map(|streaming| {
+                                connectrpc_axum_client::TypedReceiveStreaming::new(
+                                    streaming.get_inner(),
+                                    on_receive,
+                                    #procedure_path.to_string(),
+                                    connectrpc_axum_client::StreamType::BidiStream,
+                                    req_headers,
+                                    response_headers,
+                                )
+                            }))
                         }
                     }
                 }
@@ -199,9 +562,20 @@ pub fn generate_connect_client(
             /// let response = client.say_hello(&request).await?;
             /// println!("Response: {:?}", response.into_inner());
             /// ```
-            #[derive(Debug, Clone)]
+            #[derive(Debug)]
             pub struct #client_name {
                 inner: connectrpc_axum_client::ConnectClient,
+                #(#interceptor_fields,)*
+            }
+
+            impl Clone for #client_name {
+                fn clone(&self) -> Self {
+                    Self {
+                        inner: self.inner.clone(),
+                        // Interceptors are wrapped in Arc, so cloning is cheap
+                        #(#clone_interceptor_assignments,)*
+                    }
+                }
             }
 
             impl #client_name {
@@ -227,11 +601,16 @@ pub fn generate_connect_client(
                 /// let client = #client_name::builder("http://localhost:3000")
                 ///     .use_proto()
                 ///     .timeout(std::time::Duration::from_secs(30))
+                ///     .with_before_say(|ctx, req| {
+                ///         // Validate request before sending
+                ///         Ok(())
+                ///     })
                 ///     .build()?;
                 /// ```
                 pub fn builder<S: Into<String>>(base_url: S) -> #client_builder_name {
                     #client_builder_name {
                         inner: connectrpc_axum_client::ConnectClient::builder(base_url),
+                        #(#builder_interceptor_defaults,)*
                     }
                 }
 
@@ -246,9 +625,17 @@ pub fn generate_connect_client(
             }
 
             /// Builder for configuring a [`#client_name`].
-            #[derive(Debug)]
             pub struct #client_builder_name {
                 inner: connectrpc_axum_client::ClientBuilder,
+                #(#interceptor_fields,)*
+            }
+
+            impl ::std::fmt::Debug for #client_builder_name {
+                fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                    f.debug_struct(stringify!(#client_builder_name))
+                        .field("inner", &self.inner)
+                        .finish_non_exhaustive()
+                }
             }
 
             impl #client_builder_name {
@@ -303,10 +690,13 @@ pub fn generate_connect_client(
                     self
                 }
 
+                #(#builder_interceptor_methods)*
+
                 /// Build the client.
                 pub fn build(self) -> Result<#client_name, connectrpc_axum_client::ClientBuildError> {
                     Ok(#client_name {
                         inner: self.inner.build()?,
+                        #(#build_interceptor_assignments,)*
                     })
                 }
             }

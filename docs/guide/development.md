@@ -6,7 +6,12 @@ This project includes [Claude Code skills](https://docs.anthropic.com/en/docs/cl
 
 | Skill | Description |
 |-------|-------------|
-| `submit-issue` | Handle questions, feature requests, and bug reports. Attempts to answer from documentation first, verifies bugs with tests, then submits GitHub issues when needed. |
-| `test` | Run the complete test suite including unit tests, doc tests, and Go client integration tests. |
+| `architecture` | Reference for project architecture. Use when you need to understand the codebase structure, module organization, request/response flow, or key types. |
 | `compare-repo` | Compare an external GitHub repository against connectrpc-axum. Analyzes features, architecture, and implementation to generate a comparison document. |
-| `sync-arch-doc` | Sync architecture documentation with main branch changes. Tracks the `docs/arch` branch against `main` and updates architecture docs accordingly. |
+| `connect-go-reference` | Reference the local `connect-go/` directory for ConnectRPC protocol implementation details. |
+| `create-integration-test` | Create integration tests for connectrpc-axum (Rust client tests or Rust server tests). |
+| `resolve-issue` | Investigate and resolve GitHub issues. Analyzes the issue, references architecture docs and connect-go implementation, then posts a resolution plan. |
+| `submit-issue` | Handle questions, feature requests, and bug reports. Attempts to answer from documentation first, verifies bugs with tests, then submits GitHub issues when needed. |
+| `sync-docs` | Sync VitePress documentation with main branch changes. Compares origin/docs against local main, analyzes new commits, and updates relevant documentation files. |
+| `test` | Run the complete test suite including unit tests, doc tests, and integration tests. |
+| `tonic-client-reference` | Reference the local `tonic/` directory for gRPC client implementation patterns. |

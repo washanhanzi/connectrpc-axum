@@ -594,9 +594,11 @@ pub use error::ClientError;
 
 // Re-export from config module
 pub use config::{
-    CallOptions, Chain, ClosureInterceptor, ExponentialBackoff, HeaderInterceptor, HeaderWrapper,
-    Interceptor, InterceptorInternal, MessageInterceptor, MessageWrapper, RequestContext,
-    ResponseContext, RetryPolicy, StreamContext, StreamType, retry, retry_with_policy,
+    BidiStreamInterceptors, CallOptions, Chain, ClientStreamInterceptors, ClosureInterceptor,
+    ExponentialBackoff, HeaderInterceptor, HeaderWrapper, Interceptor, InterceptorInternal,
+    MessageInterceptor, MessageWrapper, RequestContext, ResponseContext, RetryPolicy,
+    ServerStreamInterceptors, StreamContext, StreamType, TypedInterceptor, TypedMutInterceptor,
+    UnaryInterceptors, response_interceptor, retry, retry_with_policy, stream_interceptor,
 };
 
 // Re-export from request module
@@ -605,7 +607,7 @@ pub use request::FrameEncoder;
 // Re-export from response module
 pub use response::{
     ConnectResponse, FrameDecoder, InterceptingSendStream, InterceptingStream,
-    InterceptingStreaming, Metadata, Streaming,
+    InterceptingStreaming, Metadata, Streaming, TypedReceiveStreaming,
 };
 
 // Re-export transport types at the top level for convenience
@@ -618,3 +620,4 @@ pub use connectrpc_axum_core::{
 
 // Re-export types needed for generated streaming code
 pub use bytes::Bytes;
+pub use http::HeaderMap;

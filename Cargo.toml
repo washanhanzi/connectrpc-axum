@@ -6,10 +6,11 @@ members = [
   "connectrpc-axum-client",
   "connectrpc-axum-core",
   "connectrpc-axum-examples",
+  "connectrpc-axum-test",
 ]
 
 [workspace.package]
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 edition = "2024"
 repository = "https://github.com/washanhanzi/connectrpc-axum"
 
@@ -20,12 +21,18 @@ async-stream = "0.3"
 axum = "0.8"
 base64 = "0.22.1"
 bytes = "1"
-convert_case = "0.10"
+convert_case = "0.11"
 futures = "0.3.31"
 http = "1.1.0"
 http-body = "1.0"
 http-body-util = "0.1"
 hyper = "1.0"
+hyper-util = "0.1"
+hyper-rustls = { version = "0.27", default-features = false }
+pin-project-lite = "0.2"
+rustls = { version = "0.23", default-features = false }
+rustls-native-certs = "0.8"
+webpki-roots = "1"
 pbjson = "0.9"
 pbjson-build = "0.9"
 pbjson-types = "0.9"
@@ -38,7 +45,7 @@ quote = "1.0.38"
 rand = "0.9"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_qs = "0.15"
+serde_qs = "1.0"
 tokio = { version = "1", features = ["sync"] }
 tokio-stream = "0.1"
 tonic = "0.14"
@@ -49,6 +56,7 @@ tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", default-features = false }
 tower-service = "0.3"
 tracing = "0.1"
+tracing-subscriber = "0.3"
 flate2 = "1.0"
 brotli = "8"
 zstd = "0.13"

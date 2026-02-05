@@ -43,6 +43,8 @@
 //!     .build()?;
 //! ```
 
+use std::sync::Arc;
+
 use http::HeaderMap;
 use prost::Message;
 use serde::{Serialize, de::DeserializeOwned};
@@ -642,6 +644,360 @@ where
 {
     fn on_request(&self, ctx: &mut RequestContext) -> Result<(), ClientError> {
         (self.on_request)(ctx)
+    }
+}
+
+// ============================================================================
+// Typed Per-Method Interceptors
+// ============================================================================
+
+/// Typed interceptor with mutable context - used for "before" interception.
+///
+/// This trait allows intercepting requests before they are sent, with full
+/// type safety on the message body. The context is mutable, allowing
+/// modification of request headers.
+///
+/// # Example
+///
+/// ```ignore
+/// use connectrpc_axum_client::{TypedMutInterceptor, RequestContext, ClientError};
+///
+/// struct ValidateSentence;
+///
+/// impl TypedMutInterceptor<SayRequest> for ValidateSentence {
+///     fn intercept(&self, ctx: &mut RequestContext<'_>, body: &mut SayRequest) -> Result<(), ClientError> {
+///         if body.sentence.is_empty() {
+///             return Err(ClientError::invalid_argument("sentence required"));
+///         }
+///         Ok(())
+///     }
+/// }
+/// ```
+pub trait TypedMutInterceptor<Body>: Send + Sync + 'static {
+    /// Intercept the request before it is sent.
+    ///
+    /// Can modify headers via `ctx` or the request body directly.
+    /// Return an error to abort the RPC.
+    fn intercept(&self, ctx: &mut RequestContext<'_>, body: &mut Body) -> Result<(), ClientError>;
+}
+
+/// Typed interceptor with immutable context - used for "after", "on_send", "on_receive".
+///
+/// This trait allows intercepting responses or stream messages with full
+/// type safety. The context is immutable since headers cannot be modified
+/// after the request is sent.
+///
+/// # Example
+///
+/// ```ignore
+/// use connectrpc_axum_client::{TypedInterceptor, ResponseContext, ClientError};
+/// use std::sync::atomic::{AtomicUsize, Ordering};
+/// use std::sync::Arc;
+///
+/// struct ResponseCounter {
+///     count: Arc<AtomicUsize>,
+/// }
+///
+/// impl TypedInterceptor<ResponseContext<'_>, SayResponse> for ResponseCounter {
+///     fn intercept(&self, ctx: &ResponseContext<'_>, body: &mut SayResponse) -> Result<(), ClientError> {
+///         self.count.fetch_add(1, Ordering::Relaxed);
+///         Ok(())
+///     }
+/// }
+/// ```
+pub trait TypedInterceptor<Ctx, Body>: Send + Sync + 'static {
+    /// Intercept the message.
+    ///
+    /// Can inspect context and modify the body.
+    /// Return an error to signal failure.
+    fn intercept(&self, ctx: &Ctx, body: &mut Body) -> Result<(), ClientError>;
+}
+
+// ============================================================================
+// Blanket Implementations for Closures
+// ============================================================================
+
+impl<Body, F> TypedMutInterceptor<Body> for F
+where
+    Body: 'static,
+    F: Fn(&mut RequestContext<'_>, &mut Body) -> Result<(), ClientError> + Send + Sync + 'static,
+{
+    fn intercept(&self, ctx: &mut RequestContext<'_>, body: &mut Body) -> Result<(), ClientError> {
+        self(ctx, body)
+    }
+}
+
+impl<Ctx, Body, F> TypedInterceptor<Ctx, Body> for F
+where
+    Body: 'static,
+    F: Fn(&Ctx, &mut Body) -> Result<(), ClientError> + Send + Sync + 'static,
+{
+    fn intercept(&self, ctx: &Ctx, body: &mut Body) -> Result<(), ClientError> {
+        self(ctx, body)
+    }
+}
+
+// ============================================================================
+// HRTB Closure Coercion Helpers
+// ============================================================================
+
+/// Coerce a closure into a response interceptor with the correct HRTB bounds.
+///
+/// Rust's type inference sometimes fails to infer the higher-ranked lifetime
+/// when using closures as `for<'a> TypedInterceptor<ResponseContext<'a>, T>`.
+/// This helper forces the correct inference.
+///
+/// # Example
+///
+/// ```ignore
+/// use connectrpc_axum_client::response_interceptor;
+///
+/// let client = MyServiceClient::builder("http://localhost:3000")
+///     .with_after_my_method(response_interceptor(|ctx, resp: &mut MyResponse| {
+///         resp.message.push_str(" [intercepted]");
+///         Ok(())
+///     }))
+///     .build()?;
+/// ```
+pub fn response_interceptor<Body, F>(f: F) -> F
+where
+    Body: 'static,
+    F: for<'a> Fn(&ResponseContext<'a>, &mut Body) -> Result<(), ClientError>
+        + Send
+        + Sync
+        + 'static,
+{
+    f
+}
+
+/// Coerce a closure into a stream interceptor with the correct HRTB bounds.
+///
+/// Rust's type inference sometimes fails to infer the higher-ranked lifetime
+/// when using closures as `for<'a> TypedInterceptor<StreamContext<'a>, T>`.
+/// This helper forces the correct inference.
+///
+/// # Example
+///
+/// ```ignore
+/// use connectrpc_axum_client::stream_interceptor;
+///
+/// let client = MyServiceClient::builder("http://localhost:3000")
+///     .with_on_receive_my_stream(stream_interceptor(|ctx, msg: &mut MyResponse| {
+///         println!("Received: {:?}", msg);
+///         Ok(())
+///     }))
+///     .build()?;
+/// ```
+pub fn stream_interceptor<Body, F>(f: F) -> F
+where
+    Body: 'static,
+    F: for<'a> Fn(&StreamContext<'a>, &mut Body) -> Result<(), ClientError>
+        + Send
+        + Sync
+        + 'static,
+{
+    f
+}
+
+// ============================================================================
+// Per-RPC Type Interceptor Storage
+// ============================================================================
+
+/// Interceptors for unary RPCs: single request, single response.
+///
+/// # Example
+///
+/// ```ignore
+/// let interceptors = UnaryInterceptors {
+///     before: Some(Arc::new(|ctx: &mut RequestContext<'_>, req: &mut MyRequest| {
+///         ctx.headers.insert("x-validated", "true".parse().unwrap());
+///         Ok(())
+///     })),
+///     after: Some(Arc::new(|ctx: &ResponseContext<'_>, res: &mut MyResponse| {
+///         println!("Got response: {:?}", res);
+///         Ok(())
+///     })),
+/// };
+/// ```
+pub struct UnaryInterceptors<Req, Res> {
+    /// Called before the request is sent. Can modify headers and request body.
+    pub before: Option<Arc<dyn TypedMutInterceptor<Req>>>,
+    /// Called after the response is received. Can inspect/modify response body.
+    pub after: Option<Arc<dyn for<'a> TypedInterceptor<ResponseContext<'a>, Res>>>,
+}
+
+impl<Req, Res> Default for UnaryInterceptors<Req, Res> {
+    fn default() -> Self {
+        Self {
+            before: None,
+            after: None,
+        }
+    }
+}
+
+impl<Req, Res> Clone for UnaryInterceptors<Req, Res> {
+    fn clone(&self) -> Self {
+        Self {
+            before: self.before.clone(),
+            after: self.after.clone(),
+        }
+    }
+}
+
+impl<Req, Res> std::fmt::Debug for UnaryInterceptors<Req, Res> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UnaryInterceptors")
+            .field("before", &self.before.as_ref().map(|_| "..."))
+            .field("after", &self.after.as_ref().map(|_| "..."))
+            .finish()
+    }
+}
+
+/// Interceptors for server streaming RPCs: single request, stream of responses.
+///
+/// # Example
+///
+/// ```ignore
+/// let interceptors = ServerStreamInterceptors {
+///     before: Some(Arc::new(|ctx: &mut RequestContext<'_>, req: &mut ListRequest| {
+///         Ok(())
+///     })),
+///     on_receive: Some(Arc::new(|ctx: &StreamContext<'_>, item: &mut ListItem| {
+///         println!("Received item: {:?}", item);
+///         Ok(())
+///     })),
+/// };
+/// ```
+pub struct ServerStreamInterceptors<Req, Res> {
+    /// Called before the request is sent. Can modify headers and request body.
+    pub before: Option<Arc<dyn TypedMutInterceptor<Req>>>,
+    /// Called for each message received from the server stream.
+    pub on_receive: Option<Arc<dyn for<'a> TypedInterceptor<StreamContext<'a>, Res>>>,
+}
+
+impl<Req, Res> Default for ServerStreamInterceptors<Req, Res> {
+    fn default() -> Self {
+        Self {
+            before: None,
+            on_receive: None,
+        }
+    }
+}
+
+impl<Req, Res> Clone for ServerStreamInterceptors<Req, Res> {
+    fn clone(&self) -> Self {
+        Self {
+            before: self.before.clone(),
+            on_receive: self.on_receive.clone(),
+        }
+    }
+}
+
+impl<Req, Res> std::fmt::Debug for ServerStreamInterceptors<Req, Res> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerStreamInterceptors")
+            .field("before", &self.before.as_ref().map(|_| "..."))
+            .field("on_receive", &self.on_receive.as_ref().map(|_| "..."))
+            .finish()
+    }
+}
+
+/// Interceptors for client streaming RPCs: stream of requests, single response.
+///
+/// # Example
+///
+/// ```ignore
+/// let interceptors = ClientStreamInterceptors {
+///     on_send: Some(Arc::new(|ctx: &StreamContext<'_>, msg: &mut UploadChunk| {
+///         println!("Sending chunk: {} bytes", msg.data.len());
+///         Ok(())
+///     })),
+///     after: Some(Arc::new(|ctx: &ResponseContext<'_>, res: &mut UploadResponse| {
+///         Ok(())
+///     })),
+/// };
+/// ```
+pub struct ClientStreamInterceptors<Req, Res> {
+    /// Called for each message before it is sent to the server.
+    pub on_send: Option<Arc<dyn for<'a> TypedInterceptor<StreamContext<'a>, Req>>>,
+    /// Called after the final response is received.
+    pub after: Option<Arc<dyn for<'a> TypedInterceptor<ResponseContext<'a>, Res>>>,
+}
+
+impl<Req, Res> Default for ClientStreamInterceptors<Req, Res> {
+    fn default() -> Self {
+        Self {
+            on_send: None,
+            after: None,
+        }
+    }
+}
+
+impl<Req, Res> Clone for ClientStreamInterceptors<Req, Res> {
+    fn clone(&self) -> Self {
+        Self {
+            on_send: self.on_send.clone(),
+            after: self.after.clone(),
+        }
+    }
+}
+
+impl<Req, Res> std::fmt::Debug for ClientStreamInterceptors<Req, Res> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientStreamInterceptors")
+            .field("on_send", &self.on_send.as_ref().map(|_| "..."))
+            .field("after", &self.after.as_ref().map(|_| "..."))
+            .finish()
+    }
+}
+
+/// Interceptors for bidirectional streaming RPCs: stream of requests, stream of responses.
+///
+/// # Example
+///
+/// ```ignore
+/// let interceptors = BidiStreamInterceptors {
+///     on_send: Some(Arc::new(|ctx: &StreamContext<'_>, msg: &mut ChatMessage| {
+///         println!("Sending: {}", msg.text);
+///         Ok(())
+///     })),
+///     on_receive: Some(Arc::new(|ctx: &StreamContext<'_>, msg: &mut ChatMessage| {
+///         println!("Received: {}", msg.text);
+///         Ok(())
+///     })),
+/// };
+/// ```
+pub struct BidiStreamInterceptors<Req, Res> {
+    /// Called for each message before it is sent to the server.
+    pub on_send: Option<Arc<dyn for<'a> TypedInterceptor<StreamContext<'a>, Req>>>,
+    /// Called for each message received from the server stream.
+    pub on_receive: Option<Arc<dyn for<'a> TypedInterceptor<StreamContext<'a>, Res>>>,
+}
+
+impl<Req, Res> Default for BidiStreamInterceptors<Req, Res> {
+    fn default() -> Self {
+        Self {
+            on_send: None,
+            on_receive: None,
+        }
+    }
+}
+
+impl<Req, Res> Clone for BidiStreamInterceptors<Req, Res> {
+    fn clone(&self) -> Self {
+        Self {
+            on_send: self.on_send.clone(),
+            on_receive: self.on_receive.clone(),
+        }
+    }
+}
+
+impl<Req, Res> std::fmt::Debug for BidiStreamInterceptors<Req, Res> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BidiStreamInterceptors")
+            .field("on_send", &self.on_send.as_ref().map(|_| "..."))
+            .field("on_receive", &self.on_receive.as_ref().map(|_| "..."))
+            .finish()
     }
 }
 

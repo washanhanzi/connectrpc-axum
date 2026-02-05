@@ -150,7 +150,7 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-pbjson-types = "0.8"
+pbjson-types = "0.9"
 ```
 
 ## Client Only (No Server)

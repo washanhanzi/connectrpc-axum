@@ -15,6 +15,8 @@ mod streaming;
 mod types;
 
 pub use decoder::FrameDecoder;
-pub use intercepting::{InterceptingSendStream, InterceptingStream, InterceptingStreaming};
+pub use intercepting::{
+    InterceptingSendStream, InterceptingStream, InterceptingStreaming, TypedReceiveStreaming,
+};
 pub use streaming::Streaming;
 pub use types::{ConnectResponse, Metadata};

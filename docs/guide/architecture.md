@@ -29,7 +29,7 @@ The core modules in the server runtime library:
 | Module | Purpose |
 |--------|---------|
 | `context/` | Protocol detection, compression config, message limits, timeouts |
-| `pipeline.rs` | Request/response primitives (decode, encode, compress) |
+| `message/{request,response}.rs` | Request/response primitives (decode, encode, compress) |
 | `layer/` | Middleware layers (`BridgeLayer`, `ConnectLayer`) |
 | `message/` | `ConnectRequest<T>` extractor and `ConnectResponse<T>` wrapper |
 | `handler.rs` | Handler wrappers that implement `axum::handler::Handler` |
@@ -112,7 +112,7 @@ context/           ← Configuration and protocol state
     limit.rs           Message size limits
     timeout.rs         Request timeout
         ↓
-pipeline.rs        ← Low-level encode/decode functions
+message/{request,response}.rs   ← Low-level encode/decode functions
         ↓
 layer/             ← Middleware that builds context
     bridge.rs          BridgeLayer/BridgeService
@@ -123,7 +123,7 @@ message/           ← Axum extractors and response types
     response.rs        ConnectResponse<T>, StreamBody<S>
 ```
 
-Handlers receive a `ConnectRequest<T>` extractor that reads the `ConnectContext` from request extensions, then uses `pipeline.rs` functions to decode the message. Response encoding follows the reverse path.
+Handlers receive a `ConnectRequest<T>` extractor that reads the `ConnectContext` from request extensions, then uses `message/request.rs` functions to decode the message. Response encoding uses `message/response.rs` in the reverse path.
 
 ### Axum Extractor Support in Tonic Handlers
 

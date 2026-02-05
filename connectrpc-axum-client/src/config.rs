@@ -11,8 +11,11 @@ mod options;
 mod retry;
 
 pub use interceptor::{
-    Chain, ClosureInterceptor, HeaderInterceptor, HeaderWrapper, Interceptor, InterceptorInternal,
-    MessageInterceptor, MessageWrapper, RequestContext, ResponseContext, StreamContext, StreamType,
+    BidiStreamInterceptors, Chain, ClientStreamInterceptors, ClosureInterceptor, HeaderInterceptor,
+    HeaderWrapper, Interceptor, InterceptorInternal, MessageInterceptor, MessageWrapper,
+    RequestContext, ResponseContext, ServerStreamInterceptors, StreamContext, StreamType,
+    TypedInterceptor, TypedMutInterceptor, UnaryInterceptors, response_interceptor,
+    stream_interceptor,
 };
 pub use options::CallOptions;
 pub(crate) use options::duration_to_timeout_header;

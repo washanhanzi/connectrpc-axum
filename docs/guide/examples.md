@@ -10,8 +10,6 @@ See the [connectrpc-axum-examples](https://github.com/washanhanzi/connectrpc-axu
 | `connect-server-stream` | Pure Connect server streaming |
 | `connect-client-stream` | Pure Connect client streaming |
 | `connect-bidi-stream` | Pure Connect bidirectional streaming |
-| `get-request` | GET request support for idempotent unary RPCs |
-| `idempotency-get` | Automatic GET support via proto `idempotency_level = NO_SIDE_EFFECTS` |
 
 ## Tonic/gRPC Integration
 
@@ -20,7 +18,6 @@ See the [connectrpc-axum-examples](https://github.com/washanhanzi/connectrpc-axu
 | `tonic-unary` | Connect + gRPC unary (dual protocol) |
 | `tonic-server-stream` | Connect + gRPC streaming (dual protocol) |
 | `tonic-bidi-stream` | Bidirectional streaming (gRPC only) |
-| `tonic-extractor` | Multiple extractors with TonicCompatibleBuilder |
 | `grpc-web` | gRPC-Web browser support |
 
 ## Error Handling
@@ -34,14 +31,15 @@ See the [connectrpc-axum-examples](https://github.com/washanhanzi/connectrpc-axu
 | `endstream-metadata` | EndStream frame metadata in streaming |
 | `streaming-error-repro` | Streaming error handling demonstration |
 
-## Protocol Features
+## Compression
 
 | Example | Description |
 |---------|-------------|
-| `timeout` | Connect-Timeout-Ms header handling |
-| `protocol-version` | Connect-Protocol-Version header validation |
 | `streaming-compression` | Per-message compression in streaming responses |
 | `client-streaming-compression` | Per-message decompression in streaming requests |
+| `streaming-compression-algos` | Streaming compression with all algorithms |
+| `client-streaming-compression-algos` | Client streaming decompression with all algorithms |
+| `unary-compression-algos` | Unary compression with all algorithms |
 
 ## Connect RPC Client
 
@@ -51,8 +49,10 @@ See the [connectrpc-axum-examples](https://github.com/washanhanzi/connectrpc-axu
 | `client/server-stream-client` | Server streaming client |
 | `client/client-stream-client` | Client streaming client |
 | `client/bidi-stream-client` | Bidirectional streaming client |
-| `client/typed-client` | Type-safe client wrapper pattern |
-| `interceptor-test` | Client interceptor demonstration |
+| `client/typed-client` | Type-safe generated client |
+| `client/streaming-interceptor-client` | Streaming with interceptors |
+| `client/message-interceptor-client` | Message-level interceptor |
+| `client/typed-interceptor-client` | Typed interceptor on generated clients |
 
 ## Running Examples
 

@@ -94,6 +94,7 @@ Use the generated service builder with any Axum extractors:
 ```rust
 use axum::extract::State;
 use connectrpc_axum::prelude::*;
+use futures::Stream;
 // Import generated types from your crate
 use your_crate::{HelloRequest, HelloResponse, helloworldservice};
 
@@ -113,7 +114,10 @@ async fn say_hello(
 // Server streaming handler
 async fn say_hello_stream(
     ConnectRequest(req): ConnectRequest<HelloRequest>,
-) -> Result<StreamBody<HelloResponse>, ConnectError> {
+) -> Result<
+    ConnectResponse<StreamBody<impl Stream<Item = Result<HelloResponse, ConnectError>>>>,
+    ConnectError,
+> {
     let stream = async_stream::stream! {
         for i in 0..5 {
             yield Ok(HelloResponse {
@@ -121,7 +125,7 @@ async fn say_hello_stream(
             });
         }
     };
-    Ok(StreamBody::new(stream))
+    Ok(ConnectResponse::new(StreamBody::new(stream)))
 }
 
 #[tokio::main]

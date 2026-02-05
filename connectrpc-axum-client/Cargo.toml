@@ -1,6 +1,6 @@
 [package]
 name = "connectrpc-axum-client"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 edition = "2024"
 description = "Connect protocol client for connectrpc-axum"
 repository = "https://github.com/washanhanzi/connectrpc-axum"
@@ -11,27 +11,27 @@ license = "MIT"
 connectrpc-axum-core = { workspace = true }
 
 # HTTP client (hyper-based)
-hyper = { version = "1.6", features = ["client", "http1", "http2"] }
-hyper-util = { version = "0.1", features = [
+hyper = { workspace = true, features = ["client", "http1", "http2"] }
+hyper-util = { workspace = true, features = [
     "client",
     "client-legacy",
     "http1",
     "http2",
     "tokio",
 ] }
-hyper-rustls = { version = "0.27", default-features = false, features = [
+hyper-rustls = { workspace = true, features = [
     "http2",
     "tls12",
 ] }
 http-body = { workspace = true }
 http-body-util = { workspace = true }
 tower = { workspace = true }
-tower-service = "0.3"
-rustls = { version = "0.23", default-features = false, features = [
+tower-service = { workspace = true }
+rustls = { workspace = true, features = [
     "std",
     "tls12",
 ] }
-pin-project-lite = "0.2"
+pin-project-lite = { workspace = true }
 
 # TLS - crypto providers (optional)
 # ring is the default, aws-lc-rs is an alternative
@@ -40,8 +40,8 @@ pin-project-lite = "0.2"
 # TLS - root certificates (optional)
 # native-roots uses system certs, webpki-roots bundles Mozilla certs
 # Users must enable one of these for TLS support
-rustls-native-certs = { version = "0.8", optional = true }
-webpki-roots = { version = "1", optional = true }
+rustls-native-certs = { workspace = true, optional = true }
+webpki-roots = { workspace = true, optional = true }
 
 # Serialization
 bytes = { workspace = true }

@@ -5,6 +5,7 @@
 
 use std::marker::PhantomData;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use futures::Stream;
@@ -13,7 +14,7 @@ use prost::Message;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
-use crate::config::{InterceptorInternal, StreamContext, StreamType};
+use crate::config::{InterceptorInternal, StreamContext, StreamType, TypedInterceptor};
 use crate::ClientError;
 
 use super::decoder::FrameDecoder;
@@ -243,6 +244,13 @@ impl<S, T, I> InterceptingStreaming<S, T, I> {
             _marker: PhantomData,
         }
     }
+
+    /// Get the inner streaming wrapper.
+    ///
+    /// This consumes the intercepting wrapper and returns the underlying `Streaming<S>`.
+    pub fn get_inner(self) -> Streaming<S> {
+        self.inner
+    }
 }
 
 impl<S, T, I> InterceptingStreaming<FrameDecoder<S, T>, T, I> {
@@ -304,6 +312,124 @@ where
                 match this.interceptor.intercept_stream_receive(&ctx, &mut msg) {
                     Ok(()) => Poll::Ready(Some(Ok(msg))),
                     Err(e) => Poll::Ready(Some(Err(e))),
+                }
+            }
+            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+// ============================================================================
+// Typed Interceptor Stream Wrappers
+// ============================================================================
+
+/// Wrapper around `Streaming` with typed receive interceptor.
+///
+/// This provides the same interface as `Streaming` (trailers, is_finished, drain)
+/// but applies a typed interceptor to each message.
+pub struct TypedReceiveStreaming<S, T> {
+    /// The underlying streaming wrapper.
+    inner: Streaming<S>,
+    /// The typed interceptor.
+    interceptor: Option<Arc<dyn for<'a> TypedInterceptor<StreamContext<'a>, T>>>,
+    /// The procedure name.
+    procedure: String,
+    /// The type of stream.
+    stream_type: StreamType,
+    /// Request headers.
+    request_headers: HeaderMap,
+    /// Response headers.
+    response_headers: HeaderMap,
+}
+
+impl<S, T> TypedReceiveStreaming<S, T> {
+    /// Create a new typed receive streaming wrapper.
+    pub fn new(
+        inner: Streaming<S>,
+        interceptor: Option<Arc<dyn for<'a> TypedInterceptor<StreamContext<'a>, T>>>,
+        procedure: String,
+        stream_type: StreamType,
+        request_headers: HeaderMap,
+        response_headers: HeaderMap,
+    ) -> Self {
+        Self {
+            inner,
+            interceptor,
+            procedure,
+            stream_type,
+            request_headers,
+            response_headers,
+        }
+    }
+}
+
+impl<S, T> TypedReceiveStreaming<FrameDecoder<S, T>, T> {
+    /// Get the trailers received in the EndStream frame.
+    pub fn trailers(&self) -> Option<&Metadata> {
+        self.inner.trailers()
+    }
+
+    /// Take the trailers.
+    pub fn take_trailers(&mut self) -> Option<Metadata> {
+        self.inner.take_trailers()
+    }
+
+    /// Check if the stream has finished.
+    pub fn is_finished(&self) -> bool {
+        self.inner.is_finished()
+    }
+}
+
+impl<S, T> TypedReceiveStreaming<S, T>
+where
+    S: Stream<Item = Result<T, ClientError>> + Unpin,
+{
+    /// Drain remaining messages.
+    pub async fn drain(&mut self) -> usize {
+        self.inner.drain().await
+    }
+
+    /// Drain with timeout.
+    pub async fn drain_timeout(&mut self, timeout: std::time::Duration) -> Result<usize, usize> {
+        self.inner.drain_timeout(timeout).await
+    }
+}
+
+impl<S, T> Unpin for TypedReceiveStreaming<S, T> where Streaming<S>: Unpin {}
+
+impl<S, T> Stream for TypedReceiveStreaming<S, T>
+where
+    Streaming<S>: Stream<Item = Result<T, ClientError>> + Unpin,
+    T: 'static,
+{
+    type Item = Result<T, ClientError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+
+        match Pin::new(&mut this.inner).poll_next(cx) {
+            Poll::Ready(Some(Ok(mut msg))) => {
+                // If there's an interceptor, call it
+                if let Some(ref interceptor) = this.interceptor {
+                    let ctx = StreamContext::new(
+                        &this.procedure,
+                        this.stream_type,
+                        &this.request_headers,
+                        Some(&this.response_headers),
+                    );
+
+                    match interceptor.intercept(&ctx, &mut msg) {
+                        Ok(()) => Poll::Ready(Some(Ok(msg))),
+                        Err(e) => Poll::Ready(Some(Err(e))),
+                    }
+                } else {
+                    Poll::Ready(Some(Ok(msg)))
                 }
             }
             Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),

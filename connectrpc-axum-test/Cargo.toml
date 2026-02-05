@@ -1,0 +1,35 @@
+[package]
+name = "connectrpc-axum-test"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+connectrpc-axum = { path = "../connectrpc-axum", features = ["tonic", "compression-full"] }
+axum = { workspace = true }
+prost = { workspace = true }
+pbjson = { workspace = true }
+pbjson-types = { workspace = true }
+prost-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-stream = { workspace = true }
+hyper = { workspace = true, features = ["client", "http1", "http2"] }
+hyper-util = { workspace = true, features = ["client", "client-legacy", "http1", "http2", "tokio"] }
+http = { workspace = true }
+http-body-util = { workspace = true }
+bytes = { workspace = true }
+tower = { workspace = true }
+anyhow = { workspace = true }
+async-stream = { workspace = true }
+futures = { workspace = true }
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
+tonic-web = { workspace = true }
+flate2 = { workspace = true }
+brotli = { workspace = true }
+zstd = { workspace = true }
+
+[build-dependencies]
+connectrpc-axum-build = { path = "../connectrpc-axum-build", features = ["tonic"] }
