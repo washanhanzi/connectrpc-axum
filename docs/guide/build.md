@@ -46,6 +46,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 The downloaded binary is cached, so subsequent builds reuse it. The `PROTOC` environment variable is set automatically so prost-build uses the downloaded binary.
 
+## Multiple Proto Sources
+
+You can compile proto files from multiple directories or specify explicit file lists.
+
+### Chaining Directories
+
+Use `.compile_dir()` to add additional proto directories:
+
+```rust
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    connectrpc_axum_build::compile_dir("proto/api")
+        .compile_dir("proto/internal")  // Add another directory
+        .compile_dir("third_party/protos")
+        .compile()?;
+    Ok(())
+}
+```
+
+### Explicit Proto Files
+
+Use `compile_protos()` to start with explicit proto files, or `.compile_protos()` to chain them:
+
+```rust
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Start with explicit files
+    connectrpc_axum_build::compile_protos(
+        &["proto/service.proto", "proto/messages.proto"],
+        &["proto", "third_party"],  // Include directories for imports
+    ).compile()?;
+    Ok(())
+}
+```
+
+### Mixing Directories and Files
+
+Chain `.compile_dir()` and `.compile_protos()` to mix auto-discovery with explicit files:
+
+```rust
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    connectrpc_axum_build::compile_dir("proto")
+        .compile_protos(&["vendor/service.proto"], &["vendor"])
+        .with_tonic()
+        .compile()?;
+    Ok(())
+}
+```
+
+Each source is compiled independently while sharing the same configuration (prost settings, tonic options, etc.).
+
 ## Custom Output Directory
 
 By default, generated code is written to `OUT_DIR` (set by Cargo during build). Use `.out_dir()` to specify a custom output directory:
