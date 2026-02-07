@@ -24,7 +24,8 @@ connectrpc-axum-client = { version = "0.1", features = ["compression-gzip-stream
 
 ## Quick Start with Generated Client
 
-The recommended way to use the client is with the generated typed client from `connectrpc-axum-build`:
+The recommended way to use the client is with the generated typed client from `connectrpc-axum-build`.
+The module path is derived from the service name (e.g., `HelloWorldService` → `hello_world_service_connect_client`):
 
 ```rust
 use my_proto::hello_world_service_connect_client::HelloWorldServiceClient;
@@ -121,7 +122,8 @@ let client = ConnectClient::builder("http://localhost:3000")
 
 ### Server Streaming
 
-The server sends multiple messages in response to a single request:
+The server sends multiple messages in response to a single request.
+The returned stream implements `futures::Stream` and supports `trailers()`, `drain()`, and `drain_timeout()`:
 
 ```rust
 use futures::StreamExt;
@@ -554,9 +556,11 @@ let client = ConnectClient::builder("http://localhost:3000")
 
 ### Custom Root Certificates
 
+`TlsClientConfig` is a re-export of `rustls::ClientConfig`, so you can use the standard rustls builder API.
+Note that `rustls` must be added as a direct dependency to use `RootCertStore`:
+
 ```rust
 use connectrpc_axum_client::TlsClientConfig;
-use std::sync::Arc;
 
 // Load custom CA certificate
 let mut roots = rustls::RootCertStore::empty();
@@ -567,7 +571,7 @@ let tls_config = TlsClientConfig::builder()
     .with_no_client_auth();
 
 let client = ConnectClient::builder("https://api.example.com")
-    .tls_config(Arc::new(tls_config))
+    .tls_config(tls_config)
     .build()?;
 ```
 
