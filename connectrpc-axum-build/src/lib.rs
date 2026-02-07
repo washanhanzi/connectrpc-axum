@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 /// Code generation module for service builders.
 mod r#gen;
+mod include_file;
 
 /// Source of proto files - either auto-discovered from a directory or explicit file list.
 enum ProtoSource {
@@ -18,7 +19,7 @@ enum ProtoSource {
 }
 
 // ============================================================================
-// Type-state marker types for phantom data
+// Type-state marker types
 // ============================================================================
 
 /// Marker indicating a feature is enabled.
@@ -26,6 +27,12 @@ pub struct Enabled;
 
 /// Marker indicating a feature is disabled.
 pub struct Disabled;
+
+/// Marker indicating no proto source has been set yet.
+pub struct NoSource;
+
+/// Marker indicating a proto source has been set.
+pub struct WithSource(ProtoSource);
 
 /// Trait to convert type markers to runtime booleans.
 pub trait BuildMarker {
@@ -44,22 +51,37 @@ impl BuildMarker for Disabled {
 /// Builder for compiling proto files with optional configuration.
 ///
 /// Type parameters control code generation:
+/// - `Source`: Whether a proto source has been provided (`NoSource` or `WithSource`)
 /// - `Connect`: Whether to generate Connect service handlers
 /// - `Tonic`: Whether to generate Tonic gRPC server stubs (requires `tonic` feature)
 /// - `TonicClient`: Whether to generate Tonic gRPC client stubs (requires `tonic-client` feature)
 /// - `ConnectClient`: Whether to generate typed Connect RPC client code
 ///
-/// Default state is `CompileBuilder<Enabled, Disabled, Disabled, Disabled>` (Connect handlers only).
+/// Use [`builder()`] to create a builder without a source, then call
+/// [`compile_dir()`](CompileBuilder::compile_dir) or
+/// [`compile_protos()`](CompileBuilder::compile_protos) to set the source.
+/// Alternatively, use the free functions [`compile_dir()`](crate::compile_dir) or
+/// [`compile_protos()`](crate::compile_protos) as shortcuts.
 ///
-/// Multiple proto sources can be chained together using [`compile_dir`](CompileBuilder::compile_dir)
-/// and [`compile_protos`](CompileBuilder::compile_protos) methods. Each source is compiled
-/// independently while sharing the same configuration.
-pub struct CompileBuilder<Connect = Enabled, Tonic = Disabled, TonicClient = Disabled, ConnectClient = Disabled> {
-    sources: Vec<ProtoSource>,
+/// To compile multiple proto roots, use separate builders:
+///
+/// ```rust,ignore
+/// connectrpc_axum_build::compile_dir("proto1")
+///     .include_file("protos1.rs")
+///     .compile()?;
+/// connectrpc_axum_build::compile_dir("proto2")
+///     .include_file("protos2.rs")
+///     .compile()?;
+/// ```
+pub struct CompileBuilder<Source = NoSource, Connect = Enabled, Tonic = Disabled, TonicClient = Disabled, ConnectClient = Disabled> {
+    source: Source,
     out_dir: Option<PathBuf>,
+    include_file: Option<PathBuf>,
+    extern_reexports: Vec<(String, String)>,
     #[cfg(feature = "fetch-protoc")]
     protoc_path: Option<PathBuf>,
     prost_config: Option<Box<dyn Fn(&mut prost_build::Config)>>,
+    pbjson_config: Option<Box<dyn Fn(&mut pbjson_build::Builder)>>,
     #[cfg(feature = "tonic")]
     tonic_config: Option<Box<dyn Fn(tonic_prost_build::Builder) -> tonic_prost_build::Builder>>,
     #[cfg(feature = "tonic-client")]
@@ -69,10 +91,92 @@ pub struct CompileBuilder<Connect = Enabled, Tonic = Disabled, TonicClient = Dis
 }
 
 // ============================================================================
+// Methods to set proto source (only available when Source = NoSource)
+// ============================================================================
+
+impl<C, T, TC, CC> CompileBuilder<NoSource, C, T, TC, CC> {
+    /// Set a directory of proto files to compile.
+    ///
+    /// Auto-discovers all `.proto` files in the directory recursively.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     connectrpc_axum_build::builder()
+    ///         .compile_dir("proto")
+    ///         .compile()?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn compile_dir(self, dir: impl AsRef<Path>) -> CompileBuilder<WithSource, C, T, TC, CC> {
+        CompileBuilder {
+            source: WithSource(ProtoSource::Directory(dir.as_ref().to_path_buf())),
+            out_dir: self.out_dir,
+            include_file: self.include_file,
+            extern_reexports: self.extern_reexports,
+
+            #[cfg(feature = "fetch-protoc")]
+            protoc_path: self.protoc_path,
+            prost_config: self.prost_config,
+            pbjson_config: self.pbjson_config,
+            #[cfg(feature = "tonic")]
+            tonic_config: self.tonic_config,
+            #[cfg(feature = "tonic-client")]
+            tonic_client_config: self.tonic_client_config,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Set specific proto files to compile.
+    ///
+    /// # Arguments
+    ///
+    /// * `protos` - Proto files to compile
+    /// * `includes` - Directories to search for imports
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     connectrpc_axum_build::builder()
+    ///         .compile_protos(&["proto/service.proto"], &["proto"])
+    ///         .compile()?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn compile_protos<P: AsRef<Path>>(
+        self,
+        protos: &[P],
+        includes: &[P],
+    ) -> CompileBuilder<WithSource, C, T, TC, CC> {
+        CompileBuilder {
+            source: WithSource(ProtoSource::Files {
+                protos: protos.iter().map(|p| p.as_ref().to_path_buf()).collect(),
+                includes: includes.iter().map(|p| p.as_ref().to_path_buf()).collect(),
+            }),
+            out_dir: self.out_dir,
+            include_file: self.include_file,
+            extern_reexports: self.extern_reexports,
+
+            #[cfg(feature = "fetch-protoc")]
+            protoc_path: self.protoc_path,
+            prost_config: self.prost_config,
+            pbjson_config: self.pbjson_config,
+            #[cfg(feature = "tonic")]
+            tonic_config: self.tonic_config,
+            #[cfg(feature = "tonic-client")]
+            tonic_client_config: self.tonic_client_config,
+            _marker: PhantomData,
+        }
+    }
+}
+
+// ============================================================================
 // Methods available when Connect = Enabled
 // ============================================================================
 
-impl<T, TC, CC> CompileBuilder<Enabled, T, TC, CC> {
+impl<S, T, TC, CC> CompileBuilder<S, Enabled, T, TC, CC> {
     /// Skip generating Connect server code.
     ///
     /// When called, only message types and serde implementations are generated.
@@ -97,13 +201,17 @@ impl<T, TC, CC> CompileBuilder<Enabled, T, TC, CC> {
     ///     Ok(())
     /// }
     /// ```
-    pub fn no_connect_server(self) -> CompileBuilder<Disabled, Disabled, TC, Disabled> {
+    pub fn no_connect_server(self) -> CompileBuilder<S, Disabled, Disabled, TC, Disabled> {
         CompileBuilder {
-            sources: self.sources,
+            source: self.source,
             out_dir: self.out_dir,
+            include_file: self.include_file,
+            extern_reexports: self.extern_reexports,
+
             #[cfg(feature = "fetch-protoc")]
             protoc_path: self.protoc_path,
             prost_config: self.prost_config,
+            pbjson_config: self.pbjson_config,
             #[cfg(feature = "tonic")]
             tonic_config: None,
             #[cfg(feature = "tonic-client")]
@@ -118,18 +226,22 @@ impl<T, TC, CC> CompileBuilder<Enabled, T, TC, CC> {
 // ============================================================================
 
 #[cfg(feature = "tonic")]
-impl<TC, CC> CompileBuilder<Enabled, Disabled, TC, CC> {
+impl<S, TC, CC> CompileBuilder<S, Enabled, Disabled, TC, CC> {
     /// Enable generating tonic gRPC server stubs (second pass) + tonic-compatible helpers in first pass.
     ///
     /// **Note:** After calling this, `no_connect_server()` is no longer available since
     /// tonic server stubs depend on the Connect service module.
-    pub fn with_tonic(self) -> CompileBuilder<Enabled, Enabled, TC, CC> {
+    pub fn with_tonic(self) -> CompileBuilder<S, Enabled, Enabled, TC, CC> {
         CompileBuilder {
-            sources: self.sources,
+            source: self.source,
             out_dir: self.out_dir,
+            include_file: self.include_file,
+            extern_reexports: self.extern_reexports,
+
             #[cfg(feature = "fetch-protoc")]
             protoc_path: self.protoc_path,
             prost_config: self.prost_config,
+            pbjson_config: self.pbjson_config,
             tonic_config: self.tonic_config,
             #[cfg(feature = "tonic-client")]
             tonic_client_config: self.tonic_client_config,
@@ -143,7 +255,7 @@ impl<TC, CC> CompileBuilder<Enabled, Disabled, TC, CC> {
 // ============================================================================
 
 #[cfg(feature = "tonic")]
-impl<C, TC, CC> CompileBuilder<C, Enabled, TC, CC> {
+impl<S, C, TC, CC> CompileBuilder<S, C, Enabled, TC, CC> {
     /// Customize the tonic prost builder with a configuration closure.
     ///
     /// The closure is applied before the required internal configuration. Internal settings
@@ -162,7 +274,6 @@ impl<C, TC, CC> CompileBuilder<C, Enabled, TC, CC> {
     ///         .with_prost_config(|config| {
     ///             // Configure message types here (Pass 1)
     ///             config.type_attribute("MyMessage", "#[derive(Hash)]");
-    ///             config.extern_path(".google.protobuf", "::pbjson_types");
     ///         })
     ///         .with_tonic()
     ///         .with_tonic_prost_config(|builder| {
@@ -184,58 +295,10 @@ impl<C, TC, CC> CompileBuilder<C, Enabled, TC, CC> {
 }
 
 // ============================================================================
-// Methods available on all builder states
+// Methods available on all builder states (configuration)
 // ============================================================================
 
-impl<C, T, TC, CC> CompileBuilder<C, T, TC, CC> {
-    /// Add another directory of proto files to compile.
-    ///
-    /// Auto-discovers all `.proto` files in the directory recursively.
-    /// Each source is compiled independently while sharing the same configuration.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     connectrpc_axum_build::compile_dir("proto1")
-    ///         .compile_dir("proto2")  // Add another directory
-    ///         .compile()?;
-    ///     Ok(())
-    /// }
-    /// ```
-    pub fn compile_dir(mut self, dir: impl AsRef<Path>) -> Self {
-        self.sources
-            .push(ProtoSource::Directory(dir.as_ref().to_path_buf()));
-        self
-    }
-
-    /// Add specific proto files to compile.
-    ///
-    /// Each source is compiled independently while sharing the same configuration.
-    ///
-    /// # Arguments
-    ///
-    /// * `protos` - Proto files to compile
-    /// * `includes` - Directories to search for imports
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     connectrpc_axum_build::compile_dir("proto")
-    ///         .compile_protos(&["other/service.proto"], &["other"])  // Add explicit files
-    ///         .compile()?;
-    ///     Ok(())
-    /// }
-    /// ```
-    pub fn compile_protos<P: AsRef<Path>>(mut self, protos: &[P], includes: &[P]) -> Self {
-        self.sources.push(ProtoSource::Files {
-            protos: protos.iter().map(|p| p.as_ref().to_path_buf()).collect(),
-            includes: includes.iter().map(|p| p.as_ref().to_path_buf()).collect(),
-        });
-        self
-    }
-
+impl<S, C, T, TC, CC> CompileBuilder<S, C, T, TC, CC> {
     /// Fetch and configure the protoc compiler.
     ///
     /// Downloads the specified version of protoc and sets the `PROTOC` environment
@@ -281,7 +344,11 @@ impl<C, T, TC, CC> CompileBuilder<C, T, TC, CC> {
     /// before the required internal configuration. Internal settings (like file descriptor
     /// set path) will be applied after and take precedence.
     ///
-    /// Use this to add type attributes, extern paths, or other prost configuration.
+    /// Use this to add type attributes or other prost configuration.
+    ///
+    /// If you map protobuf packages to external crates with `extern_path`, and
+    /// also generate pbjson serde code, configure matching pbjson extern mappings
+    /// via [`with_pbjson_config`](Self::with_pbjson_config).
     ///
     /// # Example
     ///
@@ -289,7 +356,7 @@ impl<C, T, TC, CC> CompileBuilder<C, T, TC, CC> {
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     connectrpc_axum_build::compile_dir("proto")
     ///         .with_prost_config(|config| {
-    ///             config.extern_path(".google.protobuf", "::pbjson_types");
+    ///             config.type_attribute(".", "#[derive(Hash)]");
     ///         })
     ///         .compile()?;
     ///     Ok(())
@@ -300,6 +367,22 @@ impl<C, T, TC, CC> CompileBuilder<C, T, TC, CC> {
         F: Fn(&mut prost_build::Config) + 'static,
     {
         self.prost_config = Some(Box::new(f));
+        self
+    }
+
+    /// Customize the pbjson builder with a configuration closure.
+    ///
+    /// The closure receives a mutable reference to `pbjson_build::Builder` and is
+    /// applied before descriptor registration and code generation.
+    ///
+    /// Use this when pbjson needs explicit extern mappings that mirror prost's
+    /// `extern_path` behavior, for example:
+    /// `builder.extern_path(".google.protobuf", "::pbjson_types");`
+    pub fn with_pbjson_config<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&mut pbjson_build::Builder) + 'static,
+    {
+        self.pbjson_config = Some(Box::new(f));
         self
     }
 
@@ -322,6 +405,80 @@ impl<C, T, TC, CC> CompileBuilder<C, T, TC, CC> {
         self.out_dir = Some(path.as_ref().to_path_buf());
         self
     }
+
+    /// Generate a single include file that provides a nested `pub mod` tree
+    /// for all compiled protobuf packages.
+    ///
+    /// Instead of manually writing `mod pb { include!(...) }` boilerplate for each
+    /// package, this generates a single file that you can include with:
+    ///
+    /// ```rust,ignore
+    /// include!(concat!(env!("OUT_DIR"), "/protos.rs"));
+    /// ```
+    ///
+    /// For dotted package names like `buf.validate`, this generates properly nested
+    /// modules:
+    ///
+    /// ```rust,ignore
+    /// pub mod buf {
+    ///     pub mod validate {
+    ///         include!(concat!(env!("OUT_DIR"), "/buf.validate.rs"));
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     connectrpc_axum_build::compile_dir("proto")
+    ///         .include_file("protos.rs")
+    ///         .compile()?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn include_file(mut self, path: impl AsRef<Path>) -> Self {
+        self.include_file = Some(path.as_ref().to_path_buf());
+        self
+    }
+
+    /// Register an extern module re-export for the include file.
+    ///
+    /// When using `extern_path` in prost config to map a protobuf package to an
+    /// external crate (e.g. `config.extern_path(".google.protobuf", "::pbjson_types")`),
+    /// prost-generated code may still reference types through relative module paths
+    /// (e.g. `super::super::google::protobuf::...`). This method creates a shim module
+    /// in the include file that re-exports the external crate's types, allowing those
+    /// relative paths to resolve.
+    ///
+    /// # Arguments
+    ///
+    /// * `proto_path` - The dotted protobuf package name (e.g. `"google.protobuf"`)
+    /// * `rust_path` - The Rust crate path to re-export (e.g. `"::pbjson_types"`)
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     connectrpc_axum_build::compile_dir("proto")
+    ///         .with_prost_config(|config| {
+    ///             config.compile_well_known_types();
+    ///             config.extern_path(".google.protobuf", "::pbjson_types");
+    ///         })
+    ///         .include_file("protos.rs")
+    ///         .extern_module("google.protobuf", "::pbjson_types")
+    ///         .compile()?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn extern_module(
+        mut self,
+        proto_path: impl Into<String>,
+        rust_path: impl Into<String>,
+    ) -> Self {
+        self.extern_reexports.push((proto_path.into(), rust_path.into()));
+        self
+    }
 }
 
 // ============================================================================
@@ -329,7 +486,7 @@ impl<C, T, TC, CC> CompileBuilder<C, T, TC, CC> {
 // ============================================================================
 
 #[cfg(feature = "tonic-client")]
-impl<C, T, CC> CompileBuilder<C, T, Disabled, CC> {
+impl<S, C, T, CC> CompileBuilder<S, C, T, Disabled, CC> {
     /// Enable generating tonic gRPC client stubs.
     ///
     /// Generates client code using `tonic-prost-build`. The client code is appended
@@ -347,13 +504,17 @@ impl<C, T, CC> CompileBuilder<C, T, Disabled, CC> {
     ///     Ok(())
     /// }
     /// ```
-    pub fn with_tonic_client(self) -> CompileBuilder<C, T, Enabled, CC> {
+    pub fn with_tonic_client(self) -> CompileBuilder<S, C, T, Enabled, CC> {
         CompileBuilder {
-            sources: self.sources,
+            source: self.source,
             out_dir: self.out_dir,
+            include_file: self.include_file,
+            extern_reexports: self.extern_reexports,
+
             #[cfg(feature = "fetch-protoc")]
             protoc_path: self.protoc_path,
             prost_config: self.prost_config,
+            pbjson_config: self.pbjson_config,
             #[cfg(feature = "tonic")]
             tonic_config: self.tonic_config,
             tonic_client_config: self.tonic_client_config,
@@ -367,7 +528,7 @@ impl<C, T, CC> CompileBuilder<C, T, Disabled, CC> {
 // ============================================================================
 
 #[cfg(feature = "tonic-client")]
-impl<C, T, CC> CompileBuilder<C, T, Enabled, CC> {
+impl<S, C, T, CC> CompileBuilder<S, C, T, Enabled, CC> {
     /// Customize the tonic prost builder for client generation.
     ///
     /// The closure is applied before internal configuration. Internal settings
@@ -400,7 +561,7 @@ impl<C, T, CC> CompileBuilder<C, T, Enabled, CC> {
 // Methods available when ConnectClient = Disabled (enable connect client)
 // ============================================================================
 
-impl<C, T, TC> CompileBuilder<C, T, TC, Disabled> {
+impl<S, C, T, TC> CompileBuilder<S, C, T, TC, Disabled> {
     /// Enable generating typed Connect RPC client code.
     ///
     /// Generates client structs with typed methods for each RPC procedure.
@@ -435,13 +596,17 @@ impl<C, T, TC> CompileBuilder<C, T, TC, Disabled> {
     /// - `hello_world_service_procedures` module with procedure path constants
     /// - `HelloWorldServiceClient` struct with typed `say_hello()` method
     /// - `HelloWorldServiceClientBuilder` for configuration
-    pub fn with_connect_client(self) -> CompileBuilder<C, T, TC, Enabled> {
+    pub fn with_connect_client(self) -> CompileBuilder<S, C, T, TC, Enabled> {
         CompileBuilder {
-            sources: self.sources,
+            source: self.source,
             out_dir: self.out_dir,
+            include_file: self.include_file,
+            extern_reexports: self.extern_reexports,
+
             #[cfg(feature = "fetch-protoc")]
             protoc_path: self.protoc_path,
             prost_config: self.prost_config,
+            pbjson_config: self.pbjson_config,
             #[cfg(feature = "tonic")]
             tonic_config: self.tonic_config,
             #[cfg(feature = "tonic-client")]
@@ -452,24 +617,40 @@ impl<C, T, TC> CompileBuilder<C, T, TC, Disabled> {
 }
 
 // ============================================================================
-// Compile method - available on all states with BoolMarker bounds
+// Compile method - only available when Source = WithSource
 // ============================================================================
 
-impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBuilder<C, T, TC, CC> {
-    /// Execute code generation for all proto sources.
+impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBuilder<WithSource, C, T, TC, CC> {
+    /// Execute code generation for the proto source.
     ///
-    /// Each source is compiled independently while sharing the same configuration.
+    /// When `include_file` is set, a module tree file is generated after
+    /// compilation by scanning the output directory.
     pub fn compile(&self) -> Result<()> {
-        if self.sources.is_empty() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "No proto sources specified",
-            ));
+        self.compile_source(&self.source.0)?;
+
+        if let Some(ref include_path) = self.include_file {
+            let out_dir = match &self.out_dir {
+                Some(dir) => dir.display().to_string(),
+                None => std::env::var("OUT_DIR")
+                    .map_err(|e| std::io::Error::other(format!("OUT_DIR not set: {e}")))?,
+            };
+            let file_name = include_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("Invalid include file path: {}", include_path.display()),
+                    )
+                })?;
+            include_file::generate(
+                file_name,
+                &out_dir,
+                &self.extern_reexports,
+                self.out_dir.is_none(),
+            )?;
         }
 
-        for source in &self.sources {
-            self.compile_source(source)?;
-        }
         Ok(())
     }
 
@@ -526,7 +707,7 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBu
         config.compile_protos(&proto_files, &include_refs)?;
 
         // -------- Pass 1.5: pbjson serde implementations (always) --------
-        Self::generate_pbjson(&out_dir, &descriptor_path)?;
+        Self::generate_pbjson(&out_dir, &descriptor_path, self.pbjson_config.as_ref())?;
 
         // -------- Pass 2: tonic server-only (feature + user requested) --------
         #[cfg(feature = "tonic")]
@@ -583,7 +764,11 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBu
         }
     }
 
-    fn generate_pbjson(out_dir: &str, descriptor_path: &str) -> Result<()> {
+    fn generate_pbjson(
+        out_dir: &str,
+        descriptor_path: &str,
+        pbjson_config: Option<&Box<dyn Fn(&mut pbjson_build::Builder)>>,
+    ) -> Result<()> {
         use std::fs;
 
         let descriptor_bytes = fs::read(descriptor_path)
@@ -591,6 +776,9 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBu
 
         let mut pbjson_builder = pbjson_build::Builder::new();
         pbjson_builder.out_dir(out_dir);
+        if let Some(config_fn) = pbjson_config {
+            config_fn(&mut pbjson_builder);
+        }
         pbjson_builder
             .register_descriptors(&descriptor_bytes)
             .map_err(|e| std::io::Error::other(format!("register descriptors: {e}")))?
@@ -916,22 +1104,50 @@ fn recurse_enum(
         });
     }
 }
-// (Note) Previous text-stripping approach removed; now we rely on extern_path mappings in a second pass
-// to avoid regenerating protobuf message definitions when producing tonic server stubs.
 
-/// Convenience function that auto-discovers all .proto files in the includes directory
-/// and compiles them with a default or custom configuration.
+/// Create a builder without a proto source.
 ///
-/// This provides the best developer experience by only requiring the includes path.
-/// Use `.with_prost_config()` if you need custom configuration.
+/// Use [`compile_dir()`](CompileBuilder::compile_dir) or
+/// [`compile_protos()`](CompileBuilder::compile_protos) to set the source
+/// before calling [`compile()`](CompileBuilder::compile).
 ///
-/// Multiple sources can be chained using the builder's [`compile_dir`](CompileBuilder::compile_dir)
-/// and [`compile_protos`](CompileBuilder::compile_protos) methods. Each source is compiled
-/// independently while sharing the same configuration.
+/// # Example
+///
+/// ```rust,ignore
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     connectrpc_axum_build::builder()
+///         .include_file("protos.rs")
+///         .compile_dir("proto")
+///         .compile()?;
+///     Ok(())
+/// }
+/// ```
+pub fn builder() -> CompileBuilder {
+    CompileBuilder {
+        source: NoSource,
+        out_dir: None,
+        include_file: None,
+        extern_reexports: Vec::new(),
+
+        #[cfg(feature = "fetch-protoc")]
+        protoc_path: None,
+        prost_config: None,
+        pbjson_config: None,
+        #[cfg(feature = "tonic")]
+        tonic_config: None,
+        #[cfg(feature = "tonic-client")]
+        tonic_client_config: None,
+        _marker: PhantomData,
+    }
+}
+
+/// Convenience function that auto-discovers all .proto files in the directory
+/// and returns a builder ready to compile.
+///
+/// This provides the best developer experience by only requiring the proto directory path.
 ///
 /// # Examples
 ///
-/// Basic usage with default configuration:
 /// ```rust,no_run
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     connectrpc_axum_build::compile_dir("proto").compile()?;
@@ -950,45 +1166,17 @@ fn recurse_enum(
 ///     Ok(())
 /// }
 /// ```
-///
-/// With gRPC support (requires `tonic` feature):
-/// ```rust,ignore
-/// fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     connectrpc_axum_build::compile_dir("proto")
-///         .with_tonic()  // Enable Tonic gRPC code generation
-///         .compile()?;
-///     Ok(())
-/// }
-/// ```
-///
-/// With typed Connect client generation:
-/// ```rust,ignore
-/// fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     connectrpc_axum_build::compile_dir("proto")
-///         .with_connect_client()  // Enable typed Connect client code generation
-///         .compile()?;
-///     Ok(())
-/// }
-/// ```
-///
-/// Chaining multiple sources:
-/// ```rust,ignore
-/// fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     connectrpc_axum_build::compile_dir("proto1")
-///         .compile_dir("proto2")
-///         .compile_protos(&["other/service.proto"], &["other"])
-///         .with_tonic()
-///         .compile()?;
-///     Ok(())
-/// }
-/// ```
-pub fn compile_dir(dir: impl AsRef<Path>) -> CompileBuilder {
+pub fn compile_dir(dir: impl AsRef<Path>) -> CompileBuilder<WithSource> {
     CompileBuilder {
-        sources: vec![ProtoSource::Directory(dir.as_ref().to_path_buf())],
+        source: WithSource(ProtoSource::Directory(dir.as_ref().to_path_buf())),
         out_dir: None,
+        include_file: None,
+        extern_reexports: Vec::new(),
+
         #[cfg(feature = "fetch-protoc")]
         protoc_path: None,
         prost_config: None,
+        pbjson_config: None,
         #[cfg(feature = "tonic")]
         tonic_config: None,
         #[cfg(feature = "tonic-client")]
@@ -997,21 +1185,14 @@ pub fn compile_dir(dir: impl AsRef<Path>) -> CompileBuilder {
     }
 }
 
-/// Compile specific proto files with explicit include directories.
-///
-/// Use this when you need fine-grained control over which proto files to compile
-/// and where to find their dependencies.
-///
-/// Multiple sources can be chained using the builder's [`compile_dir`](CompileBuilder::compile_dir)
-/// and [`compile_protos`](CompileBuilder::compile_protos) methods. Each source is compiled
-/// independently while sharing the same configuration.
+/// Convenience function that compiles specific proto files with explicit include directories.
 ///
 /// # Arguments
 ///
 /// * `protos` - Proto files to compile
 /// * `includes` - Directories to search for imports
 ///
-/// # Examples
+/// # Example
 ///
 /// ```rust,ignore
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1022,27 +1203,20 @@ pub fn compile_dir(dir: impl AsRef<Path>) -> CompileBuilder {
 ///     Ok(())
 /// }
 /// ```
-///
-/// Chaining with other sources:
-/// ```rust,ignore
-/// fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     connectrpc_axum_build::compile_protos(&["api/v1/service.proto"], &["api"])
-///         .compile_dir("internal/proto")
-///         .with_tonic()
-///         .compile()?;
-///     Ok(())
-/// }
-/// ```
-pub fn compile_protos<P: AsRef<Path>>(protos: &[P], includes: &[P]) -> CompileBuilder {
+pub fn compile_protos<P: AsRef<Path>>(protos: &[P], includes: &[P]) -> CompileBuilder<WithSource> {
     CompileBuilder {
-        sources: vec![ProtoSource::Files {
+        source: WithSource(ProtoSource::Files {
             protos: protos.iter().map(|p| p.as_ref().to_path_buf()).collect(),
             includes: includes.iter().map(|p| p.as_ref().to_path_buf()).collect(),
-        }],
+        }),
         out_dir: None,
+        include_file: None,
+        extern_reexports: Vec::new(),
+
         #[cfg(feature = "fetch-protoc")]
         protoc_path: None,
         prost_config: None,
+        pbjson_config: None,
         #[cfg(feature = "tonic")]
         tonic_config: None,
         #[cfg(feature = "tonic-client")]

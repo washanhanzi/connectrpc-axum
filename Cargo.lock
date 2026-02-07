@@ -327,7 +327,7 @@ checksum = "75984efb6ed102a0d42db99afb6c1948f0380d1d91808d5529916e6c08b49d8d"
 
 [[package]]
 name = "connectrpc-axum"
-version = "0.1.0-beta.4"
+version = "0.1.0-beta.5"
 dependencies = [
  "async-stream",
  "axum",
@@ -359,7 +359,7 @@ dependencies = [
 
 [[package]]
 name = "connectrpc-axum-build"
-version = "0.1.0-beta.4"
+version = "0.1.0-beta.5"
 dependencies = [
  "convert_case",
  "pbjson-build",
@@ -369,6 +369,7 @@ dependencies = [
  "prost-types",
  "protoc-fetcher",
  "quote",
+ "tempfile",
  "tonic-prost-build",
 ]
 

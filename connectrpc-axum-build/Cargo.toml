@@ -18,6 +18,9 @@ protoc-fetcher = { workspace = true, optional = true }
 quote = { workspace = true }
 tonic-prost-build = { workspace = true, optional = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [features]
 default = []
 fetch-protoc = ["dep:protoc-fetcher"]

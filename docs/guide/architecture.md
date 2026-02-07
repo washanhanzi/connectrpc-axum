@@ -193,9 +193,9 @@ One caveat: axum uses a trait for the factory layer, while we use closures. See 
 
 This allows generated code to work with user-provided trait implementations without knowing concrete types at compile time. See `tonic/handler.rs` for the boxed call types and factory traits.
 
-### Two-Pass Prost Generation
+### Multi-Stage Code Generation
 
-Code generation uses two passes to avoid type duplication:
+Code generation uses staged passes to avoid type duplication while keeping serde and tonic output aligned:
 
 **Pass 1: Prost + Connect**
 ```
@@ -204,13 +204,25 @@ proto files → prost_build → Message types (Rust structs)
                           → File descriptor set
 ```
 
-**Pass 2: Tonic (optional)**
+**Pass 1.5: pbjson serde generation**
 ```
-File descriptor set → tonic_build → Service traits
+File descriptor set → pbjson_build → {package}.serde.rs
+                                  → Appended into Pass 1 files
+```
+
+**Pass 2: Tonic server (optional)**
+```
+File descriptor set → tonic_build → Server traits/stubs
                                   → Uses extern_path to reference Pass 1 types
 ```
 
-The key is `extern_path`: Pass 2 doesn't regenerate types, it references the types from Pass 1. This keeps one source of truth for message types while allowing both Connect and gRPC code to coexist.
+**Pass 3: Tonic client (optional)**
+```
+File descriptor set → tonic_build → Client stubs
+                                  → Uses extern_path to reference Pass 1 types
+```
+
+The key is `extern_path`: tonic passes don't regenerate message types, they reference Pass 1 output. pbjson is a separate builder, so extern mappings for pbjson must be configured separately when needed (for example with `with_pbjson_config`).
 
 See `CompileBuilder` in `connectrpc-axum-build` for the type-state pattern that enforces valid configurations at compile time.
 
