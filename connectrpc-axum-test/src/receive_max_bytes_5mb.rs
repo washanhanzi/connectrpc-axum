@@ -1,5 +1,5 @@
-mod server;
 mod client;
+mod server;
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -11,10 +11,18 @@ pub async fn run(rust_sock: &TestSocket, go_sock: &TestSocket) -> anyhow::Result
     let go_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("go");
 
     println!("Building Go binaries...");
-    let go_server_bin =
-        build_go_binary(&go_dir, "./receive_max_bytes_5mb/server/", "receive-max-bytes-5mb-server").await?;
-    let go_client_bin =
-        build_go_binary(&go_dir, "./receive_max_bytes_5mb/client/", "receive-max-bytes-5mb-client").await?;
+    let go_server_bin = build_go_binary(
+        &go_dir,
+        "./receive_max_bytes_5mb/server/",
+        "receive-max-bytes-5mb-server",
+    )
+    .await?;
+    let go_client_bin = build_go_binary(
+        &go_dir,
+        "./receive_max_bytes_5mb/client/",
+        "receive-max-bytes-5mb-client",
+    )
+    .await?;
 
     let rust_listener = rust_sock.bind()?;
     let rust_server = tokio::spawn(server::start(rust_listener));

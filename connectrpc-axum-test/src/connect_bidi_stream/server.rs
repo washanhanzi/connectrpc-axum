@@ -1,5 +1,5 @@
-use connectrpc_axum::prelude::*;
 use crate::{EchoRequest, EchoResponse, echo_service_connect};
+use connectrpc_axum::prelude::*;
 use futures::{Stream, StreamExt};
 
 async fn echo_bidi_stream(
@@ -18,7 +18,7 @@ async fn echo_bidi_stream(
                     count += 1;
                     yield Ok(EchoResponse {
                         message: format!("Echo #{}: {}", count, msg.message),
-                    });
+                    ..Default::default()});
                 }
                 Err(e) => {
                     yield Err(e);
@@ -28,7 +28,7 @@ async fn echo_bidi_stream(
         }
         yield Ok(EchoResponse {
             message: format!("Stream complete. Echoed {} messages.", count),
-        });
+        ..Default::default()});
     };
 
     Ok(ConnectResponse::new(StreamBody::new(response_stream)))

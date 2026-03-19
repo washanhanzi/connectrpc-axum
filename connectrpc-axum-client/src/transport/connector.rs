@@ -59,7 +59,8 @@ pub const fn has_tls_support() -> bool {
 /// 1. Feature-gated provider (tls-ring or tls-aws-lc)
 /// 2. User-installed global default provider
 /// 3. None if no provider available
-fn try_get_crypto_provider_builder() -> Option<rustls::ConfigBuilder<ClientConfig, rustls::WantsVerifier>> {
+fn try_get_crypto_provider_builder()
+-> Option<rustls::ConfigBuilder<ClientConfig, rustls::WantsVerifier>> {
     // Priority 1: feature-gated providers
     #[cfg(feature = "tls-ring")]
     return Some({
@@ -99,11 +100,7 @@ pub fn default_tls_config() -> Option<ClientConfig> {
     let builder = try_get_crypto_provider_builder()?;
     let roots = build_root_store();
 
-    Some(
-        builder
-            .with_root_certificates(roots)
-            .with_no_client_auth(),
-    )
+    Some(builder.with_root_certificates(roots).with_no_client_auth())
 }
 
 /// Build the root certificate store from enabled features.

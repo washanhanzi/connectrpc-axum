@@ -8,7 +8,7 @@ Typical method order:
 
 1. Pick source (`compile_dir` or `compile_protos`)
 2. Pick generation mode (`no_connect_server`, `with_connect_client`, `with_tonic`, `with_tonic_client`)
-3. Add config hooks (`with_prost_config`, `with_pbjson_config`, tonic config hooks)
+3. Add config hooks (`with_buffa_config`, `extern_path`, tonic config hooks)
 4. Choose output/module options (`out_dir`, `include_file`, `extern_module`)
 5. Run `compile()`
 
@@ -120,6 +120,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `no_connect_server()` and `with_tonic()` cannot be combined.
 
+### `with_tonic_request_mode(...)`
+
+Switch tonic server request types between owned messages and zero-copy `View<T>` wrappers.
+
+Requires `tonic` feature:
+
+```rust
+use connectrpc_axum_build::TonicRequestMode;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    connectrpc_axum_build::compile_dir("proto")
+        .with_tonic()
+        .with_tonic_request_mode(TonicRequestMode::View)
+        .compile()?;
+    Ok(())
+}
+```
+
+This only changes generated tonic server handler signatures. Connect handlers can opt into the same request mode directly with `ViewRequest<T>`.
+
 ### `with_tonic_client()` and `with_tonic_client_config(...)`
 
 Requires `tonic-client` feature:
@@ -141,39 +161,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Configuration Hooks
 
-### `with_prost_config(...)`
+### `with_buffa_config(...)`
 
-Customize `prost_build::Config` (type/field attributes, extern paths, etc.).
+Customize the underlying `buffa_build::Config`.
 
 ```rust
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     connectrpc_axum_build::compile_dir("proto")
-        .with_prost_config(|config| {
-            config.type_attribute(".", "#[derive(Hash)]");
-            config.field_attribute("MyMessage.my_field", "#[serde(skip)]");
+        .with_buffa_config(|config| {
+            config
+                .generate_arbitrary(true)
+                .strict_utf8_mapping(true)
         })
         .compile()?;
     Ok(())
 }
 ```
 
-### `with_pbjson_config(...)`
+`connectrpc-axum-build` always drives Buffa from a descriptor set, so output directory, requested files, and shared extern-path wiring are applied after this hook.
 
-Customize `pbjson_build::Builder`.
+### `extern_path(...)`
 
-When you map protobuf packages with `prost` extern paths, configure matching pbjson extern paths too:
+Declare shared protobuf-to-Rust type mappings once and reuse them across:
+
+- Buffa message generation
+- Connect sidecar generation
+- tonic server/client sidecars
+
+If you import Google well-known types and do not generate them locally, `.google.protobuf` defaults to `::buffa_types::google::protobuf`.
 
 ```rust
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     connectrpc_axum_build::compile_dir("proto")
-        .with_prost_config(|config| {
-            config
-                .compile_well_known_types()
-                .extern_path(".google.protobuf", "::pbjson_types");
-        })
-        .with_pbjson_config(|builder| {
-            builder.extern_path(".google.protobuf", "::pbjson_types");
-        })
+        .extern_path(".acme.common.v1", "::shared_protos::acme::common::v1")
         .compile()?;
     Ok(())
 }
@@ -259,12 +279,9 @@ Adds a re-export shim in generated include file for externalized proto modules.
 ```rust
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     connectrpc_axum_build::compile_dir("proto")
-        .with_prost_config(|config| {
-            config.compile_well_known_types();
-            config.extern_path(".google.protobuf", "::pbjson_types");
-        })
+        .extern_path(".acme.common.v1", "::shared_protos::acme::common::v1")
         .include_file("protos.rs")
-        .extern_module("google.protobuf", "::pbjson_types")
+        .extern_module("acme.common.v1", "::shared_protos::acme::common::v1")
         .compile()?;
     Ok(())
 }
@@ -274,9 +291,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Depending on enabled methods/features:
 
-- Message types with `prost::Message` + `serde` derives
+- Buffa message types with generated borrowed view types and serde support
+- Generated `HasView` glue so handlers can use `View<T>`
 - Connect service builders (unless `no_connect_server()` is used)
 - Connect route paths
 - Typed Connect clients (if `with_connect_client()`)
 - Tonic server stubs (if `with_tonic()`)
+- Tonic server request signatures using owned messages or `View<T>` (via `with_tonic_request_mode(...)`)
 - Tonic client stubs (if `with_tonic_client()`)

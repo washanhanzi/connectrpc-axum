@@ -20,15 +20,14 @@ use connectrpc_axum_client::{
     ClientError, RequestContext, TypedMutInterceptor, response_interceptor, stream_interceptor,
 };
 use connectrpc_axum_examples::{
-    EchoRequest, EchoResponse, HelloRequest, HelloResponse,
-    echo_service_connect, hello_world_service_connect,
-    echo_service_connect_client::EchoServiceClient,
+    EchoRequest, EchoResponse, HelloRequest, HelloResponse, echo_service_connect,
+    echo_service_connect_client::EchoServiceClient, hello_world_service_connect,
     hello_world_service_connect_client::HelloWorldServiceClient,
 };
 use futures::{Stream, StreamExt, stream};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::net::TcpListener;
 
@@ -58,6 +57,7 @@ async fn say_hello(
     Ok(ConnectResponse::new(HelloResponse {
         message: format!("Hello, {}! Header: {}", name, custom_header),
         response_type: None,
+        ..Default::default()
     }))
 }
 
@@ -80,15 +80,15 @@ async fn say_hello_stream(
         yield Ok(HelloResponse {
             message: format!("Stream 1 for {}. Header: {}", name, custom_header),
             response_type: None,
-        });
+        ..Default::default()});
         yield Ok(HelloResponse {
             message: format!("Stream 2 for {}", name),
             response_type: None,
-        });
+        ..Default::default()});
         yield Ok(HelloResponse {
             message: format!("Stream 3 for {}", name),
             response_type: None,
-        });
+        ..Default::default()});
     };
 
     Ok(ConnectResponse::new(StreamBody::new(response_stream)))
@@ -106,6 +106,7 @@ async fn echo(
 
     Ok(ConnectResponse::new(EchoResponse {
         message: format!("{}|header:{}", req.message, custom_header),
+        ..Default::default()
     }))
 }
 
@@ -126,6 +127,7 @@ async fn echo_client_stream(
 
     Ok(ConnectResponse::new(EchoResponse {
         message: format!("Received {}: [{}]", messages.len(), messages.join(", ")),
+        ..Default::default()
     }))
 }
 
@@ -145,7 +147,7 @@ async fn echo_bidi_stream(
                 Ok(msg) => {
                     yield Ok(EchoResponse {
                         message: format!("Echo: {}", msg.message),
-                    });
+                    ..Default::default()});
                 }
                 Err(e) => {
                     yield Err(e);
@@ -259,6 +261,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("Alice".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
         let response = client.say_hello(&request).await?;
 
@@ -278,6 +281,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
         match client.say_hello(&invalid_request).await {
             Err(e) => {
@@ -317,6 +321,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("Bob".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
         let response = client.say_hello(&request).await?;
 
@@ -345,6 +350,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("Carol".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
 
         // Make 3 calls
@@ -359,9 +365,7 @@ async fn main() -> anyhow::Result<()> {
             && r2.message.contains("count-2")
             && r3.message.contains("count-3")
         {
-            println!(
-                "  PASS: Struct interceptor counted 3 calls, headers verified"
-            );
+            println!("  PASS: Struct interceptor counted 3 calls, headers verified");
             passed += 1;
         } else {
             println!(
@@ -394,6 +398,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("Diana".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response = client.say_hello_stream(&request).await?;
@@ -431,26 +436,27 @@ async fn main() -> anyhow::Result<()> {
     {
         let client = EchoServiceClient::builder(&base_url)
             .http2_prior_knowledge()
-            .with_on_send_echo_client_stream(stream_interceptor(
-                |_ctx, msg: &mut EchoRequest| {
-                    if msg.message.is_empty() {
-                        return Err(ClientError::invalid_argument("message must not be empty"));
-                    }
-                    Ok(())
-                },
-            ))
+            .with_on_send_echo_client_stream(stream_interceptor(|_ctx, msg: &mut EchoRequest| {
+                if msg.message.is_empty() {
+                    return Err(ClientError::invalid_argument("message must not be empty"));
+                }
+                Ok(())
+            }))
             .build()?;
 
         // Send: "hello", "", "world" — the empty message should abort the stream
         let messages = vec![
             EchoRequest {
                 message: "hello".to_string(),
+                ..Default::default()
             },
             EchoRequest {
                 message: "".to_string(),
+                ..Default::default()
             },
             EchoRequest {
                 message: "world".to_string(),
+                ..Default::default()
             },
         ];
         let request_stream = stream::iter(messages);
@@ -482,10 +488,7 @@ async fn main() -> anyhow::Result<()> {
                     );
                     failed += 1;
                 } else {
-                    println!(
-                        "  FAIL: Expected error but got success: {}",
-                        msg
-                    );
+                    println!("  FAIL: Expected error but got success: {}", msg);
                     failed += 1;
                 }
             }
@@ -501,16 +504,15 @@ async fn main() -> anyhow::Result<()> {
     {
         let client = EchoServiceClient::builder(&base_url)
             .with_before_echo(|ctx: &mut RequestContext<'_>, _req: &mut EchoRequest| {
-                ctx.headers.insert(
-                    "x-custom-header",
-                    "propagated-value".parse().unwrap(),
-                );
+                ctx.headers
+                    .insert("x-custom-header", "propagated-value".parse().unwrap());
                 Ok(())
             })
             .build()?;
 
         let request = EchoRequest {
             message: "test".to_string(),
+            ..Default::default()
         };
         let response = client.echo(&request).await?;
 

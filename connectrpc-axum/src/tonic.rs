@@ -10,9 +10,11 @@
 //! - [`FromRequestPartsLayer`] - Middleware enabling `FromRequestParts` extractors
 //! - [`RequestContext`] - Full request context for extractor support
 
+mod codec;
 mod handler;
 mod parts;
 
+pub use codec::*;
 pub use handler::*;
 pub use parts::*;
 

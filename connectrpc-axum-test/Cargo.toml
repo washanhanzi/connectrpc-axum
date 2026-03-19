@@ -5,12 +5,10 @@ edition = "2024"
 publish = false
 
 [dependencies]
+buffa = { workspace = true, features = ["json"] }
+buffa-types = { workspace = true, features = ["json"] }
 connectrpc-axum = { path = "../connectrpc-axum", features = ["tonic", "compression-full"] }
 axum = { workspace = true }
-prost = { workspace = true }
-pbjson = { workspace = true }
-pbjson-types = { workspace = true }
-prost-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
@@ -25,7 +23,6 @@ anyhow = { workspace = true }
 async-stream = { workspace = true }
 futures = { workspace = true }
 tonic = { workspace = true }
-tonic-prost = { workspace = true }
 tonic-web = { workspace = true }
 flate2 = { workspace = true }
 brotli = { workspace = true }

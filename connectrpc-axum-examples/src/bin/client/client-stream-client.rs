@@ -18,10 +18,7 @@
 //!   cargo run --bin client-stream-client --no-default-features -- http://localhost:8080
 
 use connectrpc_axum_client::ClientError;
-use connectrpc_axum_examples::{
-    EchoRequest,
-    echo_service_connect_client::EchoServiceClient,
-};
+use connectrpc_axum_examples::{EchoRequest, echo_service_connect_client::EchoServiceClient};
 use futures::stream;
 use std::env;
 
@@ -45,12 +42,15 @@ async fn main() -> anyhow::Result<()> {
         let messages = vec![
             EchoRequest {
                 message: "first".to_string(),
+                ..Default::default()
             },
             EchoRequest {
                 message: "second".to_string(),
+                ..Default::default()
             },
             EchoRequest {
                 message: "third".to_string(),
+                ..Default::default()
             },
         ];
 
@@ -86,9 +86,11 @@ async fn main() -> anyhow::Result<()> {
         let messages = vec![
             EchoRequest {
                 message: "hello".to_string(),
+                ..Default::default()
             },
             EchoRequest {
                 message: "world".to_string(),
+                ..Default::default()
             },
         ];
 
@@ -111,6 +113,7 @@ async fn main() -> anyhow::Result<()> {
 
         let messages = vec![EchoRequest {
             message: "only one".to_string(),
+            ..Default::default()
         }];
 
         let request_stream = stream::iter(messages);
@@ -150,6 +153,7 @@ async fn main() -> anyhow::Result<()> {
 
         let messages = vec![EchoRequest {
             message: "test".to_string(),
+            ..Default::default()
         }];
 
         let request_stream = stream::iter(messages);
@@ -172,6 +176,7 @@ async fn main() -> anyhow::Result<()> {
 
         let messages = vec![EchoRequest {
             message: "test".to_string(),
+            ..Default::default()
         }];
 
         let request_stream = stream::iter(messages);
@@ -198,6 +203,7 @@ async fn main() -> anyhow::Result<()> {
             let messages: Vec<EchoRequest> = (1..=i)
                 .map(|n| EchoRequest {
                     message: format!("message{}", n),
+                    ..Default::default()
                 })
                 .collect();
 

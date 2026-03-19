@@ -68,7 +68,8 @@ async fn run_one(sock: &TestSocket) -> anyhow::Result<()> {
     let body_bytes = resp.into_body().collect().await?.to_bytes();
 
     // Response may be streaming format (envelope-framed) or plain JSON
-    let response_text = if body_bytes.len() >= 5 && (body_bytes[0] == 0x00 || body_bytes[0] == 0x01) {
+    let response_text = if body_bytes.len() >= 5 && (body_bytes[0] == 0x00 || body_bytes[0] == 0x01)
+    {
         // Streaming format - extract first data frame
         let mut cursor = &body_bytes[..];
         let mut text = String::new();

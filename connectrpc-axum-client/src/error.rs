@@ -192,12 +192,10 @@ impl From<Status> for ClientError {
 impl From<EnvelopeError> for ClientError {
     fn from(err: EnvelopeError) -> Self {
         match err {
-            EnvelopeError::IncompleteHeader { expected, actual } => {
-                ClientError::Protocol(format!(
-                    "incomplete envelope header: expected {} bytes, got {}",
-                    expected, actual
-                ))
-            }
+            EnvelopeError::IncompleteHeader { expected, actual } => ClientError::Protocol(format!(
+                "incomplete envelope header: expected {} bytes, got {}",
+                expected, actual
+            )),
             EnvelopeError::InvalidFlags(flags) => {
                 ClientError::Protocol(format!("invalid frame flags: 0x{:02x}", flags))
             }
@@ -250,8 +248,7 @@ mod tests {
 
     #[test]
     fn test_client_error_add_detail() {
-        let err =
-            ClientError::new(Code::Internal, "error").add_detail("test.Type", vec![1, 2, 3]);
+        let err = ClientError::new(Code::Internal, "error").add_detail("test.Type", vec![1, 2, 3]);
 
         assert_eq!(err.details().len(), 1);
         assert_eq!(err.details()[0].type_url(), "test.Type");

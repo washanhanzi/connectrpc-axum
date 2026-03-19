@@ -7,6 +7,7 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use buffa::Message;
 use bytes::Bytes;
 use connectrpc_axum_core::{
     CompressionConfig, CompressionEncoding, ENVELOPE_HEADER_SIZE, compress_payload, envelope_flags,
@@ -15,7 +16,6 @@ use connectrpc_axum_core::{
 
 use crate::ClientError;
 use futures::Stream;
-use prost::Message;
 use serde::Serialize;
 
 /// State of the frame encoder.
@@ -225,80 +225,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TestMessage;
     use connectrpc_axum_core::CompressionEncoding;
     use futures::StreamExt;
     use futures::stream;
-
-    // A simple test message type that implements both Message and Serialize
-    #[derive(Clone, PartialEq, Default)]
-    struct TestMessage {
-        value: String,
-    }
-
-    impl std::fmt::Debug for TestMessage {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("TestMessage")
-                .field("value", &self.value)
-                .finish()
-        }
-    }
-
-    impl serde::Serialize for TestMessage {
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
-            use serde::ser::SerializeStruct;
-            let mut state = serializer.serialize_struct("TestMessage", 1)?;
-            state.serialize_field("value", &self.value)?;
-            state.end()
-        }
-    }
-
-    impl prost::Message for TestMessage {
-        fn encode_raw(&self, buf: &mut impl bytes::BufMut)
-        where
-            Self: Sized,
-        {
-            if !self.value.is_empty() {
-                prost::encoding::string::encode(1, &self.value, buf);
-            }
-        }
-
-        fn merge_field(
-            &mut self,
-            tag: u32,
-            wire_type: prost::encoding::WireType,
-            buf: &mut impl bytes::Buf,
-            ctx: prost::encoding::DecodeContext,
-        ) -> Result<(), prost::DecodeError>
-        where
-            Self: Sized,
-        {
-            if tag == 1 {
-                prost::encoding::string::merge(wire_type, &mut self.value, buf, ctx)
-            } else {
-                prost::encoding::skip_field(wire_type, tag, buf, ctx)
-            }
-        }
-
-        fn encoded_len(&self) -> usize {
-            if self.value.is_empty() {
-                0
-            } else {
-                prost::encoding::string::encoded_len(1, &self.value)
-            }
-        }
-
-        fn clear(&mut self) {
-            self.value.clear();
-        }
-    }
 
     #[tokio::test]
     async fn test_encode_single_json_message() {
         let messages = stream::iter(vec![TestMessage {
             value: "hello".to_string(),
+            ..Default::default()
         }]);
 
         let mut encoder = FrameEncoder::new(
@@ -331,9 +267,11 @@ mod tests {
         let messages = stream::iter(vec![
             TestMessage {
                 value: "one".to_string(),
+                ..Default::default()
             },
             TestMessage {
                 value: "two".to_string(),
+                ..Default::default()
             },
         ]);
 
@@ -370,6 +308,7 @@ mod tests {
     async fn test_encode_proto_message() {
         let messages = stream::iter(vec![TestMessage {
             value: "hello".to_string(),
+            ..Default::default()
         }]);
 
         let mut encoder = FrameEncoder::new(
@@ -386,7 +325,7 @@ mod tests {
         // Decode the proto payload
         let length = u32::from_be_bytes([frame[1], frame[2], frame[3], frame[4]]) as usize;
         let payload = &frame[5..5 + length];
-        let decoded = TestMessage::decode(payload).unwrap();
+        let decoded = TestMessage::decode_from_slice(payload).unwrap();
         assert_eq!(decoded.value, "hello");
 
         // EndStream

@@ -10,7 +10,6 @@ license = "MIT"
 base64 = { workspace = true }
 bytes = { workspace = true }
 http = { workspace = true }
-prost = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

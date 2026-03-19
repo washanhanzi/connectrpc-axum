@@ -65,21 +65,21 @@ async fn say_hello_stream(
         yield Ok(HelloResponse {
             message: format!("Hello, {}! Interceptor header: {}", name, interceptor_value),
             response_type: None,
-        });
+        ..Default::default()});
 
         // Additional messages
         for i in 1..=2 {
             yield Ok(HelloResponse {
                 message: format!("Stream message #{} for {}", i, name),
                 response_type: None,
-            });
+            ..Default::default()});
         }
 
         // Final message
         yield Ok(HelloResponse {
             message: format!("Stream complete for {}", name),
             response_type: None,
-        });
+        ..Default::default()});
     };
 
     Ok(ConnectResponse::new(StreamBody::new(response_stream)))
@@ -121,6 +121,7 @@ async fn echo_client_stream(
             messages.join(", "),
             interceptor_value
         ),
+        ..Default::default()
     }))
 }
 
@@ -161,12 +162,12 @@ async fn echo_bidi_stream(
                                 "Bidi #{}: {} [Interceptor: {}]",
                                 count, msg.message, interceptor_value
                             ),
-                        });
+                        ..Default::default()});
                         is_first = false;
                     } else {
                         yield Ok(EchoResponse {
                             message: format!("Bidi #{}: {}", count, msg.message),
-                        });
+                        ..Default::default()});
                     }
                 }
                 Err(e) => {
@@ -180,7 +181,7 @@ async fn echo_bidi_stream(
         let count = counter_clone.fetch_add(1, Ordering::SeqCst);
         yield Ok(EchoResponse {
             message: format!("Bidi stream #{} complete", count),
-        });
+        ..Default::default()});
     };
 
     Ok(ConnectResponse::new(StreamBody::new(response_stream)))
@@ -254,6 +255,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("StreamTest".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response: ClientResponse<_> = client
@@ -306,6 +308,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("ClosureTest".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response: ClientResponse<_> = client
@@ -316,7 +319,10 @@ async fn main() -> anyhow::Result<()> {
             .await?;
 
         let mut stream = response.into_inner();
-        let first_msg = stream.next().await.ok_or(anyhow::anyhow!("No messages"))??;
+        let first_msg = stream
+            .next()
+            .await
+            .ok_or(anyhow::anyhow!("No messages"))??;
 
         if first_msg.message.contains("closure-stream-test") {
             println!("  PASS: Closure interceptor header received");
@@ -346,6 +352,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("ChainedTest".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response: ClientResponse<_> = client
@@ -356,7 +363,10 @@ async fn main() -> anyhow::Result<()> {
             .await?;
 
         let mut stream = response.into_inner();
-        let first_msg = stream.next().await.ok_or(anyhow::anyhow!("No messages"))??;
+        let first_msg = stream
+            .next()
+            .await
+            .ok_or(anyhow::anyhow!("No messages"))??;
 
         if first_msg.message.contains("chained-stream-test") {
             println!("  PASS: Chained interceptors work with server streaming");
@@ -384,12 +394,15 @@ async fn main() -> anyhow::Result<()> {
         let messages = vec![
             EchoRequest {
                 message: "msg1".to_string(),
+                ..Default::default()
             },
             EchoRequest {
                 message: "msg2".to_string(),
+                ..Default::default()
             },
             EchoRequest {
                 message: "msg3".to_string(),
+                ..Default::default()
             },
         ];
         let request_stream = stream::iter(messages);
@@ -432,6 +445,7 @@ async fn main() -> anyhow::Result<()> {
 
         let messages = vec![EchoRequest {
             message: "test".to_string(),
+            ..Default::default()
         }];
         let request_stream = stream::iter(messages);
 
@@ -469,9 +483,11 @@ async fn main() -> anyhow::Result<()> {
         let messages = vec![
             EchoRequest {
                 message: "bidi1".to_string(),
+                ..Default::default()
             },
             EchoRequest {
                 message: "bidi2".to_string(),
+                ..Default::default()
             },
         ];
         let request_stream = stream::iter(messages);
@@ -515,16 +531,15 @@ async fn main() -> anyhow::Result<()> {
             .use_json()
             .http2_prior_knowledge()
             .with_interceptor(ClosureInterceptor::new(|ctx: &mut RequestContext<'_>| {
-                ctx.headers.insert(
-                    "x-interceptor-header",
-                    "closure-bidi-test".parse().unwrap(),
-                );
+                ctx.headers
+                    .insert("x-interceptor-header", "closure-bidi-test".parse().unwrap());
                 Ok(())
             }))
             .build()?;
 
         let messages = vec![EchoRequest {
             message: "test".to_string(),
+            ..Default::default()
         }];
         let request_stream = stream::iter(messages);
 
@@ -536,7 +551,10 @@ async fn main() -> anyhow::Result<()> {
             .await?;
 
         let mut stream = response.into_inner();
-        let first_msg = stream.next().await.ok_or(anyhow::anyhow!("No messages"))??;
+        let first_msg = stream
+            .next()
+            .await
+            .ok_or(anyhow::anyhow!("No messages"))??;
 
         if first_msg.message.contains("closure-bidi-test") {
             println!("  PASS: Closure interceptor works with bidi streaming");
@@ -565,6 +583,7 @@ async fn main() -> anyhow::Result<()> {
 
         let messages = vec![EchoRequest {
             message: "chain".to_string(),
+            ..Default::default()
         }];
         let request_stream = stream::iter(messages);
 
@@ -576,7 +595,10 @@ async fn main() -> anyhow::Result<()> {
             .await?;
 
         let mut stream = response.into_inner();
-        let first_msg = stream.next().await.ok_or(anyhow::anyhow!("No messages"))??;
+        let first_msg = stream
+            .next()
+            .await
+            .ok_or(anyhow::anyhow!("No messages"))??;
 
         if first_msg.message.contains("chained-bidi-test") {
             println!("  PASS: Chained interceptors work with bidi streaming");
@@ -604,6 +626,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("ProtoStream".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response: ClientResponse<_> = client
@@ -614,7 +637,10 @@ async fn main() -> anyhow::Result<()> {
             .await?;
 
         let mut stream = response.into_inner();
-        let first_msg = stream.next().await.ok_or(anyhow::anyhow!("No messages"))??;
+        let first_msg = stream
+            .next()
+            .await
+            .ok_or(anyhow::anyhow!("No messages"))??;
 
         if first_msg.message.contains("proto-stream-test") {
             println!("  PASS: Proto encoding with interceptor works");

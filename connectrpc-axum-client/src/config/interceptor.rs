@@ -30,9 +30,9 @@
 //! impl MessageInterceptor for LoggingInterceptor {
 //!     fn on_request<Req>(&self, ctx: &mut RequestContext, req: &mut Req) -> Result<(), ClientError>
 //!     where
-//!         Req: prost::Message + serde::Serialize + 'static,
+//!         Req: buffa::Message + serde::Serialize + 'static,
 //!     {
-//!         println!("Calling {} with {} bytes", ctx.procedure, req.encoded_len());
+//!         println!("Calling {} with {} bytes", ctx.procedure, req.compute_size());
 //!         Ok(())
 //!     }
 //! }
@@ -45,8 +45,8 @@
 
 use std::sync::Arc;
 
+use buffa::Message;
 use http::HeaderMap;
-use prost::Message;
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::ClientError;
@@ -193,7 +193,7 @@ pub trait Interceptor: Send + Sync + Clone + 'static {
 ///
 /// ```ignore
 /// use connectrpc_axum_client::{MessageInterceptor, RequestContext, ClientError};
-/// use prost::Message;
+/// use buffa::Message;
 ///
 /// #[derive(Clone)]
 /// struct LoggingInterceptor;
@@ -207,7 +207,7 @@ pub trait Interceptor: Send + Sync + Clone + 'static {
 ///     where
 ///         Req: Message + serde::Serialize + 'static,
 ///     {
-///         println!("Calling {} with {} bytes", ctx.procedure, request.encoded_len());
+///         println!("Calling {} with {} bytes", ctx.procedure, request.compute_size());
 ///         Ok(())
 ///     }
 /// }
@@ -227,11 +227,7 @@ pub trait MessageInterceptor: Send + Sync + Clone + 'static {
     }
 
     /// Called after a unary response is received.
-    fn on_response<Res>(
-        &self,
-        ctx: &ResponseContext,
-        response: &mut Res,
-    ) -> Result<(), ClientError>
+    fn on_response<Res>(&self, ctx: &ResponseContext, response: &mut Res) -> Result<(), ClientError>
     where
         Res: Message + DeserializeOwned + Default + 'static,
     {
@@ -240,11 +236,7 @@ pub trait MessageInterceptor: Send + Sync + Clone + 'static {
     }
 
     /// Called before sending a message on a stream.
-    fn on_stream_send<Req>(
-        &self,
-        ctx: &StreamContext,
-        request: &mut Req,
-    ) -> Result<(), ClientError>
+    fn on_stream_send<Req>(&self, ctx: &StreamContext, request: &mut Req) -> Result<(), ClientError>
     where
         Req: Message + Serialize + 'static,
     {
@@ -791,10 +783,7 @@ where
 pub fn stream_interceptor<Body, F>(f: F) -> F
 where
     Body: 'static,
-    F: for<'a> Fn(&StreamContext<'a>, &mut Body) -> Result<(), ClientError>
-        + Send
-        + Sync
-        + 'static,
+    F: for<'a> Fn(&StreamContext<'a>, &mut Body) -> Result<(), ClientError> + Send + Sync + 'static,
 {
     f
 }
@@ -1004,90 +993,9 @@ impl<Req, Res> std::fmt::Debug for BidiStreamInterceptors<Req, Res> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use crate::test_support::TestMessage;
     use std::sync::Arc;
-
-    // Test message type
-    #[derive(Clone, Default, PartialEq)]
-    struct TestMessage {
-        value: String,
-    }
-
-    impl std::fmt::Debug for TestMessage {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("TestMessage")
-                .field("value", &self.value)
-                .finish()
-        }
-    }
-
-    impl serde::Serialize for TestMessage {
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
-            use serde::ser::SerializeStruct;
-            let mut state = serializer.serialize_struct("TestMessage", 1)?;
-            state.serialize_field("value", &self.value)?;
-            state.end()
-        }
-    }
-
-    impl<'de> serde::Deserialize<'de> for TestMessage {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            #[derive(serde::Deserialize)]
-            struct Helper {
-                value: String,
-            }
-            let helper = Helper::deserialize(deserializer)?;
-            Ok(TestMessage {
-                value: helper.value,
-            })
-        }
-    }
-
-    impl prost::Message for TestMessage {
-        fn encode_raw(&self, buf: &mut impl bytes::BufMut)
-        where
-            Self: Sized,
-        {
-            if !self.value.is_empty() {
-                prost::encoding::string::encode(1, &self.value, buf);
-            }
-        }
-
-        fn merge_field(
-            &mut self,
-            tag: u32,
-            wire_type: prost::encoding::WireType,
-            buf: &mut impl bytes::Buf,
-            ctx: prost::encoding::DecodeContext,
-        ) -> Result<(), prost::DecodeError>
-        where
-            Self: Sized,
-        {
-            if tag == 1 {
-                prost::encoding::string::merge(wire_type, &mut self.value, buf, ctx)
-            } else {
-                prost::encoding::skip_field(wire_type, tag, buf, ctx)
-            }
-        }
-
-        fn encoded_len(&self) -> usize {
-            if self.value.is_empty() {
-                0
-            } else {
-                prost::encoding::string::encoded_len(1, &self.value)
-            }
-        }
-
-        fn clear(&mut self) {
-            self.value.clear();
-        }
-    }
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     // ========================================================================
     // Header Interceptor Tests
@@ -1130,6 +1038,7 @@ mod tests {
         let mut ctx = RequestContext::new("test/Method", &mut headers);
         let mut msg = TestMessage {
             value: "original".into(),
+            ..Default::default()
         };
 
         wrapped.intercept_request(&mut ctx, &mut msg).unwrap();
@@ -1168,6 +1077,7 @@ mod tests {
         let mut ctx = RequestContext::new("test/Method", &mut headers);
         let mut msg = TestMessage {
             value: "original".into(),
+            ..Default::default()
         };
 
         wrapped.intercept_request(&mut ctx, &mut msg).unwrap();
@@ -1198,7 +1108,10 @@ mod tests {
             where
                 Req: Message + Serialize + 'static,
             {
-                self.lengths.lock().unwrap().push(request.encoded_len());
+                self.lengths
+                    .lock()
+                    .unwrap()
+                    .push(request.compute_size() as usize);
                 Ok(())
             }
         }
@@ -1215,6 +1128,7 @@ mod tests {
         let mut ctx = RequestContext::new("test/Method", &mut headers);
         let mut msg = TestMessage {
             value: "hello".into(),
+            ..Default::default()
         };
 
         chain.intercept_request(&mut ctx, &mut msg).unwrap();
@@ -1376,7 +1290,10 @@ mod tests {
             }
         }
 
-        let chain = Chain(HeaderWrapper(ErrorInterceptor), HeaderWrapper(PanicInterceptor));
+        let chain = Chain(
+            HeaderWrapper(ErrorInterceptor),
+            HeaderWrapper(PanicInterceptor),
+        );
 
         let mut headers = HeaderMap::new();
         let mut ctx = RequestContext::new("test/Method", &mut headers);

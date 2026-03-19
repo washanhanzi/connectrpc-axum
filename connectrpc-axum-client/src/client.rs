@@ -2,6 +2,7 @@
 //!
 //! This module provides the main [`ConnectClient`] type for making RPC calls.
 
+use buffa::Message;
 use bytes::Bytes;
 use http::{Method, Request, header};
 use http_body_util::BodyExt;
@@ -18,7 +19,6 @@ use crate::config::{
 };
 use crate::transport::{HyperTransport, TransportBody};
 use futures::{Stream, StreamExt};
-use prost::Message;
 use serde::{Serialize, de::DeserializeOwned};
 use std::time::Duration;
 
@@ -192,7 +192,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         T: Message + DeserializeOwned + Default,
     {
         if self.use_proto {
-            T::decode(bytes)
+            T::decode_from_slice(bytes)
                 .map_err(|e| ClientError::Decode(format!("protobuf decoding failed: {}", e)))
         } else {
             serde_json::from_slice(bytes)
@@ -390,7 +390,9 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         let response = if let Some(t) = effective_timeout {
             timeout(t, self.transport.request(req))
                 .await
-                .map_err(|_| ClientError::new(Code::DeadlineExceeded, "client timeout exceeded"))??
+                .map_err(|_| {
+                    ClientError::new(Code::DeadlineExceeded, "client timeout exceeded")
+                })??
         } else {
             self.transport.request(req).await?
         };
@@ -406,7 +408,11 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                 .await
                 .map_err(|e| ClientError::Transport(format!("failed to read error body: {}", e)))?
                 .to_bytes();
-            return Err(decompress_and_parse_error(status, &response_headers, body_bytes));
+            return Err(decompress_and_parse_error(
+                status,
+                &response_headers,
+                body_bytes,
+            ));
         }
 
         // 10. Handle response decompression
@@ -414,12 +420,13 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             .get(header::CONTENT_ENCODING)
             .and_then(|v| v.to_str().ok());
 
-        let response_encoding = CompressionEncoding::from_header(content_encoding).ok_or_else(|| {
-            ClientError::Protocol(format!(
-                "unsupported response encoding: {:?}",
-                content_encoding
-            ))
-        })?;
+        let response_encoding =
+            CompressionEncoding::from_header(content_encoding).ok_or_else(|| {
+                ClientError::Protocol(format!(
+                    "unsupported response encoding: {:?}",
+                    content_encoding
+                ))
+            })?;
 
         // 11. Get response body
         let body_bytes = response
@@ -511,7 +518,9 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         ConnectResponse<
             InterceptingStreaming<
                 FrameDecoder<
-                    impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin + use<'_, I, Req, Res>,
+                    impl futures::Stream<Item = Result<Bytes, ClientError>>
+                    + Unpin
+                    + use<'_, I, Req, Res>,
                     Res,
                 >,
                 Res,
@@ -630,8 +639,9 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         let mut interceptor_headers = http::HeaderMap::new();
         {
             let mut ctx = RequestContext::new(procedure, &mut interceptor_headers);
-            // Use a unit placeholder - streaming interceptors use on_stream_send for messages
-            self.interceptor.intercept_request(&mut ctx, &mut ())?;
+            let mut placeholder = buffa_types::google::protobuf::Empty::default();
+            self.interceptor
+                .intercept_request(&mut ctx, &mut placeholder)?;
         }
         for (name, value) in interceptor_headers.iter() {
             req_builder = req_builder.header(name, value);
@@ -815,8 +825,9 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         let mut interceptor_headers = http::HeaderMap::new();
         {
             let mut ctx = RequestContext::new(procedure, &mut interceptor_headers);
-            // Use a unit placeholder - streaming interceptors use on_stream_send for messages
-            self.interceptor.intercept_request(&mut ctx, &mut ())?;
+            let mut placeholder = buffa_types::google::protobuf::Empty::default();
+            self.interceptor
+                .intercept_request(&mut ctx, &mut placeholder)?;
         }
 
         // 3. Wrap request stream with InterceptingSendStream for per-message interception
@@ -1034,7 +1045,9 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         ConnectResponse<
             InterceptingStreaming<
                 FrameDecoder<
-                    impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin + use<'_, I, Req, Res, S>,
+                    impl futures::Stream<Item = Result<Bytes, ClientError>>
+                    + Unpin
+                    + use<'_, I, Req, Res, S>,
                     Res,
                 >,
                 Res,
@@ -1085,7 +1098,9 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         ConnectResponse<
             InterceptingStreaming<
                 FrameDecoder<
-                    impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin + use<'_, I, Req, Res, S>,
+                    impl futures::Stream<Item = Result<Bytes, ClientError>>
+                    + Unpin
+                    + use<'_, I, Req, Res, S>,
                     Res,
                 >,
                 Res,
@@ -1117,8 +1132,9 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         let mut interceptor_headers = http::HeaderMap::new();
         {
             let mut ctx = RequestContext::new(procedure, &mut interceptor_headers);
-            // Use a unit placeholder - streaming interceptors use on_stream_send for messages
-            self.interceptor.intercept_request(&mut ctx, &mut ())?;
+            let mut placeholder = buffa_types::google::protobuf::Empty::default();
+            self.interceptor
+                .intercept_request(&mut ctx, &mut placeholder)?;
         }
 
         // 3. Wrap request stream with InterceptingSendStream for per-message interception

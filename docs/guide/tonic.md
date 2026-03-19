@@ -30,6 +30,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+To generate tonic server traits that take zero-copy request views instead of owned messages, add:
+
+```rust
+use connectrpc_axum_build::TonicRequestMode;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    connectrpc_axum_build::compile_dir("proto")
+        .with_tonic()
+        .with_tonic_request_mode(TonicRequestMode::View)
+        .compile()?;
+    Ok(())
+}
+```
+
 ## Use TonicCompatibleBuilder
 
 The `TonicCompatibleBuilder` generates both Connect router and gRPC service from the same handlers:
@@ -75,6 +89,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+For Connect-only handlers, the same zero-copy request mode is available without tonic codegen by changing the extractor to `ViewRequest<HelloRequest>` or `ViewStreamRequest<HelloRequest>`.
 
 ## Server Streaming
 

@@ -1,5 +1,6 @@
-use connectrpc_axum::prelude::*;
 use crate::{HelloRequest, HelloResponse, hello_world_service_connect};
+use buffa::Message;
+use connectrpc_axum::prelude::*;
 async fn say_hello(
     ConnectRequest(_req): ConnectRequest<HelloRequest>,
 ) -> Result<ConnectResponse<HelloResponse>, ConnectError> {
@@ -7,10 +8,8 @@ async fn say_hello(
     // Encode a google.protobuf.StringValue as the error detail.
     let string_value = encode_string_value("provide a name");
 
-    Err(
-        ConnectError::new(Code::InvalidArgument, "name is required")
-            .add_detail("google.protobuf.StringValue", string_value),
-    )
+    Err(ConnectError::new(Code::InvalidArgument, "name is required")
+        .add_detail("google.protobuf.StringValue", string_value))
 }
 
 /// Encode a google.protobuf.StringValue protobuf message manually.
@@ -18,10 +17,11 @@ async fn say_hello(
 /// StringValue has a single field:
 ///   string value = 1;
 fn encode_string_value(s: &str) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    // field 1, wire type 2 (length-delimited)
-    prost::encoding::string::encode(1, &s.to_string(), &mut bytes);
-    bytes
+    buffa_types::google::protobuf::StringValue {
+        value: s.to_string(),
+        ..Default::default()
+    }
+    .encode_to_vec()
 }
 
 pub async fn start(listener: tokio::net::UnixListener) -> anyhow::Result<()> {

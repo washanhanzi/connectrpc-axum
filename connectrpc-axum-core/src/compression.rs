@@ -100,9 +100,13 @@ impl CompressionEncoding {
         match self {
             Self::Identity => None,
             #[cfg(feature = "compression-gzip-stream")]
-            Self::Gzip => Some(BoxedCodec::new(GzipCodec::with_level(level_to_flate2(level)))),
+            Self::Gzip => Some(BoxedCodec::new(GzipCodec::with_level(level_to_flate2(
+                level,
+            )))),
             #[cfg(feature = "compression-deflate-stream")]
-            Self::Deflate => Some(BoxedCodec::new(DeflateCodec::with_level(level_to_flate2(level)))),
+            Self::Deflate => Some(BoxedCodec::new(DeflateCodec::with_level(level_to_flate2(
+                level,
+            )))),
             #[cfg(feature = "compression-br-stream")]
             Self::Brotli => Some(BoxedCodec::new(BrotliCodec::with_quality(level_to_brotli(
                 level,
@@ -149,7 +153,10 @@ impl CompressionLevel {
 /// - `Best` → 9
 /// - `Default` → 6
 /// - `Precise(n)` → n clamped to 0-9
-#[cfg(any(feature = "compression-gzip-stream", feature = "compression-deflate-stream"))]
+#[cfg(any(
+    feature = "compression-gzip-stream",
+    feature = "compression-deflate-stream"
+))]
 fn level_to_flate2(level: CompressionLevel) -> u32 {
     match level {
         CompressionLevel::Fastest => 1,

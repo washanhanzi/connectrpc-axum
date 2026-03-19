@@ -18,15 +18,23 @@ use crate::message::error::{Code, ConnectError};
 // Re-export core types
 pub use connectrpc_axum_core::{
     // Codec trait and implementations
-    BoxedCodec, Codec, IdentityCodec,
-    // Compression types
-    CompressionConfig, CompressionEncoding, CompressionLevel,
+    BoxedCodec,
     // Header constants
-    CONNECT_ACCEPT_ENCODING, CONNECT_CONTENT_ENCODING,
+    CONNECT_ACCEPT_ENCODING,
+    CONNECT_CONTENT_ENCODING,
+    Codec,
+    // Compression types
+    CompressionConfig,
+    CompressionEncoding,
+    CompressionLevel,
+    IdentityCodec,
+    compress_bytes,
     // Envelope functions
-    compress_payload, decompress_bytes, compress_bytes,
+    compress_payload,
+    decompress_bytes,
     // Helper
-    negotiate_response_encoding, supported_encodings_str,
+    negotiate_response_encoding,
+    supported_encodings_str,
 };
 
 /// Convert core CompressionLevel to tower_http CompressionLevel.

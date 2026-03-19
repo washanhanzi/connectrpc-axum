@@ -72,6 +72,7 @@ async fn say_hello(
     Ok(ConnectResponse::new(HelloResponse {
         message: format!("Hello, {}! (authenticated as {})", name, user_id),
         response_type: None,
+        ..Default::default()
     }))
 }
 

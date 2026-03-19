@@ -8,6 +8,8 @@ license = "MIT"
 
 [dependencies]
 # Core protocol types
+buffa = { workspace = true, features = ["json"] }
+buffa-types = { workspace = true, features = ["json"] }
 connectrpc-axum-core = { workspace = true }
 
 # HTTP client (hyper-based)
@@ -45,7 +47,6 @@ webpki-roots = { workspace = true, optional = true }
 
 # Serialization
 bytes = { workspace = true }
-prost = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

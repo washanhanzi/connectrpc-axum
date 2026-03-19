@@ -24,10 +24,16 @@ pub async fn run_tonic_server_stream_tests(sock: &TestSocket) -> Vec<CaseResult>
     let mut results = Vec::new();
 
     let err = test_connect_stream(sock).await.err().map(|e| e.to_string());
-    results.push(CaseResult { name: "tonic server stream via Connect protocol", error: err });
+    results.push(CaseResult {
+        name: "tonic server stream via Connect protocol",
+        error: err,
+    });
 
     let err = test_grpc_stream(sock).await.err().map(|e| e.to_string());
-    results.push(CaseResult { name: "tonic server stream via gRPC protocol", error: err });
+    results.push(CaseResult {
+        name: "tonic server stream via gRPC protocol",
+        error: err,
+    });
 
     results
 }
@@ -61,10 +67,14 @@ async fn test_connect_stream(sock: &TestSocket) -> anyhow::Result<()> {
         let flags = cursor[0];
         let len = u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;
         cursor = &cursor[5..];
-        if cursor.len() < len { break; }
+        if cursor.len() < len {
+            break;
+        }
         let payload = &cursor[..len];
         cursor = &cursor[len..];
-        if flags & 0x02 != 0 { break; }
+        if flags & 0x02 != 0 {
+            break;
+        }
         let json: serde_json::Value = serde_json::from_slice(payload)?;
         messages.push(json);
     }
@@ -73,7 +83,10 @@ async fn test_connect_stream(sock: &TestSocket) -> anyhow::Result<()> {
         anyhow::bail!("expected at least 2 messages, got {}", messages.len());
     }
 
-    let first = messages[0].get("message").and_then(|v| v.as_str()).unwrap_or("");
+    let first = messages[0]
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if !first.contains("Alice") {
         anyhow::bail!("expected first message to contain 'Alice', got: {first:?}");
     }
@@ -117,7 +130,9 @@ async fn test_grpc_stream(sock: &TestSocket) -> anyhow::Result<()> {
         let flags = cursor[0];
         let len = u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;
         cursor = &cursor[5..];
-        if cursor.len() < len { break; }
+        if cursor.len() < len {
+            break;
+        }
         let _payload = &cursor[..len];
         cursor = &cursor[len..];
 

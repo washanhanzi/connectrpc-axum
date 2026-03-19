@@ -1,6 +1,6 @@
+use crate::{HelloRequest, HelloResponse, hello_world_service_connect};
 use connectrpc_axum::CompressionConfig;
 use connectrpc_axum::prelude::*;
-use crate::{HelloRequest, HelloResponse, hello_world_service_connect};
 use futures::Stream;
 
 async fn say_hello_stream(
@@ -15,7 +15,7 @@ async fn say_hello_stream(
         yield Ok(HelloResponse {
             message: format!("Hi {}!", name),
             response_type: None,
-        });
+        ..Default::default()});
 
         let large_text = format!(
             "Hello {name}! This is a much longer message that should definitely exceed the \
@@ -27,7 +27,7 @@ async fn say_hello_stream(
         yield Ok(HelloResponse {
             message: large_text,
             response_type: None,
-        });
+        ..Default::default()});
 
         yield Ok(HelloResponse {
             message: format!(
@@ -37,12 +37,12 @@ async fn say_hello_stream(
                 "more_content ".repeat(15)
             ),
             response_type: None,
-        });
+        ..Default::default()});
 
         yield Ok(HelloResponse {
             message: format!("Bye {}!", name),
             response_type: None,
-        });
+        ..Default::default()});
     };
 
     Ok(ConnectResponse::new(StreamBody::new(response_stream)))

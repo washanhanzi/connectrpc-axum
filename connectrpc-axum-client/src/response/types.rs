@@ -164,7 +164,9 @@ impl Metadata {
     }
 
     /// Get an iterator over all header names and values.
-    pub fn iter(&self) -> impl Iterator<Item = (&http::header::HeaderName, &http::header::HeaderValue)> {
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&http::header::HeaderName, &http::header::HeaderValue)> {
         self.headers.iter()
     }
 

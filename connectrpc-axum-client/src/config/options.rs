@@ -236,7 +236,10 @@ mod tests {
             .try_header("x-custom", "value")
             .unwrap();
 
-        assert_eq!(options.headers.get("authorization").unwrap(), "Bearer token");
+        assert_eq!(
+            options.headers.get("authorization").unwrap(),
+            "Bearer token"
+        );
         assert_eq!(options.headers.get("x-custom").unwrap(), "value");
     }
 

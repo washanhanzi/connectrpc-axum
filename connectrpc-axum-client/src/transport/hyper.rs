@@ -328,11 +328,20 @@ impl std::fmt::Debug for HyperTransportBuilder {
             .field("http2_only", &self.http2_only)
             .field("pool_idle_timeout", &self.pool_idle_timeout)
             .field("pool_max_idle_per_host", &self.pool_max_idle_per_host)
-            .field("h2_initial_stream_window_size", &self.h2_initial_stream_window_size)
-            .field("h2_initial_connection_window_size", &self.h2_initial_connection_window_size)
+            .field(
+                "h2_initial_stream_window_size",
+                &self.h2_initial_stream_window_size,
+            )
+            .field(
+                "h2_initial_connection_window_size",
+                &self.h2_initial_connection_window_size,
+            )
             .field("h2_keep_alive_interval", &self.h2_keep_alive_interval)
             .field("h2_keep_alive_timeout", &self.h2_keep_alive_timeout)
-            .field("danger_accept_invalid_certs", &self.danger_accept_invalid_certs)
+            .field(
+                "danger_accept_invalid_certs",
+                &self.danger_accept_invalid_certs,
+            )
             .finish()
     }
 }
@@ -395,8 +404,14 @@ mod tests {
             .h2_keep_alive_timeout(Duration::from_secs(5));
 
         assert_eq!(builder.h2_initial_stream_window_size, Some(1024 * 1024));
-        assert_eq!(builder.h2_initial_connection_window_size, Some(2 * 1024 * 1024));
-        assert_eq!(builder.h2_keep_alive_interval, Some(Duration::from_secs(10)));
+        assert_eq!(
+            builder.h2_initial_connection_window_size,
+            Some(2 * 1024 * 1024)
+        );
+        assert_eq!(
+            builder.h2_keep_alive_interval,
+            Some(Duration::from_secs(10))
+        );
         assert_eq!(builder.h2_keep_alive_timeout, Some(Duration::from_secs(5)));
     }
 
@@ -408,9 +423,7 @@ mod tests {
 
     #[test]
     fn test_build_transport_http2_only() {
-        let result = HyperTransportBuilder::new()
-            .http2_only(true)
-            .build();
+        let result = HyperTransportBuilder::new().http2_only(true).build();
         assert!(result.is_ok());
         assert!(result.unwrap().is_http2_only());
     }

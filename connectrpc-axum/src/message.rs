@@ -23,15 +23,33 @@ pub mod error;
 pub mod request;
 pub mod response;
 
-pub use error::{build_end_stream_frame, Code, ConnectError, ErrorDetail, Metadata};
+pub use error::{Code, ConnectError, ErrorDetail, Metadata, build_end_stream_frame};
 pub use request::{
-    ConnectRequest, RequestPipeline, Streaming,
+    ConnectBody,
+    ConnectProto,
+    ConnectRequest,
+    RequestPipeline,
+    Streaming,
+    ViewRequest,
+    ViewStreamRequest,
     // Primitive functions
-    decode_json, decode_proto, decompress_bytes, envelope_flags,
-    get_context_or_default, process_envelope_payload, read_body, read_frame_bytes,
+    decode_json,
+    decode_proto,
+    decompress_bytes,
+    envelope_flags,
+    get_context_or_default,
+    process_envelope_payload,
+    read_body,
+    read_frame_bytes,
 };
 pub use response::{
-    ConnectResponse, ResponsePipeline, StreamBody,
+    ConnectResponse,
+    ResponsePipeline,
+    StreamBody,
     // Primitive functions
-    compress_bytes, encode_json, encode_proto, set_connect_content_encoding, wrap_envelope,
+    compress_bytes,
+    encode_json,
+    encode_proto,
+    set_connect_content_encoding,
+    wrap_envelope,
 };

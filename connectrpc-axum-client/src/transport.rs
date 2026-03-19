@@ -38,19 +38,19 @@ mod hyper;
 
 pub use body::TransportBody;
 pub use connector::{
+    // Traits
+    CryptoProvider,
+    CustomRoots,
+    DangerousAcceptAnyCertVerifier,
+    // Type-state marker types
+    NoProvider,
+    NoRoots,
+    RootCertificates,
+    TlsConfigBuilder,
     build_http_connector,
     build_https_connector,
     danger_accept_invalid_certs_config,
     has_tls_support,
-    DangerousAcceptAnyCertVerifier,
-    TlsConfigBuilder,
-    // Type-state marker types
-    NoProvider,
-    NoRoots,
-    CustomRoots,
-    // Traits
-    CryptoProvider,
-    RootCertificates,
 };
 
 // Feature-gated exports

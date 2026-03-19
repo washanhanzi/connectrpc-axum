@@ -1,21 +1,23 @@
 //! Client code generation for Connect RPC services.
 
+use crate::model::ProtoService;
 use convert_case::{Case, Casing};
-use prost_build::Service;
 use quote::{format_ident, quote};
 
-/// Method information tuple for code generation.
-pub type MethodInfo = (
-    proc_macro2::Ident,       // method_name
-    proc_macro2::TokenStream, // request_type
-    proc_macro2::TokenStream, // response_type
-    String,                   // path
-    proc_macro2::Ident,       // stream_assoc
-    bool,                     // is_server_streaming
-    bool,                     // is_client_streaming
-    Option<i32>,              // idempotency_level
-    proc_macro2::TokenStream, // idempotency_tokens
-);
+/// Method information for code generation.
+#[derive(Clone)]
+pub struct MethodInfo {
+    pub method_name: proc_macro2::Ident,
+    pub request_type: proc_macro2::TokenStream,
+    pub tonic_request_type: proc_macro2::TokenStream,
+    pub response_type: proc_macro2::TokenStream,
+    pub path: String,
+    pub stream_assoc: proc_macro2::Ident,
+    pub is_server_streaming: bool,
+    pub is_client_streaming: bool,
+    pub idempotency_level: Option<i32>,
+    pub idempotency_tokens: proc_macro2::TokenStream,
+}
 
 /// RPC type classification
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,26 +41,21 @@ impl RpcType {
 
 /// Generate the Connect RPC client code.
 pub fn generate_connect_client(
-    service: &Service,
+    service: &ProtoService,
     method_info: &[MethodInfo],
 ) -> proc_macro2::TokenStream {
     // Client module name (e.g., hello_world_service_connect_client)
-    let client_module_name = format_ident!(
-        "{}_connect_client",
-        service.name.to_case(Case::Snake)
-    );
+    let client_module_name = format_ident!("{}_connect_client", service.name.to_case(Case::Snake));
 
     // Procedures module name (e.g., hello_world_service_procedures)
-    let procedures_mod_name = format_ident!(
-        "{}_procedures",
-        service.name.to_case(Case::Snake)
-    );
+    let procedures_mod_name = format_ident!("{}_procedures", service.name.to_case(Case::Snake));
 
     // Generate procedure constants
     let procedure_constants: Vec<_> = method_info
         .iter()
-        .map(|(method_name, _, _, path, _, _, _, _, _)| {
-            let const_name = format_ident!("{}", method_name.to_string().to_uppercase());
+        .map(|method| {
+            let const_name = format_ident!("{}", method.method_name.to_string().to_uppercase());
+            let path = &method.path;
             quote! {
                 /// Full procedure path for this RPC method.
                 pub const #const_name: &str = #path;
@@ -73,9 +70,12 @@ pub fn generate_connect_client(
     // Generate interceptor fields (shared between client and builder structs)
     let interceptor_fields: Vec<_> = method_info
         .iter()
-        .map(|(method_name, request_type, response_type, _, _, is_ss, is_cs, _, _)| {
-            let field_name = format_ident!("{}_interceptors", method_name);
-            let rpc_type = RpcType::from_streaming(*is_ss, *is_cs);
+        .map(|method| {
+            let field_name = format_ident!("{}_interceptors", method.method_name);
+            let request_type = &method.request_type;
+            let response_type = &method.response_type;
+            let rpc_type =
+                RpcType::from_streaming(method.is_server_streaming, method.is_client_streaming);
 
             match rpc_type {
                 RpcType::Unary => quote! {
@@ -97,8 +97,8 @@ pub fn generate_connect_client(
     // Generate builder interceptor field initializers (all default)
     let builder_interceptor_defaults: Vec<_> = method_info
         .iter()
-        .map(|(method_name, _, _, _, _, _, _, _, _)| {
-            let field_name = format_ident!("{}_interceptors", method_name);
+        .map(|method| {
+            let field_name = format_ident!("{}_interceptors", method.method_name);
             quote! { #field_name: Default::default() }
         })
         .collect();
@@ -106,9 +106,13 @@ pub fn generate_connect_client(
     // Generate builder methods for setting interceptors
     let builder_interceptor_methods: Vec<_> = method_info
         .iter()
-        .flat_map(|(method_name, request_type, response_type, _, _, is_ss, is_cs, _, _)| {
-            let field_name = format_ident!("{}_interceptors", method_name);
-            let rpc_type = RpcType::from_streaming(*is_ss, *is_cs);
+        .flat_map(|method| {
+            let field_name = format_ident!("{}_interceptors", method.method_name);
+            let method_name = &method.method_name;
+            let request_type = &method.request_type;
+            let response_type = &method.response_type;
+            let rpc_type =
+                RpcType::from_streaming(method.is_server_streaming, method.is_client_streaming);
 
             let mut methods = Vec::new();
 
@@ -249,8 +253,8 @@ pub fn generate_connect_client(
     // Generate interceptor field assignments in build()
     let build_interceptor_assignments: Vec<_> = method_info
         .iter()
-        .map(|(method_name, _, _, _, _, _, _, _, _)| {
-            let field_name = format_ident!("{}_interceptors", method_name);
+        .map(|method| {
+            let field_name = format_ident!("{}_interceptors", method.method_name);
             quote! { #field_name: self.#field_name }
         })
         .collect();
@@ -258,8 +262,8 @@ pub fn generate_connect_client(
     // Generate interceptor field clone assignments for Clone impl
     let clone_interceptor_assignments: Vec<_> = method_info
         .iter()
-        .map(|(method_name, _, _, _, _, _, _, _, _)| {
-            let field_name = format_ident!("{}_interceptors", method_name);
+        .map(|method| {
+            let field_name = format_ident!("{}_interceptors", method.method_name);
             quote! { #field_name: self.#field_name.clone() }
         })
         .collect();
@@ -267,12 +271,16 @@ pub fn generate_connect_client(
     // Generate typed client methods for all RPC types
     let client_methods: Vec<_> = method_info
         .iter()
-        .map(|(method_name, request_type, response_type, _path, _, is_ss, is_cs, _, _)| {
+        .map(|method| {
             // Reference the procedure constant instead of hardcoding the path
-            let const_name = format_ident!("{}", method_name.to_string().to_uppercase());
+            let const_name = format_ident!("{}", method.method_name.to_string().to_uppercase());
             let procedure_path = quote! { super::#procedures_mod_name::#const_name };
+            let method_name = &method.method_name;
             let interceptors_field = format_ident!("{}_interceptors", method_name);
-            let rpc_type = RpcType::from_streaming(*is_ss, *is_cs);
+            let request_type = &method.request_type;
+            let response_type = &method.response_type;
+            let rpc_type =
+                RpcType::from_streaming(method.is_server_streaming, method.is_client_streaming);
 
             match rpc_type {
                 RpcType::Unary => {

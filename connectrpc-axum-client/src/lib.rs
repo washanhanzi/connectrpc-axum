@@ -586,6 +586,8 @@ pub mod config;
 mod error;
 pub mod request;
 pub mod response;
+#[cfg(test)]
+mod test_support;
 pub mod transport;
 
 pub use builder::{ClientBuildError, ClientBuilder};

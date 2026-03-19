@@ -58,19 +58,19 @@ async fn say_hello_stream_with_error(
         yield Ok(HelloResponse {
             message: format!("Hello, {}! Stream starting...", name),
             response_type: None,
-        });
+        ..Default::default()});
 
         for i in 1..=3 {
             yield Ok(HelloResponse {
                 message: format!("Message {} for {}", i, name),
                 response_type: None,
-            });
+            ..Default::default()});
         }
 
         yield Ok(HelloResponse {
             message: format!("Goodbye, {}!", name),
             response_type: None,
-        });
+        ..Default::default()});
     };
 
     Ok(ConnectResponse::new(StreamBody::new(response_stream)))

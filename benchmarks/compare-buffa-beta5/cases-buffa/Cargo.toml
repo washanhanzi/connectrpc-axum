@@ -1,0 +1,21 @@
+[package]
+name = "compare-buffa-beta5-cases-buffa"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+axum = { workspace = true }
+bytes = { workspace = true }
+connectrpc-axum = { path = "../../../connectrpc-axum", package = "connectrpc-axum" }
+futures = { workspace = true }
+http = { workspace = true }
+http-body-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tower = { workspace = true }
+buffa = { version = "0.2", features = ["json"] }
+buffa-types = { version = "0.2", features = ["json"] }
+
+[build-dependencies]
+connectrpc-axum-build = { path = "../../../connectrpc-axum-build", package = "connectrpc-axum-build" }

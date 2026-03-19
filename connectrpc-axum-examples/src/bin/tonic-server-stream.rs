@@ -39,7 +39,7 @@ async fn say_hello_stream(
         yield Ok(HelloResponse {
             message: format!("Stream #{}: Hello, {}!", count, name),
             response_type: None,
-        });
+        ..Default::default()});
 
         if !hobbies.is_empty() {
             for (idx, hobby) in hobbies.iter().enumerate() {
@@ -47,7 +47,7 @@ async fn say_hello_stream(
                 yield Ok(HelloResponse {
                     message: format!("Stream #{}: Hobby {}: {}", count, idx + 1, hobby),
                     response_type: None,
-                });
+                ..Default::default()});
             }
         } else {
             for i in 1..=3 {
@@ -55,7 +55,7 @@ async fn say_hello_stream(
                 yield Ok(HelloResponse {
                     message: format!("Stream #{}: Message {} for {}", count, i, name),
                     response_type: None,
-                });
+                ..Default::default()});
             }
         }
 
@@ -63,7 +63,7 @@ async fn say_hello_stream(
         yield Ok(HelloResponse {
             message: format!("Stream #{}: Goodbye, {}!", count, name),
             response_type: None,
-        });
+        ..Default::default()});
     };
 
     Ok(ConnectResponse::new(StreamBody::new(response_stream)))

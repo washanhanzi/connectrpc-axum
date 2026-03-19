@@ -5,6 +5,7 @@ pub mod message;
 pub mod service_builder;
 #[cfg(feature = "tonic")]
 pub mod tonic;
+pub mod view;
 
 // Re-export key types at the crate root for convenience
 #[cfg(feature = "tonic")]
@@ -94,14 +95,14 @@ pub use context::ZstdCodec;
 // Re-export from message module
 pub use handler::{ConnectHandler, ConnectHandlerWrapper, get_connect, post_connect};
 pub use layer::{BridgeLayer, BridgeService, ConnectLayer, ConnectService};
-pub use message::{RequestPipeline, ResponsePipeline};
+pub use message::{RequestPipeline, ResponsePipeline, ViewRequest, ViewStreamRequest};
 pub use service_builder::MakeServiceBuilder;
+pub use view::{HasView, View};
 
 // Re-export several crates
+pub use buffa;
+pub use buffa_types;
 pub use futures;
-pub use pbjson;
-pub use pbjson_types;
-pub use prost;
 pub use serde;
 
 pub use prelude::*;
@@ -159,6 +160,7 @@ pub mod prelude {
     pub use crate::message::error::{Code, ConnectError, ErrorDetail, Status};
     pub use crate::message::{
         ConnectRequest, ConnectResponse, RequestPipeline, ResponsePipeline, StreamBody, Streaming,
+        ViewRequest, ViewStreamRequest,
     };
     pub use crate::service_builder::MakeServiceBuilder;
     #[cfg(feature = "tonic")]
@@ -194,4 +196,5 @@ pub mod prelude {
         unimplemented_boxed_client_stream_call,
         unimplemented_boxed_stream_call,
     };
+    pub use crate::view::{HasView, View};
 }

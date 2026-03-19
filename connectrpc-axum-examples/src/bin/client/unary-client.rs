@@ -19,8 +19,7 @@
 
 use connectrpc_axum_client::ClientError;
 use connectrpc_axum_examples::{
-    HelloRequest,
-    hello_world_service_connect_client::HelloWorldServiceClient,
+    HelloRequest, hello_world_service_connect_client::HelloWorldServiceClient,
 };
 use std::env;
 
@@ -47,6 +46,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("Alice".to_string()),
             hobbies: vec!["reading".to_string(), "coding".to_string()],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response = client.say_hello(&request).await?;
@@ -70,6 +70,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("Bob".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response = client.say_hello(&request).await?;
@@ -87,6 +88,7 @@ async fn main() -> anyhow::Result<()> {
             name: None,
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response = client.say_hello(&request).await?;
@@ -104,6 +106,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("Charlie".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response = client.say_hello(&request).await?;
@@ -130,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("Diana".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response = client.say_hello(&request).await?;
@@ -150,6 +154,7 @@ async fn main() -> anyhow::Result<()> {
                 name: Some(format!("User{}", i)),
                 hobbies: vec![],
                 greeting_type: None,
+                ..Default::default()
             };
 
             let response = client.say_hello(&request).await?;
@@ -170,6 +175,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("test".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
 
         let result: Result<_, ClientError> = client.say_hello(&request).await;

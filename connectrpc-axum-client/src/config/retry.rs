@@ -589,10 +589,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_retry_non_retryable_error() {
-        let result = retry(|| async {
-            Err::<i32, _>(ClientError::not_found("resource not found"))
-        })
-        .await;
+        let result =
+            retry(|| async { Err::<i32, _>(ClientError::not_found("resource not found")) }).await;
 
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().code(), crate::Code::NotFound);
@@ -600,8 +598,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_retry_with_policy_eventual_success() {
-        use std::sync::atomic::{AtomicU32, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
 
         let attempts = Arc::new(AtomicU32::new(0));
         let attempts_clone = attempts.clone();
@@ -630,8 +628,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_retry_exhausted() {
-        use std::sync::atomic::{AtomicU32, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
 
         let attempts = Arc::new(AtomicU32::new(0));
         let attempts_clone = attempts.clone();

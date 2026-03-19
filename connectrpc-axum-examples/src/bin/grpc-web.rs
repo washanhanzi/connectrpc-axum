@@ -33,6 +33,7 @@ async fn say_hello(
     Ok(ConnectResponse(HelloResponse {
         message: format!("Hello #{}, {}! (via gRPC-Web)", count, name),
         response_type: None,
+        ..Default::default()
     }))
 }
 
@@ -53,7 +54,7 @@ async fn say_hello_stream(
         yield Ok(HelloResponse {
             message: format!("gRPC-Web Stream #{}: Hello, {}!", count, name),
             response_type: None,
-        });
+        ..Default::default()});
 
         if !hobbies.is_empty() {
             for (idx, hobby) in hobbies.iter().enumerate() {
@@ -61,7 +62,7 @@ async fn say_hello_stream(
                 yield Ok(HelloResponse {
                     message: format!("gRPC-Web Stream #{}: Hobby {}: {}", count, idx + 1, hobby),
                     response_type: None,
-                });
+                ..Default::default()});
             }
         } else {
             for i in 1..=3 {
@@ -69,7 +70,7 @@ async fn say_hello_stream(
                 yield Ok(HelloResponse {
                     message: format!("gRPC-Web Stream #{}: Message {}", count, i),
                     response_type: None,
-                });
+                ..Default::default()});
             }
         }
 
@@ -77,7 +78,7 @@ async fn say_hello_stream(
         yield Ok(HelloResponse {
             message: format!("gRPC-Web Stream #{}: Goodbye!", count),
             response_type: None,
-        });
+        ..Default::default()});
     };
 
     Ok(ConnectResponse(StreamBody::new(stream)))

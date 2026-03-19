@@ -12,15 +12,16 @@
 //! - [`process_envelope_payload`]: Validate envelope flags and decompress payload
 use crate::context::{CompressionEncoding, ConnectContext, MessageLimits, detect_protocol};
 use crate::message::error::{Code, ConnectError};
+use crate::view::{HasView, View};
 use axum::{
     body::Body,
     extract::{FromRequest, Request},
     http::Method,
 };
+use buffa::Message;
 use bytes::{Bytes, BytesMut};
 use futures::Stream;
 use http_body_util::BodyExt;
-use prost::Message;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::pin::Pin;
@@ -83,7 +84,7 @@ pub fn decode_proto<T>(bytes: &[u8]) -> Result<T, ConnectError>
 where
     T: Message + Default,
 {
-    T::decode(bytes).map_err(|e| {
+    T::decode_from_slice(bytes).map_err(|e| {
         ConnectError::new(
             Code::InvalidArgument,
             format!("failed to decode protobuf message: {e}"),
@@ -104,6 +105,65 @@ where
             format!("failed to decode JSON message: {e}"),
         )
     })
+}
+
+/// Types that can be decoded from protobuf bytes for inbound requests.
+#[doc(hidden)]
+pub trait ConnectProto: Sized {
+    fn decode_proto(bytes: Bytes) -> Result<Self, ConnectError>;
+}
+
+/// Types that can be decoded from Connect request bodies.
+#[doc(hidden)]
+pub trait ConnectBody: ConnectProto {
+    fn decode_json(bytes: Bytes) -> Result<Self, ConnectError>;
+}
+
+impl<T> ConnectProto for T
+where
+    T: Message + DeserializeOwned + Default,
+{
+    fn decode_proto(bytes: Bytes) -> Result<Self, ConnectError> {
+        decode_proto(bytes.as_ref())
+    }
+}
+
+impl<T> ConnectBody for T
+where
+    T: Message + DeserializeOwned + Default,
+{
+    fn decode_json(bytes: Bytes) -> Result<Self, ConnectError> {
+        decode_json(bytes.as_ref())
+    }
+}
+
+impl<T> ConnectProto for View<T>
+where
+    T: HasView + Message + DeserializeOwned + Default,
+{
+    fn decode_proto(bytes: Bytes) -> Result<Self, ConnectError> {
+        View::decode(bytes).map_err(|e| {
+            ConnectError::new(
+                Code::InvalidArgument,
+                format!("failed to decode protobuf message: {e}"),
+            )
+        })
+    }
+}
+
+impl<T> ConnectBody for View<T>
+where
+    T: HasView + Message + DeserializeOwned + Default,
+{
+    fn decode_json(bytes: Bytes) -> Result<Self, ConnectError> {
+        let owned: T = decode_json(bytes.as_ref())?;
+        View::from_owned(&owned).map_err(|e| {
+            ConnectError::new(
+                Code::InvalidArgument,
+                format!("failed to build protobuf view from JSON message: {e}"),
+            )
+        })
+    }
 }
 
 /// Connect streaming envelope flags.
@@ -214,7 +274,7 @@ impl RequestPipeline {
     /// This is a convenience method that composes the primitive functions.
     pub async fn decode<T>(req: axum::http::Request<Body>) -> Result<T, ContextError>
     where
-        T: Message + DeserializeOwned + Default,
+        T: ConnectBody,
     {
         let ctx = get_context_or_default(&req);
         let max_size = ctx.limits.receive_max_bytes_or_max();
@@ -231,9 +291,9 @@ impl RequestPipeline {
     /// Tower's DecompressionLayer and BridgeLayer respectively.
     pub fn decode_bytes<T>(ctx: &ConnectContext, body: Bytes) -> Result<T, ContextError>
     where
-        T: Message + DeserializeOwned + Default,
+        T: ConnectBody,
     {
-        Self::decode_message(ctx, &body)
+        Self::decode_message(ctx, body)
     }
 
     /// Decode from enveloped bytes (for streaming-style unary requests).
@@ -245,7 +305,7 @@ impl RequestPipeline {
     /// using the encoding from the `Connect-Content-Encoding` header.
     pub fn decode_enveloped_bytes<T>(ctx: &ConnectContext, body: Bytes) -> Result<T, ContextError>
     where
-        T: Message + DeserializeOwned + Default,
+        T: ConnectBody,
     {
         // Parse envelope header: [flags:1][length:4][payload:length]
         if body.len() < 5 {
@@ -298,22 +358,25 @@ impl RequestPipeline {
             .ok_or_else(|| {
                 ContextError::new(
                     ctx.protocol,
-                    ConnectError::new(Code::InvalidArgument, "unexpected EndStreamResponse in request"),
+                    ConnectError::new(
+                        Code::InvalidArgument,
+                        "unexpected EndStreamResponse in request",
+                    ),
                 )
             })?;
 
-        Self::decode_message(ctx, &payload)
+        Self::decode_message(ctx, payload)
     }
 
     /// Helper: decode message based on protocol.
-    fn decode_message<T>(ctx: &ConnectContext, bytes: &[u8]) -> Result<T, ContextError>
+    fn decode_message<T>(ctx: &ConnectContext, bytes: Bytes) -> Result<T, ContextError>
     where
-        T: Message + DeserializeOwned + Default,
+        T: ConnectBody,
     {
         if ctx.protocol.is_proto() {
-            decode_proto(bytes).map_err(|e| ContextError::new(ctx.protocol, e))
+            T::decode_proto(bytes).map_err(|e| ContextError::new(ctx.protocol, e))
         } else {
-            decode_json(bytes).map_err(|e| ContextError::new(ctx.protocol, e))
+            T::decode_json(bytes).map_err(|e| ContextError::new(ctx.protocol, e))
         }
     }
 }
@@ -325,6 +388,12 @@ impl RequestPipeline {
 /// - `ConnectRequest<Streaming<T>>` - extracts a message stream (for client-streaming/bidi handlers)
 #[derive(Debug, Clone)]
 pub struct ConnectRequest<T>(pub T);
+
+/// Convenience alias for explicit zero-copy unary request handling.
+pub type ViewRequest<T> = ConnectRequest<View<T>>;
+
+/// Convenience alias for explicit zero-copy streaming request handling.
+pub type ViewStreamRequest<T> = ConnectRequest<Streaming<View<T>>>;
 
 /// A stream of messages from the client.
 ///
@@ -390,7 +459,7 @@ impl<T> Stream for Streaming<T> {
 impl<S, T> FromRequest<S> for ConnectRequest<T>
 where
     S: Send + Sync,
-    T: Message + DeserializeOwned + Default,
+    T: ConnectBody,
 {
     type Rejection = ConnectError;
 
@@ -422,7 +491,7 @@ where
 /// No envelope handling.
 async fn from_unary_post_request<T>(req: Request) -> Result<ConnectRequest<T>, ConnectError>
 where
-    T: Message + DeserializeOwned + Default,
+    T: ConnectBody,
 {
     RequestPipeline::decode::<T>(req)
         .await
@@ -439,7 +508,7 @@ async fn from_streaming_post_request<T>(
     ctx: crate::context::ConnectContext,
 ) -> Result<ConnectRequest<T>, ConnectError>
 where
-    T: Message + DeserializeOwned + Default,
+    T: ConnectBody,
 {
     // 1. Read body with size limit
     let max_size = ctx.limits.receive_max_bytes_or_max();
@@ -481,7 +550,7 @@ struct GetRequestQuery {
 async fn from_get_request<S, T>(req: Request, _state: &S) -> Result<ConnectRequest<T>, ConnectError>
 where
     S: Send + Sync,
-    T: Message + DeserializeOwned + Default,
+    T: ConnectBody,
 {
     // Get context (with fallback to default if layer is missing)
     let ctx = get_context_or_default(&req);
@@ -546,9 +615,9 @@ where
 
     // 4. Decode based on protocol encoding
     let message = if ctx.protocol.is_proto() {
-        decode_proto(&bytes)?
+        T::decode_proto(bytes)?
     } else {
-        decode_json(&bytes)?
+        T::decode_json(bytes)?
     };
 
     Ok(ConnectRequest(message))
@@ -562,7 +631,7 @@ where
 impl<S, T> FromRequest<S> for ConnectRequest<Streaming<T>>
 where
     S: Send + Sync,
-    T: Message + DeserializeOwned + Default + Send + 'static,
+    T: ConnectBody + Send + 'static,
 {
     type Rejection = ConnectError;
 
@@ -603,7 +672,7 @@ fn create_frame_stream<T>(
     request_encoding: CompressionEncoding,
 ) -> impl Stream<Item = Result<T, ConnectError>> + Send
 where
-    T: Message + DeserializeOwned + Default + Send + 'static,
+    T: ConnectBody + Send + 'static,
 {
     async_stream::stream! {
         let mut buffer = BytesMut::new();
@@ -646,9 +715,9 @@ where
 
                 // Decode the message using pipeline primitives
                 let message = if use_proto {
-                    decode_proto(&payload)
+                    T::decode_proto(payload)
                 } else {
-                    decode_json(&payload)
+                    T::decode_json(payload)
                 };
 
                 yield message;

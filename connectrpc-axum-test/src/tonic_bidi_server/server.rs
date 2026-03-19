@@ -1,5 +1,8 @@
+use crate::{
+    EchoRequest, EchoResponse, HelloRequest, HelloResponse, echo_service_connect,
+    hello_world_service_connect,
+};
 use connectrpc_axum::prelude::*;
-use crate::{HelloRequest, HelloResponse, hello_world_service_connect, EchoRequest, EchoResponse, echo_service_connect};
 use futures::{Stream, StreamExt};
 
 async fn say_hello(
@@ -9,6 +12,7 @@ async fn say_hello(
     Ok(ConnectResponse::new(HelloResponse {
         message: format!("Hello, {}!", name),
         response_type: None,
+        ..Default::default()
     }))
 }
 
@@ -28,7 +32,7 @@ async fn echo_bidi_stream(
                     count += 1;
                     yield Ok(EchoResponse {
                         message: format!("Echo #{}: {}", count, msg.message),
-                    });
+                    ..Default::default()});
                 }
                 Err(e) => {
                     yield Err(e);
@@ -60,6 +64,7 @@ async fn echo_client_stream(
             messages.len(),
             messages.join(", ")
         ),
+        ..Default::default()
     }))
 }
 
@@ -69,11 +74,10 @@ pub async fn start(listener: tokio::net::UnixListener) -> anyhow::Result<()> {
             .say_hello(say_hello)
             .build();
 
-    let (echo_connect, echo_grpc) =
-        echo_service_connect::EchoServiceTonicCompatibleBuilder::new()
-            .echo_bidi_stream(echo_bidi_stream)
-            .echo_client_stream(echo_client_stream)
-            .build();
+    let (echo_connect, echo_grpc) = echo_service_connect::EchoServiceTonicCompatibleBuilder::new()
+        .echo_bidi_stream(echo_bidi_stream)
+        .echo_client_stream(echo_client_stream)
+        .build();
 
     let app = connectrpc_axum::MakeServiceBuilder::new()
         .add_router(hello_connect)

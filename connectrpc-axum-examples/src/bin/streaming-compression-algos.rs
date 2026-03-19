@@ -16,7 +16,7 @@ async fn say_hello_stream(
         yield Ok(HelloResponse {
             message: format!("Hi {}!", name),
             response_type: None,
-        });
+        ..Default::default()});
 
         let large_text = format!(
             "Hello {name}! This is a much longer message that should definitely exceed the \
@@ -30,7 +30,7 @@ async fn say_hello_stream(
         yield Ok(HelloResponse {
             message: large_text,
             response_type: None,
-        });
+        ..Default::default()});
 
         yield Ok(HelloResponse {
             message: format!(
@@ -41,12 +41,12 @@ async fn say_hello_stream(
                 "final_content ".repeat(10)
             ),
             response_type: None,
-        });
+        ..Default::default()});
 
         yield Ok(HelloResponse {
             message: format!("Bye {}!", name),
             response_type: None,
-        });
+        ..Default::default()});
     };
 
     Ok(ConnectResponse::new(StreamBody::new(response_stream)))

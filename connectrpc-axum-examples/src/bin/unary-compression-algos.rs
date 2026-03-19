@@ -20,6 +20,7 @@ async fn say_hello(
     Ok(ConnectResponse::new(HelloResponse {
         message: large_response,
         response_type: None,
+        ..Default::default()
     }))
 }
 

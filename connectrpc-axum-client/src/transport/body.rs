@@ -72,14 +72,12 @@ impl Body for TransportBody {
                 let result = data.take().map(|d| Ok(Frame::data(d)));
                 Poll::Ready(result)
             }
-            TransportBodyProj::Streaming { stream } => {
-                match stream.poll_next(cx) {
-                    Poll::Ready(Some(Ok(data))) => Poll::Ready(Some(Ok(Frame::data(data)))),
-                    Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
-                    Poll::Ready(None) => Poll::Ready(None),
-                    Poll::Pending => Poll::Pending,
-                }
-            }
+            TransportBodyProj::Streaming { stream } => match stream.poll_next(cx) {
+                Poll::Ready(Some(Ok(data))) => Poll::Ready(Some(Ok(Frame::data(data)))),
+                Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
+                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Pending => Poll::Pending,
+            },
         }
     }
 

@@ -1,5 +1,5 @@
-mod server;
 mod client;
+mod server;
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -11,8 +11,12 @@ pub async fn run(rust_sock: &TestSocket, _go_sock: &TestSocket) -> anyhow::Resul
     let go_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("go");
 
     println!("Building Go binaries...");
-    let go_client_bin =
-        build_go_binary(&go_dir, "./compression_algos/client/", "compression-algos-client").await?;
+    let go_client_bin = build_go_binary(
+        &go_dir,
+        "./compression_algos/client/",
+        "compression-algos-client",
+    )
+    .await?;
 
     let rust_listener = rust_sock.bind()?;
     let rust_server = tokio::spawn(server::start(rust_listener));

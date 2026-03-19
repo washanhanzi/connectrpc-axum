@@ -46,7 +46,7 @@ async fn echo_bidi_stream(
                             "Bidi Echo #{} (msg #{}): {}",
                             count, message_count, msg.message
                         ),
-                    });
+                    ..Default::default()});
                 }
                 Err(e) => {
                     yield Err(e);
@@ -63,7 +63,7 @@ async fn echo_bidi_stream(
                 "Bidi stream #{} completed. Echoed {} messages.",
                 count, message_count
             ),
-        });
+        ..Default::default()});
     };
 
     Ok(ConnectResponse::new(StreamBody::new(response_stream)))

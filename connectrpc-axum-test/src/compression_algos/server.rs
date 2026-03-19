@@ -1,6 +1,9 @@
+use crate::{
+    EchoRequest, EchoResponse, HelloRequest, HelloResponse, echo_service_connect,
+    hello_world_service_connect,
+};
 use connectrpc_axum::CompressionConfig;
 use connectrpc_axum::prelude::*;
-use crate::{HelloRequest, HelloResponse, hello_world_service_connect, EchoRequest, EchoResponse, echo_service_connect};
 use futures::{Stream, StreamExt};
 
 async fn say_hello(
@@ -10,6 +13,7 @@ async fn say_hello(
     Ok(ConnectResponse::new(HelloResponse {
         message: format!("Hello, {}!", name),
         response_type: None,
+        ..Default::default()
     }))
 }
 
@@ -21,16 +25,16 @@ async fn say_hello_stream(
 > {
     let name = req.name.unwrap_or_else(|| "World".to_string());
     let response_stream = async_stream::stream! {
-        yield Ok(HelloResponse { message: format!("Hi {}!", name), response_type: None });
+        yield Ok(HelloResponse { message: format!("Hi {}!", name), response_type: None , ..Default::default()});
         let large = format!("Hello {name}! Padding: {} {} {}",
             "padding_text ".repeat(10), "more_padding ".repeat(10), "final_padding ".repeat(10));
-        yield Ok(HelloResponse { message: large, response_type: None });
+        yield Ok(HelloResponse { message: large, response_type: None , ..Default::default()});
         yield Ok(HelloResponse {
             message: format!("Stream for {}: {} {}", name,
                 "repeated_content ".repeat(15), "more_content ".repeat(15)),
             response_type: None,
-        });
-        yield Ok(HelloResponse { message: format!("Bye {}!", name), response_type: None });
+        ..Default::default()});
+        yield Ok(HelloResponse { message: format!("Bye {}!", name), response_type: None , ..Default::default()});
     };
     Ok(ConnectResponse::new(StreamBody::new(response_stream)))
 }
@@ -47,7 +51,12 @@ async fn echo_client_stream(
         }
     }
     Ok(ConnectResponse::new(EchoResponse {
-        message: format!("Received {} messages: [{}]", messages.len(), messages.join(", ")),
+        message: format!(
+            "Received {} messages: [{}]",
+            messages.len(),
+            messages.join(", ")
+        ),
+        ..Default::default()
     }))
 }
 

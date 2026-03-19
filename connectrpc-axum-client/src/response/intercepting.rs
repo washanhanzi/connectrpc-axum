@@ -8,14 +8,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use buffa::Message;
 use futures::Stream;
 use http::HeaderMap;
-use prost::Message;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
-use crate::config::{InterceptorInternal, StreamContext, StreamType, TypedInterceptor};
 use crate::ClientError;
+use crate::config::{InterceptorInternal, StreamContext, StreamType, TypedInterceptor};
 
 use super::decoder::FrameDecoder;
 use super::streaming::Streaming;

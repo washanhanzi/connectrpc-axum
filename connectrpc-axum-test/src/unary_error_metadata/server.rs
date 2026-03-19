@@ -1,14 +1,12 @@
-use connectrpc_axum::prelude::*;
 use crate::{HelloRequest, HelloResponse, hello_world_service_connect};
+use connectrpc_axum::prelude::*;
 
 async fn say_hello(
     ConnectRequest(_req): ConnectRequest<HelloRequest>,
 ) -> Result<ConnectResponse<HelloResponse>, ConnectError> {
-    Err(
-        ConnectError::new(Code::InvalidArgument, "name is required")
-            .with_meta("x-custom-meta", "custom-value")
-            .with_meta("x-request-id", "test-123"),
-    )
+    Err(ConnectError::new(Code::InvalidArgument, "name is required")
+        .with_meta("x-custom-meta", "custom-value")
+        .with_meta("x-request-id", "test-123"))
 }
 
 pub async fn start(listener: tokio::net::UnixListener) -> anyhow::Result<()> {

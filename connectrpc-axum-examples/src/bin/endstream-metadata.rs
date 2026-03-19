@@ -51,11 +51,11 @@ async fn say_hello_stream_with_metadata(
             yield Ok(HelloResponse {
                 message: "Message 1".to_string(),
                 response_type: None,
-            });
+            ..Default::default()});
             yield Ok(HelloResponse {
                 message: "Message 2".to_string(),
                 response_type: None,
-            });
+            ..Default::default()});
             // Error mid-stream with metadata
             yield Err(ConnectError::new(Code::Aborted, "Stream aborted")
                 .with_meta("x-abort-reason", "test-abort")
@@ -72,7 +72,7 @@ async fn say_hello_stream_with_metadata(
             yield Ok(HelloResponse {
                 message: format!("Hello {}! Message {}", name, i),
                 response_type: None,
-            });
+            ..Default::default()});
         }
     };
 

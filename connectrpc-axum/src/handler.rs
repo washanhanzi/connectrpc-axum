@@ -4,6 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::MethodRouter,
 };
+use buffa::Message;
 use std::{any::Any, future::Future, pin::Pin};
 
 use crate::{
@@ -11,11 +12,9 @@ use crate::{
         ConnectContext, RequestProtocol, validate_streaming_content_type,
         validate_unary_content_type,
     },
-    message::{ConnectError, ConnectRequest, ConnectResponse, StreamBody, Streaming},
+    message::{ConnectBody, ConnectError, ConnectRequest, ConnectResponse, StreamBody, Streaming},
 };
 use futures::Stream;
-use prost::Message;
-use serde::de::DeserializeOwned;
 
 /// Handle extractor rejections with protocol-aware encoding.
 ///
@@ -111,7 +110,7 @@ where
     Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
     ConnectRequest<Req>: FromRequest<()>,
     Req: Send + Sync + 'static,
-    Resp: prost::Message + serde::Serialize + Send + Clone + Sync + 'static,
+    Resp: Message + serde::Serialize + Send + Clone + Sync + 'static,
 {
     type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -168,7 +167,7 @@ macro_rules! impl_handler_for_connect_handler_wrapper {
             S: Send + Sync + 'static,
 
             // Response constraints
-            Resp: prost::Message + serde::Serialize + Send + Clone + Sync + 'static,
+            Resp: Message + serde::Serialize + Send + Clone + Sync + 'static,
         {
             type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -246,7 +245,7 @@ macro_rules! impl_server_stream_handler_for_connect_handler_wrapper {
             // Constraints on extractors
             $( $A: FromRequestParts<S> + Send + Sync + 'static,
                <$A as FromRequestParts<S>>::Rejection: 'static, )*
-            Req: Message + DeserializeOwned + Default + Send + Sync + 'static,
+            Req: ConnectBody + Send + Sync + 'static,
             S: Send + Sync + 'static,
 
             // Response constraints
@@ -319,7 +318,7 @@ macro_rules! impl_client_stream_handler_for_connect_handler_wrapper {
             // Constraints on extractors
             $( $A: FromRequestParts<S> + Send + Sync + 'static,
                <$A as FromRequestParts<S>>::Rejection: 'static, )*
-            Req: Message + DeserializeOwned + Default + Send + 'static,
+            Req: ConnectBody + Send + 'static,
             S: Send + Sync + 'static,
 
             // Response constraints
@@ -394,7 +393,7 @@ macro_rules! impl_bidi_stream_handler_for_connect_handler_wrapper {
             // Constraints on extractors
             $( $A: FromRequestParts<S> + Send + Sync + 'static,
                <$A as FromRequestParts<S>>::Rejection: 'static, )*
-            Req: Message + DeserializeOwned + Default + Send + 'static,
+            Req: ConnectBody + Send + 'static,
             S: Send + Sync + 'static,
 
             // Response constraints
@@ -465,7 +464,7 @@ where
     Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
     St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
     // Req must be a Message (not Streaming<T>) to distinguish from bidi streaming
-    Req: Message + DeserializeOwned + Default + Send + Sync + 'static,
+    Req: ConnectBody + Send + Sync + 'static,
     Resp: Message + serde::Serialize + Send + Sync + 'static,
 {
     type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
@@ -511,7 +510,7 @@ impl<F, Fut, Req, Resp> Handler<(ConnectRequest<Streaming<Req>>, Resp), ()>
 where
     F: Fn(ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
-    Req: Message + DeserializeOwned + Default + Send + 'static,
+    Req: ConnectBody + Send + 'static,
     Resp: Message + serde::Serialize + Send + Clone + Sync + 'static,
 {
     type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
@@ -561,7 +560,7 @@ where
     F: Fn(ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
     St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
-    Req: Message + DeserializeOwned + Default + Send + 'static,
+    Req: ConnectBody + Send + 'static,
     Resp: Message + serde::Serialize + Send + Sync + 'static,
 {
     type Future = Pin<Box<dyn Future<Output = Response> + Send>>;

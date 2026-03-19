@@ -79,9 +79,7 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
         let message = json
             .get("message")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                anyhow::anyhow!("expected success with message, got: {json}")
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("expected success with message, got: {json}"))?;
         if message.is_empty() {
             anyhow::bail!("expected non-empty message");
         }
@@ -89,9 +87,7 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
         let code = json
             .get("code")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                anyhow::anyhow!("expected error with code, got: {json}")
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("expected error with code, got: {json}"))?;
         if code != "deadline_exceeded" {
             anyhow::bail!("expected deadline_exceeded, got code={code}");
         }

@@ -1,7 +1,7 @@
+use crate::{HelloRequest, HelloResponse, hello_world_service_connect};
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use connectrpc_axum::prelude::*;
-use crate::{HelloRequest, HelloResponse, hello_world_service_connect};
 
 pub struct ApiKey(pub String);
 
@@ -29,6 +29,7 @@ async fn say_hello(
     Ok(ConnectResponse::new(HelloResponse {
         message: format!("Hello, {}! (key: {})", name, key),
         response_type: None,
+        ..Default::default()
     }))
 }
 

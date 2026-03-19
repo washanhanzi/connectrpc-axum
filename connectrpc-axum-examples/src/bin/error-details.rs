@@ -7,9 +7,9 @@
 //! Run with: cargo run --bin error-details
 //! Test with: go test -v -run TestErrorDetails
 
+use buffa::Message;
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{HelloRequest, HelloResponse, hello_world_service_connect};
-use prost::Message;
 // SocketAddr now provided by server_addr()
 
 /// Handler that returns error details when name == "error"
@@ -31,6 +31,7 @@ async fn say_hello(
     Ok(ConnectResponse::new(HelloResponse {
         message: format!("Hello, {}!", name),
         response_type: None,
+        ..Default::default()
     }))
 }
 
@@ -42,9 +43,12 @@ async fn say_hello(
 /// We encode it by first encoding the Duration, then wrapping it in field 1.
 fn encode_retry_info(seconds: i64) -> Vec<u8> {
     // Encode the Duration message (field 1 = seconds, field 2 = nanos)
-    let duration = prost_types::Duration { seconds, nanos: 0 };
-    let mut duration_bytes = Vec::new();
-    duration.encode(&mut duration_bytes).unwrap();
+    let duration = buffa_types::google::protobuf::Duration {
+        seconds,
+        nanos: 0,
+        ..Default::default()
+    };
+    let duration_bytes = duration.encode_to_vec();
 
     // Wrap in RetryInfo's field 1 (wire type 2 = length-delimited)
     let mut bytes = Vec::new();

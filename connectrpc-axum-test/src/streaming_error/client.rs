@@ -81,8 +81,7 @@ async fn run_one(sock: &TestSocket, _tc: &TestCase) -> anyhow::Result<()> {
 
     while cursor.len() >= 5 {
         let flags = cursor[0];
-        let len =
-            u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;
+        let len = u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;
         cursor = &cursor[5..];
         if cursor.len() < len {
             break;

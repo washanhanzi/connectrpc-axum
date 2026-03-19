@@ -83,7 +83,9 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
         let message = json
             .get("message")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("expected message field in error response, got: {json}"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("expected message field in error response, got: {json}")
+            })?;
         if !message.contains("x-user-id") {
             anyhow::bail!(
                 "expected error message to mention x-user-id, got {:?}",

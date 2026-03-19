@@ -3,22 +3,23 @@
 // crate::TypeName instead of super::TypeName
 
 pub mod message_service {
-    // Include generated code in a module (not at crate root)
-    include!(concat!(env!("OUT_DIR"), "/hello.rs"));
+    // Include the generated module tree in a nested module (not at crate root)
+    include!(concat!(env!("OUT_DIR"), "/protos.rs"));
 
-    // The generated tonic trait should now correctly reference types using super::TypeName
-    // instead of crate::TypeName, so this module is self-contained
+    // The generated tonic trait and sidecars should now correctly resolve types via
+    // package-relative paths, so this module remains self-contained.
 }
 
 // Verify we can use the types from the module
 #[allow(dead_code)]
 fn test_types_accessible() {
-    use message_service::*;
+    use message_service::hello::*;
 
     let _request = HelloRequest {
         name: Some("Test".to_string()),
         hobbies: vec![],
         greeting_type: None,
+        ..Default::default()
     };
 
     // The tonic server trait should compile correctly

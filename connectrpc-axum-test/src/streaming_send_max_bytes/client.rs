@@ -96,8 +96,7 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
 
     while cursor.len() >= 5 {
         let flags = cursor[0];
-        let len =
-            u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;
+        let len = u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;
         cursor = &cursor[5..];
         if cursor.len() < len {
             break;
@@ -129,9 +128,7 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
         // If there is an EndStream frame, check it has no error
         if let Some(end_stream) = &end_stream_error {
             if end_stream.get("error").is_some() {
-                anyhow::bail!(
-                    "expected no error in EndStream, got: {end_stream}"
-                );
+                anyhow::bail!("expected no error in EndStream, got: {end_stream}");
             }
         }
     } else {

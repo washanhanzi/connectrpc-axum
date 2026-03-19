@@ -142,3 +142,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+If you want a zero-copy protobuf request view, replace `ConnectRequest<T>` with `ViewRequest<T>`. For streaming requests, use `ViewStreamRequest<T>`.

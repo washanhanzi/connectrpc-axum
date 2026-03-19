@@ -41,6 +41,7 @@ async fn echo_client_stream(
             messages.len(),
             messages.join(", ")
         ),
+        ..Default::default()
     }))
 }
 

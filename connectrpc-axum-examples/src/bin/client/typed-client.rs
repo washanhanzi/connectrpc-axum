@@ -23,9 +23,8 @@
 //!   cargo run --bin typed-client --no-default-features -- http://localhost:8080
 
 use connectrpc_axum_examples::{
-    HelloRequest, HelloResponse,
+    HelloRequest, HelloResponse, hello_world_service_connect_client::HelloWorldServiceClient,
     hello_world_service_procedures,
-    hello_world_service_connect_client::HelloWorldServiceClient,
 };
 use std::env;
 
@@ -51,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("Alice".to_string()),
             hobbies: vec!["reading".to_string(), "coding".to_string()],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response = client.say_hello(&request).await?;
@@ -74,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("Bob".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response = proto_client.say_hello(&request).await?;
@@ -89,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("Charlie".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response = client.get_greeting(&request).await?;
@@ -129,6 +131,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("Diana".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response = client.say_hello(&request).await?;
@@ -151,6 +154,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("Eve".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response = client2.say_hello(&request).await?;

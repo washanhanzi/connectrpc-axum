@@ -11,7 +11,8 @@
 use axum::extract::State;
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{
-    EchoRequest, EchoResponse, HelloRequest, HelloResponse, echo_service_server, hello_world_service_connect,
+    EchoRequest, EchoResponse, HelloRequest, HelloResponse, echo_service_server,
+    hello_world_service_connect,
 };
 use futures::{Stream, StreamExt};
 // SocketAddr now provided by server_addr()
@@ -46,6 +47,7 @@ impl echo_service_server::EchoService for EchoServiceImpl {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(tonic::Response::new(EchoResponse {
             message: format!("Echo #{}: {}", count, req.message),
+            ..Default::default()
         }))
     }
 
@@ -75,6 +77,7 @@ impl echo_service_server::EchoService for EchoServiceImpl {
                 messages.len(),
                 messages.join(", ")
             ),
+            ..Default::default()
         }))
     }
 
@@ -101,7 +104,7 @@ impl echo_service_server::EchoService for EchoServiceImpl {
                                 "Bidi Echo #{} (msg #{}): {}",
                                 count, message_count, req.message
                             ),
-                        });
+                        ..Default::default()});
                     }
                     Err(e) => {
                         yield Err(e);
@@ -116,7 +119,7 @@ impl echo_service_server::EchoService for EchoServiceImpl {
                     "Bidi stream #{} completed. Received {} messages.",
                     count, message_count
                 ),
-            });
+            ..Default::default()});
         };
 
         Ok(tonic::Response::new(Box::pin(response_stream)))
@@ -137,6 +140,7 @@ async fn say_hello(
     Ok(ConnectResponse::new(HelloResponse {
         message: format!("Hello #{}, {}!", count, req.name.unwrap_or_default()),
         response_type: None,
+        ..Default::default()
     }))
 }
 

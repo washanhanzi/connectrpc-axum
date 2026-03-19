@@ -70,7 +70,6 @@ use tower_http::compression::predicate::SizeAbove;
 ))]
 use tower_http::decompression::RequestDecompressionLayer;
 
-use crate::context::{CompressionConfig, MessageLimits};
 #[cfg(any(
     feature = "compression-gzip-unary",
     feature = "compression-deflate-unary",
@@ -78,6 +77,7 @@ use crate::context::{CompressionConfig, MessageLimits};
     feature = "compression-zstd-unary"
 ))]
 use crate::context::to_tower_compression_level;
+use crate::context::{CompressionConfig, MessageLimits};
 use crate::layer::{BridgeLayer, ConnectLayer};
 
 #[cfg(feature = "tonic")]
@@ -560,8 +560,7 @@ where
     ) -> CompressionLayer<SizeAbove> {
         let min_bytes = compression.min_bytes.min(u16::MAX as usize) as u16;
 
-        let layer = CompressionLayer::new()
-            .quality(to_tower_compression_level(compression.level));
+        let layer = CompressionLayer::new().quality(to_tower_compression_level(compression.level));
 
         #[cfg(feature = "compression-gzip-unary")]
         let layer = layer.gzip(true);

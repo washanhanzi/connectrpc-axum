@@ -1,5 +1,5 @@
-use connectrpc_axum::prelude::*;
 use crate::{HelloRequest, HelloResponse, hello_world_service_connect};
+use connectrpc_axum::prelude::*;
 use futures::Stream;
 
 async fn say_hello_stream(
@@ -16,23 +16,23 @@ async fn say_hello_stream(
                 yield Ok(HelloResponse {
                     message: "Hi".to_string(),
                     response_type: None,
-                });
+                ..Default::default()});
                 yield Ok(HelloResponse {
                     message: "Hey".to_string(),
                     response_type: None,
-                });
+                ..Default::default()});
             }
             "Large" => {
                 yield Ok(HelloResponse {
                     message: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
                     response_type: None,
-                });
+                ..Default::default()});
             }
             _ => {
                 yield Ok(HelloResponse {
                     message: format!("Hello, {}!", name),
                     response_type: None,
-                });
+                ..Default::default()});
             }
         }
     };

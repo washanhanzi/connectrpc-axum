@@ -197,32 +197,38 @@ This allows generated code to work with user-provided trait implementations with
 
 Code generation uses staged passes to avoid type duplication while keeping serde and tonic output aligned:
 
-**Pass 1: Prost + Connect**
+**Pass 1: Descriptor capture**
 ```
-proto files → prost_build → Message types (Rust structs)
-                          → Connect service builders
-                          → File descriptor set
+proto files → protoc → FileDescriptorSet
 ```
 
-**Pass 1.5: pbjson serde generation**
+**Pass 2: Buffa messages**
 ```
-File descriptor set → pbjson_build → {package}.serde.rs
-                                  → Appended into Pass 1 files
-```
-
-**Pass 2: Tonic server (optional)**
-```
-File descriptor set → tonic_build → Server traits/stubs
-                                  → Uses extern_path to reference Pass 1 types
+File descriptor set → buffa-build → Message types
+                                  → Borrowed view types
+                                  → JSON/serde support
+                                  → Per-file `HasView` glue
 ```
 
-**Pass 3: Tonic client (optional)**
+**Pass 3: Connect sidecars**
 ```
-File descriptor set → tonic_build → Client stubs
-                                  → Uses extern_path to reference Pass 1 types
+Descriptor-backed service model → Connect service builders
+                               → Connect clients
 ```
 
-The key is `extern_path`: tonic passes don't regenerate message types, they reference Pass 1 output. pbjson is a separate builder, so extern mappings for pbjson must be configured separately when needed (for example with `with_pbjson_config`).
+**Pass 4: Tonic server (optional)**
+```
+Requested descriptor set → tonic_buffa_build → Server traits/stubs
+                                              → Uses extern_path to reference Buffa types
+```
+
+**Pass 5: Tonic client (optional)**
+```
+Requested descriptor set → tonic_buffa_build → Client stubs
+                                              → Uses extern_path to reference Buffa types
+```
+
+The key is shared `extern_path` resolution: Connect sidecars and tonic sidecars do not regenerate message types, they reference the same Buffa output. When well-known types are imported but not generated locally, `.google.protobuf` defaults to `::buffa_types::google::protobuf`.
 
 See `CompileBuilder` in `connectrpc-axum-build` for the type-state pattern that enforces valid configurations at compile time.
 

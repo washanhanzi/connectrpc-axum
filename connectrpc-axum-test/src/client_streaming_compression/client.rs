@@ -113,17 +113,22 @@ async fn run_one(sock: &TestSocket, all_compressed: bool) -> anyhow::Result<()> 
     let body_bytes = resp.into_body().collect().await?.to_bytes();
 
     // Parse response (may be streaming or plain JSON)
-    let response_text = if body_bytes.len() >= 5 && (body_bytes[0] == 0x00 || body_bytes[0] == 0x01) {
+    let response_text = if body_bytes.len() >= 5 && (body_bytes[0] == 0x00 || body_bytes[0] == 0x01)
+    {
         let mut cursor = &body_bytes[..];
         let mut text = String::new();
         while cursor.len() >= 5 {
             let flags = cursor[0];
             let len = u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;
             cursor = &cursor[5..];
-            if cursor.len() < len { break; }
+            if cursor.len() < len {
+                break;
+            }
             let payload = &cursor[..len];
             cursor = &cursor[len..];
-            if flags & 0x02 != 0 { break; }
+            if flags & 0x02 != 0 {
+                break;
+            }
             let json_bytes = if flags & 0x01 != 0 {
                 decompress_gzip(payload)?
             } else {
@@ -137,11 +142,17 @@ async fn run_one(sock: &TestSocket, all_compressed: bool) -> anyhow::Result<()> 
         text
     } else {
         let json: serde_json::Value = serde_json::from_slice(&body_bytes)?;
-        json.get("message").and_then(|v| v.as_str()).unwrap_or("").to_string()
+        json.get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
     };
 
     if !response_text.contains("3 messages") {
-        anyhow::bail!("expected '3 messages' in response, got: {:?}", response_text);
+        anyhow::bail!(
+            "expected '3 messages' in response, got: {:?}",
+            response_text
+        );
     }
     for name in &["Alice", "Bob", "Charlie"] {
         if !response_text.contains(name) {

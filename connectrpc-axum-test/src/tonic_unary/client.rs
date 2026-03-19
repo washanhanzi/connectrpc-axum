@@ -16,11 +16,17 @@ pub async fn run_tonic_unary_tests(sock: &TestSocket) -> Vec<CaseResult> {
 
     // Test 1: Connect unary via HTTP/1.1
     let err = test_connect_unary(sock).await.err().map(|e| e.to_string());
-    results.push(CaseResult { name: "tonic unary via Connect protocol", error: err });
+    results.push(CaseResult {
+        name: "tonic unary via Connect protocol",
+        error: err,
+    });
 
     // Test 2: gRPC unary via HTTP/2
     let err = test_grpc_unary(sock).await.err().map(|e| e.to_string());
-    results.push(CaseResult { name: "tonic unary via gRPC protocol", error: err });
+    results.push(CaseResult {
+        name: "tonic unary via gRPC protocol",
+        error: err,
+    });
 
     results
 }
@@ -47,7 +53,11 @@ async fn test_connect_unary(sock: &TestSocket) -> anyhow::Result<()> {
     let status = resp.status();
     if status != 200 {
         let body = resp.into_body().collect().await?.to_bytes();
-        anyhow::bail!("expected 200, got {}: {}", status, String::from_utf8_lossy(&body));
+        anyhow::bail!(
+            "expected 200, got {}: {}",
+            status,
+            String::from_utf8_lossy(&body)
+        );
     }
 
     let body = resp.into_body().collect().await?.to_bytes();
@@ -85,7 +95,12 @@ async fn test_grpc_unary(sock: &TestSocket) -> anyhow::Result<()> {
 
     let resp = sender.send_request(req).await?;
     let status = resp.status();
-    let grpc_status = resp.headers().get("grpc-status").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+    let grpc_status = resp
+        .headers()
+        .get("grpc-status")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
 
     let body = resp.into_body().collect().await?.to_bytes();
 
@@ -101,7 +116,10 @@ async fn test_grpc_unary(sock: &TestSocket) -> anyhow::Result<()> {
             // Check if there's a valid response
             anyhow::bail!("empty gRPC response body");
         }
-        anyhow::bail!("gRPC response too short: {} bytes, grpc-status: {grpc_status}", body.len());
+        anyhow::bail!(
+            "gRPC response too short: {} bytes, grpc-status: {grpc_status}",
+            body.len()
+        );
     }
 
     let msg_len = u32::from_be_bytes([body[1], body[2], body[3], body[4]]) as usize;

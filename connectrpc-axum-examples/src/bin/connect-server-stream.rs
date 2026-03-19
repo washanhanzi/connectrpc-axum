@@ -28,7 +28,7 @@ async fn say_hello_stream(
         yield Ok(HelloResponse {
             message: format!("Hello, {}! Starting stream...", name),
             response_type: None,
-        });
+        ..Default::default()});
 
         // Stream hobbies if provided
         if !hobbies.is_empty() {
@@ -36,7 +36,7 @@ async fn say_hello_stream(
                 yield Ok(HelloResponse {
                     message: format!("Hobby #{}: {} - nice!", idx + 1, hobby),
                     response_type: None,
-                });
+                ..Default::default()});
             }
         } else {
             // Send sample messages
@@ -44,7 +44,7 @@ async fn say_hello_stream(
                 yield Ok(HelloResponse {
                     message: format!("Stream message #{} for {}", i, name),
                     response_type: None,
-                });
+                ..Default::default()});
             }
         }
 
@@ -52,7 +52,7 @@ async fn say_hello_stream(
         yield Ok(HelloResponse {
             message: format!("Stream complete. Goodbye, {}!", name),
             response_type: None,
-        });
+        ..Default::default()});
     };
 
     Ok(ConnectResponse::new(StreamBody::new(response_stream)))

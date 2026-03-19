@@ -80,7 +80,10 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
 
     if tc.expect_success {
         if status != 200 {
-            anyhow::bail!("expected HTTP 200, got {status}: {}", String::from_utf8_lossy(&body_bytes));
+            anyhow::bail!(
+                "expected HTTP 200, got {status}: {}",
+                String::from_utf8_lossy(&body_bytes)
+            );
         }
 
         // Parse streaming response frames
@@ -89,8 +92,7 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
 
         while cursor.len() >= 5 {
             let flags = cursor[0];
-            let len =
-                u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;
+            let len = u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;
             cursor = &cursor[5..];
             if cursor.len() < len {
                 break;
@@ -115,7 +117,10 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
             .get("message")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                anyhow::anyhow!("expected message field in first frame, got: {}", messages[0])
+                anyhow::anyhow!(
+                    "expected message field in first frame, got: {}",
+                    messages[0]
+                )
             })?;
 
         if !first_message.contains("Hello") {
@@ -135,8 +140,7 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
 
             while cursor.len() >= 5 {
                 let flags = cursor[0];
-                let len =
-                    u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;
+                let len = u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;
                 cursor = &cursor[5..];
                 if cursor.len() < len {
                     break;
@@ -147,11 +151,9 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
                 if flags & 0x02 != 0 {
                     // End-of-stream trailer frame
                     let json: serde_json::Value = serde_json::from_slice(payload)?;
-                    let error_obj = json
-                        .get("error")
-                        .ok_or_else(|| {
-                            anyhow::anyhow!("expected error in EndStream, got: {json}")
-                        })?;
+                    let error_obj = json.get("error").ok_or_else(|| {
+                        anyhow::anyhow!("expected error in EndStream, got: {json}")
+                    })?;
                     let code = error_obj
                         .get("code")
                         .and_then(|v| v.as_str())
@@ -159,10 +161,7 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
                             anyhow::anyhow!("expected code in error, got: {error_obj}")
                         })?;
                     if code != "resource_exhausted" {
-                        anyhow::bail!(
-                            "expected code resource_exhausted, got {:?}",
-                            code
-                        );
+                        anyhow::bail!("expected code resource_exhausted, got {:?}", code);
                     }
                     found_error = true;
                     break;
@@ -177,13 +176,12 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
             }
         } else {
             // Non-200: parse as unary-style JSON error
-            let json: serde_json::Value = serde_json::from_slice(&body_bytes)
-                .map_err(|_| {
-                    anyhow::anyhow!(
-                        "expected JSON error body, got: {}",
-                        String::from_utf8_lossy(&body_bytes)
-                    )
-                })?;
+            let json: serde_json::Value = serde_json::from_slice(&body_bytes).map_err(|_| {
+                anyhow::anyhow!(
+                    "expected JSON error body, got: {}",
+                    String::from_utf8_lossy(&body_bytes)
+                )
+            })?;
             let code = json
                 .get("code")
                 .and_then(|v| v.as_str())

@@ -19,18 +19,18 @@
 //!   cargo run --bin connect-bidi-stream
 //!   SERVER_URL=http://localhost:3000 cargo run --bin message-interceptor-client
 
+use buffa::Message;
 use connectrpc_axum_client::{
     ClientError, ConnectClient, ConnectResponse as ClientResponse, MessageInterceptor,
     RequestContext, ResponseContext, StreamContext, StreamType,
 };
 use connectrpc_axum_examples::{EchoRequest, EchoResponse, HelloRequest, HelloResponse};
-use futures::{stream, StreamExt};
-use prost::Message;
+use futures::{StreamExt, stream};
 use serde::{Serialize, de::DeserializeOwned};
 use std::any::Any;
 use std::env;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Counting interceptor that tracks per-message interception.
 ///
@@ -94,11 +94,7 @@ impl MessageInterceptor for CountingMessageInterceptor {
         Ok(())
     }
 
-    fn on_stream_send<Req>(
-        &self,
-        ctx: &StreamContext,
-        request: &mut Req,
-    ) -> Result<(), ClientError>
+    fn on_stream_send<Req>(&self, ctx: &StreamContext, request: &mut Req) -> Result<(), ClientError>
     where
         Req: Message + Serialize + 'static,
     {
@@ -108,7 +104,7 @@ impl MessageInterceptor for CountingMessageInterceptor {
         let msg_info = if let Some(echo_req) = (request as &dyn Any).downcast_ref::<EchoRequest>() {
             format!("message={:?}", echo_req.message)
         } else {
-            format!("encoded_len={}", request.encoded_len())
+            format!("encoded_len={}", request.compute_size())
         };
 
         println!(
@@ -135,12 +131,10 @@ impl MessageInterceptor for CountingMessageInterceptor {
         let msg_info = if let Some(echo_res) = (response as &dyn Any).downcast_ref::<EchoResponse>()
         {
             format!("message={:?}", echo_res.message)
-        } else if let Some(hello_res) =
-            (response as &dyn Any).downcast_ref::<HelloResponse>()
-        {
+        } else if let Some(hello_res) = (response as &dyn Any).downcast_ref::<HelloResponse>() {
             format!("message={:?}", hello_res.message)
         } else {
-            format!("encoded_len={}", response.encoded_len())
+            format!("encoded_len={}", response.compute_size())
         };
 
         println!(
@@ -225,6 +219,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("StreamTest".to_string()),
             hobbies: vec!["reading".to_string(), "coding".to_string()],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response: ClientResponse<_> = client
@@ -280,12 +275,15 @@ async fn main() -> anyhow::Result<()> {
         let messages = vec![
             EchoRequest {
                 message: "msg1".to_string(),
+                ..Default::default()
             },
             EchoRequest {
                 message: "msg2".to_string(),
+                ..Default::default()
             },
             EchoRequest {
                 message: "msg3".to_string(),
+                ..Default::default()
             },
         ];
         let message_count = messages.len();
@@ -336,12 +334,15 @@ async fn main() -> anyhow::Result<()> {
         let messages = vec![
             EchoRequest {
                 message: "bidi1".to_string(),
+                ..Default::default()
             },
             EchoRequest {
                 message: "bidi2".to_string(),
+                ..Default::default()
             },
             EchoRequest {
                 message: "bidi3".to_string(),
+                ..Default::default()
             },
         ];
         let sent_count = messages.len();
@@ -410,6 +411,7 @@ async fn main() -> anyhow::Result<()> {
 
         let messages = vec![EchoRequest {
             message: "original".to_string(),
+            ..Default::default()
         }];
         let request_stream = stream::iter(messages);
 
@@ -505,6 +507,7 @@ async fn main() -> anyhow::Result<()> {
 
         let messages = vec![EchoRequest {
             message: "test".to_string(),
+            ..Default::default()
         }];
         let request_stream = stream::iter(messages);
 
@@ -552,9 +555,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         println!("FAILURE: {} tests failed", failed);
         println!();
-        println!(
-            "Issue #29 message-level interception for streaming is NOT fully implemented."
-        );
+        println!("Issue #29 message-level interception for streaming is NOT fully implemented.");
         println!("The interceptor trait methods exist but are not called in streaming code paths.");
         Err(anyhow::anyhow!("{} tests failed", failed))
     }

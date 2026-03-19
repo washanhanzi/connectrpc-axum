@@ -8,6 +8,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use base64::Engine;
+use buffa::Message;
 use bytes::{Bytes, BytesMut};
 use connectrpc_axum_core::{
     Code, CompressionEncoding, ENVELOPE_HEADER_SIZE, ErrorDetail, envelope_flags,
@@ -17,7 +18,6 @@ use connectrpc_axum_core::{
 use crate::ClientError;
 use crate::response::Metadata;
 use futures::Stream;
-use prost::Message;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
@@ -121,7 +121,7 @@ impl<S, T> FrameDecoder<S, T> {
         T: Message + DeserializeOwned + Default,
     {
         if self.use_proto {
-            T::decode(bytes)
+            T::decode_from_slice(bytes)
                 .map_err(|e| ClientError::Decode(format!("protobuf decoding failed: {}", e)))
         } else {
             serde_json::from_slice(bytes)
@@ -362,6 +362,7 @@ fn parse_error_detail(detail: &EndStreamErrorDetail) -> Option<ErrorDetail> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TestMessage;
     use bytes::Bytes;
     use futures::StreamExt;
     use futures::stream;
@@ -373,76 +374,6 @@ mod tests {
         frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
         frame.extend_from_slice(payload);
         Bytes::from(frame)
-    }
-
-    // A simple test message type that implements both Message and Deserialize
-    #[derive(Clone, PartialEq, Default)]
-    struct TestMessage {
-        value: String,
-    }
-
-    impl std::fmt::Debug for TestMessage {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("TestMessage")
-                .field("value", &self.value)
-                .finish()
-        }
-    }
-
-    impl<'de> serde::Deserialize<'de> for TestMessage {
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            #[derive(serde::Deserialize)]
-            struct Helper {
-                value: String,
-            }
-            let helper = Helper::deserialize(deserializer)?;
-            Ok(TestMessage {
-                value: helper.value,
-            })
-        }
-    }
-
-    impl prost::Message for TestMessage {
-        fn encode_raw(&self, buf: &mut impl bytes::BufMut)
-        where
-            Self: Sized,
-        {
-            if !self.value.is_empty() {
-                prost::encoding::string::encode(1, &self.value, buf);
-            }
-        }
-
-        fn merge_field(
-            &mut self,
-            tag: u32,
-            wire_type: prost::encoding::WireType,
-            buf: &mut impl bytes::Buf,
-            ctx: prost::encoding::DecodeContext,
-        ) -> Result<(), prost::DecodeError>
-        where
-            Self: Sized,
-        {
-            if tag == 1 {
-                prost::encoding::string::merge(wire_type, &mut self.value, buf, ctx)
-            } else {
-                prost::encoding::skip_field(wire_type, tag, buf, ctx)
-            }
-        }
-
-        fn encoded_len(&self) -> usize {
-            if self.value.is_empty() {
-                0
-            } else {
-                prost::encoding::string::encoded_len(1, &self.value)
-            }
-        }
-
-        fn clear(&mut self) {
-            self.value.clear();
-        }
     }
 
     #[tokio::test]

@@ -1,5 +1,5 @@
-use connectrpc_axum::prelude::*;
 use crate::{HelloRequest, HelloResponse, hello_world_service_connect};
+use connectrpc_axum::prelude::*;
 
 async fn get_greeting(
     ConnectRequest(req): ConnectRequest<HelloRequest>,
@@ -8,6 +8,7 @@ async fn get_greeting(
     Ok(ConnectResponse::new(HelloResponse {
         message: format!("Hello, {}!", name),
         response_type: None,
+        ..Default::default()
     }))
 }
 
@@ -18,6 +19,7 @@ async fn say_hello(
     Ok(ConnectResponse::new(HelloResponse {
         message: format!("Hello, {}!", name),
         response_type: None,
+        ..Default::default()
     }))
 }
 

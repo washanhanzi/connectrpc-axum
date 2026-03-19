@@ -18,11 +18,8 @@
 //!   cargo run --bin bidi-stream-client --no-default-features -- http://localhost:8080
 
 use connectrpc_axum_client::{ClientBuildError, ClientError};
-use connectrpc_axum_examples::{
-    EchoRequest,
-    echo_service_connect_client::EchoServiceClient,
-};
-use futures::{stream, StreamExt};
+use connectrpc_axum_examples::{EchoRequest, echo_service_connect_client::EchoServiceClient};
+use futures::{StreamExt, stream};
 use std::env;
 use std::time::Duration;
 
@@ -71,12 +68,15 @@ async fn main() -> anyhow::Result<()> {
         let messages = vec![
             EchoRequest {
                 message: "hello".to_string(),
+                ..Default::default()
             },
             EchoRequest {
                 message: "world".to_string(),
+                ..Default::default()
             },
             EchoRequest {
                 message: "bidi".to_string(),
+                ..Default::default()
             },
         ];
 
@@ -121,9 +121,11 @@ async fn main() -> anyhow::Result<()> {
         let messages = vec![
             EchoRequest {
                 message: "proto1".to_string(),
+                ..Default::default()
             },
             EchoRequest {
                 message: "proto2".to_string(),
+                ..Default::default()
             },
         ];
 
@@ -156,6 +158,7 @@ async fn main() -> anyhow::Result<()> {
 
         let messages = vec![EchoRequest {
             message: "single".to_string(),
+            ..Default::default()
         }];
 
         let request_stream = stream::iter(messages);
@@ -184,6 +187,7 @@ async fn main() -> anyhow::Result<()> {
 
         let messages = vec![EchoRequest {
             message: "test".to_string(),
+            ..Default::default()
         }];
 
         let request_stream = stream::iter(messages);
@@ -216,12 +220,15 @@ async fn main() -> anyhow::Result<()> {
         let messages = vec![
             EchoRequest {
                 message: "a".to_string(),
+                ..Default::default()
             },
             EchoRequest {
                 message: "b".to_string(),
+                ..Default::default()
             },
             EchoRequest {
                 message: "c".to_string(),
+                ..Default::default()
             },
         ];
 
@@ -248,6 +255,7 @@ async fn main() -> anyhow::Result<()> {
 
         let messages = vec![EchoRequest {
             message: "finish-test".to_string(),
+            ..Default::default()
         }];
 
         let request_stream = stream::iter(messages);
@@ -277,6 +285,7 @@ async fn main() -> anyhow::Result<()> {
 
         let messages = vec![EchoRequest {
             message: "trailers-test".to_string(),
+            ..Default::default()
         }];
 
         let request_stream = stream::iter(messages);
@@ -311,6 +320,7 @@ async fn main() -> anyhow::Result<()> {
 
         let messages = vec![EchoRequest {
             message: "timeout-test".to_string(),
+            ..Default::default()
         }];
 
         let request_stream = stream::iter(messages);

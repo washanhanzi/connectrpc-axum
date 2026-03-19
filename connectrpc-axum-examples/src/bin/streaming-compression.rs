@@ -28,7 +28,7 @@ async fn say_hello_stream(
         yield Ok(HelloResponse {
             message: format!("Hi {}!", name),
             response_type: None,
-        });
+        ..Default::default()});
 
         // Large message (will be compressed - over 100 byte threshold)
         // Create a message with repeated text to ensure it's compressible
@@ -44,7 +44,7 @@ async fn say_hello_stream(
         yield Ok(HelloResponse {
             message: large_text,
             response_type: None,
-        });
+        ..Default::default()});
 
         // Another large message
         yield Ok(HelloResponse {
@@ -56,13 +56,13 @@ async fn say_hello_stream(
                 "final_content ".repeat(10)
             ),
             response_type: None,
-        });
+        ..Default::default()});
 
         // Final small message
         yield Ok(HelloResponse {
             message: format!("Bye {}!", name),
             response_type: None,
-        });
+        ..Default::default()});
     };
 
     Ok(ConnectResponse::new(StreamBody::new(response_stream)))

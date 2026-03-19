@@ -48,6 +48,7 @@ async fn say_hello(
         _ => Ok(ConnectResponse::new(HelloResponse {
             message: format!("Hello, {}!", name),
             response_type: None,
+            ..Default::default()
         })),
     }
 }

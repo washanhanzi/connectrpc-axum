@@ -19,4 +19,4 @@ pub use interceptor::{
 };
 pub use options::CallOptions;
 pub(crate) use options::duration_to_timeout_header;
-pub use retry::{defaults, retry, retry_with_policy, ExponentialBackoff, RetryExt, RetryPolicy};
+pub use retry::{ExponentialBackoff, RetryExt, RetryPolicy, defaults, retry, retry_with_policy};

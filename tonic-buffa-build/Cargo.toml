@@ -1,0 +1,21 @@
+[package]
+name = "tonic-buffa-build"
+version = "0.0.1"
+edition.workspace = true
+description = "Generate tonic stubs for Buffa message types"
+readme = "README.md"
+repository.workspace = true
+license = "MIT"
+
+[dependencies]
+convert_case = { workspace = true }
+prettyplease = { workspace = true }
+proc-macro2 = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true }
+tempfile = { workspace = true }
+tonic-build = { workspace = true }
+
+[dev-dependencies]

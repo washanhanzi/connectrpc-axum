@@ -24,8 +24,7 @@
 
 use connectrpc_axum_client::ClientError;
 use connectrpc_axum_examples::{
-    HelloRequest, HelloResponse,
-    hello_world_service_connect_client::HelloWorldServiceClient,
+    HelloRequest, HelloResponse, hello_world_service_connect_client::HelloWorldServiceClient,
 };
 use futures::StreamExt;
 use std::env;
@@ -53,6 +52,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("Alice".to_string()),
             hobbies: vec!["reading".to_string(), "coding".to_string()],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response = client.say_hello_stream(&request).await?;
@@ -126,6 +126,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("Bob".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response = client.say_hello_stream(&request).await?;
@@ -160,6 +161,7 @@ async fn main() -> anyhow::Result<()> {
             name: None,
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response = client.say_hello_stream(&request).await?;
@@ -193,6 +195,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("test".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
 
         let result = client.say_hello_stream(&request).await;
@@ -224,6 +227,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("Collector".to_string()),
             hobbies: vec!["test".to_string()],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response = client.say_hello_stream(&request).await?;
@@ -248,6 +252,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("Finisher".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response = client.say_hello_stream(&request).await?;
@@ -280,6 +285,7 @@ async fn main() -> anyhow::Result<()> {
             name: Some("Trailer".to_string()),
             hobbies: vec![],
             greeting_type: None,
+            ..Default::default()
         };
 
         let response = client.say_hello_stream(&request).await?;

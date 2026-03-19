@@ -1,8 +1,8 @@
 mod client;
 mod tonic;
 
+use crate::{TonicRequestMode, model::ProtoService};
 use convert_case::{Case, Casing};
-use prost_build::{Service, ServiceGenerator};
 use prost_types::method_options::IdempotencyLevel;
 use quote::{format_ident, quote};
 
@@ -36,6 +36,7 @@ pub struct AxumConnectServiceGenerator {
     include_connect_server: bool,
     include_tonic: bool,
     include_connect_client: bool,
+    tonic_request_mode: TonicRequestMode,
 }
 
 impl AxumConnectServiceGenerator {
@@ -57,15 +58,24 @@ impl AxumConnectServiceGenerator {
         self.include_connect_client = include;
         self
     }
-}
 
-impl ServiceGenerator for AxumConnectServiceGenerator {
-    fn generate(&mut self, service: Service, buf: &mut String) {
+    pub fn with_tonic_request_mode(mut self, mode: TonicRequestMode) -> Self {
+        self.tonic_request_mode = mode;
+        self
+    }
+
+    pub fn render_service(&self, service: &ProtoService, buf: &mut String) {
+        self.render_service_inner(service, buf);
+    }
+
+    #[cfg(test)]
+    pub fn generate(&self, service: ProtoService, buf: &mut String) {
+        self.render_service_inner(&service, buf);
+    }
+
+    fn render_service_inner(&self, service: &ProtoService, buf: &mut String) {
         // Server module name (e.g., hello_world_service_connect)
-        let service_module_name = format_ident!(
-            "{}_connect",
-            service.name.to_case(Case::Snake)
-        );
+        let service_module_name = format_ident!("{}_connect", service.name.to_case(Case::Snake));
 
         // Remove "Service" suffix from service name to avoid duplication (e.g., HelloWorldService -> HelloWorld)
         let service_base_name = service
@@ -83,10 +93,24 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                 let method_name = format_ident!("{}", method.name.to_case(Case::Snake));
                 let request_type: proc_macro2::TokenStream = method
                     .input_type
+                    .rust_path
                     .parse()
                     .expect("invalid request type path");
+                let tonic_request_type: proc_macro2::TokenStream = match self.tonic_request_mode {
+                    TonicRequestMode::Owned => method
+                        .input_type
+                        .rust_path
+                        .parse()
+                        .expect("invalid tonic request type path"),
+                    TonicRequestMode::View => {
+                        format!("connectrpc_axum::View<{}>", method.input_type.rust_path)
+                            .parse()
+                            .expect("invalid tonic request type path")
+                    }
+                };
                 let response_type: proc_macro2::TokenStream = method
                     .output_type
+                    .rust_path
                     .parse()
                     .expect("invalid response type path");
                 let path = format!(
@@ -98,9 +122,10 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                 let is_client_streaming = method.client_streaming;
                 let idempotency_level = method.options.idempotency_level;
                 let idempotency_tokens = idempotency_level_tokens(idempotency_level);
-                (
+                MethodInfo {
                     method_name,
                     request_type,
+                    tonic_request_type,
                     response_type,
                     path,
                     stream_assoc,
@@ -108,7 +133,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                     is_client_streaming,
                     idempotency_level,
                     idempotency_tokens,
-                )
+                }
             })
             .collect();
 
@@ -117,12 +142,18 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
         // For unary methods with NoSideEffects, automatically enables GET requests (per Connect spec)
         let connect_builder_methods: Vec<_> = method_info
             .iter()
-            .map(|(method_name, _request_type, _response_type, path, _assoc, is_ss, is_cs, idempotency_level, idempotency_tokens)| {
+            .map(|method| {
+                let method_name = &method.method_name;
+                let path = &method.path;
+                let is_ss = method.is_server_streaming;
+                let is_cs = method.is_client_streaming;
+                let idempotency_level = method.idempotency_level;
+                let idempotency_tokens = &method.idempotency_tokens;
                 // Generate doc comment based on streaming type and idempotency
-                let is_unary = !*is_ss && !*is_cs;
-                let supports_get = is_unary && is_no_side_effects(*idempotency_level);
+                let is_unary = !is_ss && !is_cs;
+                let supports_get = is_unary && is_no_side_effects(idempotency_level);
 
-                let doc = match (*is_ss, *is_cs, supports_get) {
+                let doc = match (is_ss, is_cs, supports_get) {
                     (false, false, true) => "Register a handler for this RPC method (unary, GET+POST enabled)",
                     (false, false, false) => "Register a handler for this RPC method (unary)",
                     (true, false, _) => "Register a handler for this RPC method (server streaming)",
@@ -172,7 +203,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
 
         // Generate Tonic-compatible code if tonic is enabled
         let (tonic_module_bits, tonic_out_of_module) = if self.include_tonic {
-            tonic::generate_tonic_code(&service, &method_info, service_base_name)
+            tonic::generate_tonic_code(service, &method_info, service_base_name)
         } else {
             (quote! {}, quote! {})
         };
@@ -252,7 +283,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
 
         // Generate Connect client code if enabled
         if self.include_connect_client {
-            let client_code = client::generate_connect_client(&service, &method_info);
+            let client_code = client::generate_connect_client(service, &method_info);
             buf.push_str(&client_code.to_string());
         }
     }

@@ -73,23 +73,17 @@ Download from googleapis:
 
 ```rust
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut config = prost_build::Config::new();
-
-    // Enable Name trait for Any support
-    config.enable_type_names();
-
-    // Use prost-types for well-known types
-    config.extern_path(".google.protobuf.Duration", "::prost_types::Duration");
-    config.extern_path(".google.protobuf.Any", "::prost_types::Any");
-
-    config.compile_protos(
+    connectrpc_axum_build::compile_protos(
         &["proto/google/rpc/error_details.proto"],
         &["proto"],
-    )?;
+    )
+    .compile()?;
 
     Ok(())
 }
 ```
+
+`connectrpc-axum-build` uses Buffa for generated messages. Imported `google.protobuf.*` types resolve to `::buffa_types::google::protobuf` by default unless you override them with `extern_path(...)`.
 
 ### 4. Generated types
 
@@ -229,12 +223,12 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/..."
 
 [dependencies]
-prost = "0.13"
-prost-types = "0.13"
+buffa = "0.2"
+buffa-types = { version = "0.2", features = ["json"] }
 connectrpc-axum = { version = "0.0.13", path = "../connectrpc-axum" }
 
 [build-dependencies]
-prost-build = "0.13"
+connectrpc-axum-build = { version = "0.0.13", path = "../connectrpc-axum-build" }
 ```
 
 ## Testing

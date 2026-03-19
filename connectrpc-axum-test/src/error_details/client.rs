@@ -66,11 +66,7 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("expected code field, got: {json}"))?;
     if code != tc.expected_code {
-        anyhow::bail!(
-            "expected code {:?}, got {:?}",
-            tc.expected_code,
-            code
-        );
+        anyhow::bail!("expected code {:?}, got {:?}", tc.expected_code, code);
     }
 
     // Validate the error message

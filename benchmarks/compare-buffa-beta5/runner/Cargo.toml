@@ -1,0 +1,22 @@
+[package]
+name = "compare-buffa-beta5-runner"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bench]]
+name = "compare"
+harness = false
+
+[dependencies]
+
+[dev-dependencies]
+bytes = { workspace = true }
+compare-buffa-beta5-cases-beta5 = { path = "../cases-beta5" }
+compare-buffa-beta5-cases-buffa = { path = "../cases-buffa" }
+criterion = { workspace = true }
+http = { workspace = true }
+http-body-util = { workspace = true }
+libc = "0.2"
+tokio = { workspace = true }
+tower = { workspace = true }
