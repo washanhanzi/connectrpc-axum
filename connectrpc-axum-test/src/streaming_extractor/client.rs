@@ -126,8 +126,7 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
         let mut cursor = &body_bytes[..];
         while cursor.len() >= 5 {
             let flags = cursor[0];
-            let len =
-                u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;
+            let len = u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;
             cursor = &cursor[5..];
             if cursor.len() < len {
                 break;
@@ -139,10 +138,7 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
                 // End-of-stream trailer frame
                 let json: serde_json::Value = serde_json::from_slice(payload)?;
                 if let Some(error_obj) = json.get("error") {
-                    let code = error_obj
-                        .get("code")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let code = error_obj.get("code").and_then(|v| v.as_str()).unwrap_or("");
                     if let Some(expected) = tc.expected_error_code {
                         if code != expected {
                             anyhow::bail!("expected error code '{expected}', got '{code}'");
@@ -172,8 +168,7 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
 
     while cursor.len() >= 5 {
         let flags = cursor[0];
-        let len =
-            u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;
+        let len = u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;
         cursor = &cursor[5..];
         if cursor.len() < len {
             break;
@@ -203,7 +198,10 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
             .get("message")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                anyhow::anyhow!("expected message field in first frame, got: {}", messages[0])
+                anyhow::anyhow!(
+                    "expected message field in first frame, got: {}",
+                    messages[0]
+                )
             })?;
 
         if !first_message.contains(expected) {

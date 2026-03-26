@@ -1,6 +1,9 @@
+use crate::{
+    EchoRequest, EchoResponse, HelloRequest, HelloResponse, echo_service_connect,
+    hello_world_service_connect,
+};
 use connectrpc_axum::CompressionConfig;
 use connectrpc_axum::prelude::*;
-use crate::{HelloRequest, HelloResponse, hello_world_service_connect, EchoRequest, EchoResponse, echo_service_connect};
 use futures::{Stream, StreamExt};
 
 async fn say_hello(
@@ -47,7 +50,11 @@ async fn echo_client_stream(
         }
     }
     Ok(ConnectResponse::new(EchoResponse {
-        message: format!("Received {} messages: [{}]", messages.len(), messages.join(", ")),
+        message: format!(
+            "Received {} messages: [{}]",
+            messages.len(),
+            messages.join(", ")
+        ),
     }))
 }
 

@@ -1,5 +1,5 @@
-use connectrpc_axum::prelude::*;
 use crate::{HelloRequest, HelloResponse, hello_world_service_connect};
+use connectrpc_axum::prelude::*;
 use std::time::Duration;
 
 async fn say_hello(

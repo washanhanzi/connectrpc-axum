@@ -227,11 +227,7 @@ pub trait MessageInterceptor: Send + Sync + Clone + 'static {
     }
 
     /// Called after a unary response is received.
-    fn on_response<Res>(
-        &self,
-        ctx: &ResponseContext,
-        response: &mut Res,
-    ) -> Result<(), ClientError>
+    fn on_response<Res>(&self, ctx: &ResponseContext, response: &mut Res) -> Result<(), ClientError>
     where
         Res: Message + DeserializeOwned + Default + 'static,
     {
@@ -240,11 +236,7 @@ pub trait MessageInterceptor: Send + Sync + Clone + 'static {
     }
 
     /// Called before sending a message on a stream.
-    fn on_stream_send<Req>(
-        &self,
-        ctx: &StreamContext,
-        request: &mut Req,
-    ) -> Result<(), ClientError>
+    fn on_stream_send<Req>(&self, ctx: &StreamContext, request: &mut Req) -> Result<(), ClientError>
     where
         Req: Message + Serialize + 'static,
     {
@@ -791,10 +783,7 @@ where
 pub fn stream_interceptor<Body, F>(f: F) -> F
 where
     Body: 'static,
-    F: for<'a> Fn(&StreamContext<'a>, &mut Body) -> Result<(), ClientError>
-        + Send
-        + Sync
-        + 'static,
+    F: for<'a> Fn(&StreamContext<'a>, &mut Body) -> Result<(), ClientError> + Send + Sync + 'static,
 {
     f
 }
@@ -1004,8 +993,8 @@ impl<Req, Res> std::fmt::Debug for BidiStreamInterceptors<Req, Res> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     // Test message type
     #[derive(Clone, Default, PartialEq)]
@@ -1376,7 +1365,10 @@ mod tests {
             }
         }
 
-        let chain = Chain(HeaderWrapper(ErrorInterceptor), HeaderWrapper(PanicInterceptor));
+        let chain = Chain(
+            HeaderWrapper(ErrorInterceptor),
+            HeaderWrapper(PanicInterceptor),
+        );
 
         let mut headers = HeaderMap::new();
         let mut ctx = RequestContext::new("test/Method", &mut headers);

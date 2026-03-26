@@ -1,7 +1,7 @@
+use crate::{EchoRequest, EchoResponse, echo_service_connect};
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use connectrpc_axum::prelude::*;
-use crate::{EchoRequest, EchoResponse, echo_service_connect};
 use futures::StreamExt;
 
 pub struct ApiKey(pub String);

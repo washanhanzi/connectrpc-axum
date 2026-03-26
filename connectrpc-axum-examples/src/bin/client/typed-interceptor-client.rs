@@ -20,15 +20,14 @@ use connectrpc_axum_client::{
     ClientError, RequestContext, TypedMutInterceptor, response_interceptor, stream_interceptor,
 };
 use connectrpc_axum_examples::{
-    EchoRequest, EchoResponse, HelloRequest, HelloResponse,
-    echo_service_connect, hello_world_service_connect,
-    echo_service_connect_client::EchoServiceClient,
+    EchoRequest, EchoResponse, HelloRequest, HelloResponse, echo_service_connect,
+    echo_service_connect_client::EchoServiceClient, hello_world_service_connect,
     hello_world_service_connect_client::HelloWorldServiceClient,
 };
 use futures::{Stream, StreamExt, stream};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::net::TcpListener;
 
@@ -359,9 +358,7 @@ async fn main() -> anyhow::Result<()> {
             && r2.message.contains("count-2")
             && r3.message.contains("count-3")
         {
-            println!(
-                "  PASS: Struct interceptor counted 3 calls, headers verified"
-            );
+            println!("  PASS: Struct interceptor counted 3 calls, headers verified");
             passed += 1;
         } else {
             println!(
@@ -431,14 +428,12 @@ async fn main() -> anyhow::Result<()> {
     {
         let client = EchoServiceClient::builder(&base_url)
             .http2_prior_knowledge()
-            .with_on_send_echo_client_stream(stream_interceptor(
-                |_ctx, msg: &mut EchoRequest| {
-                    if msg.message.is_empty() {
-                        return Err(ClientError::invalid_argument("message must not be empty"));
-                    }
-                    Ok(())
-                },
-            ))
+            .with_on_send_echo_client_stream(stream_interceptor(|_ctx, msg: &mut EchoRequest| {
+                if msg.message.is_empty() {
+                    return Err(ClientError::invalid_argument("message must not be empty"));
+                }
+                Ok(())
+            }))
             .build()?;
 
         // Send: "hello", "", "world" — the empty message should abort the stream
@@ -482,10 +477,7 @@ async fn main() -> anyhow::Result<()> {
                     );
                     failed += 1;
                 } else {
-                    println!(
-                        "  FAIL: Expected error but got success: {}",
-                        msg
-                    );
+                    println!("  FAIL: Expected error but got success: {}", msg);
                     failed += 1;
                 }
             }
@@ -501,10 +493,8 @@ async fn main() -> anyhow::Result<()> {
     {
         let client = EchoServiceClient::builder(&base_url)
             .with_before_echo(|ctx: &mut RequestContext<'_>, _req: &mut EchoRequest| {
-                ctx.headers.insert(
-                    "x-custom-header",
-                    "propagated-value".parse().unwrap(),
-                );
+                ctx.headers
+                    .insert("x-custom-header", "propagated-value".parse().unwrap());
                 Ok(())
             })
             .build()?;

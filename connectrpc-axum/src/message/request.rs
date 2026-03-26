@@ -298,7 +298,10 @@ impl RequestPipeline {
             .ok_or_else(|| {
                 ContextError::new(
                     ctx.protocol,
-                    ConnectError::new(Code::InvalidArgument, "unexpected EndStreamResponse in request"),
+                    ConnectError::new(
+                        Code::InvalidArgument,
+                        "unexpected EndStreamResponse in request",
+                    ),
                 )
             })?;
 

@@ -62,10 +62,7 @@ impl AxumConnectServiceGenerator {
 impl ServiceGenerator for AxumConnectServiceGenerator {
     fn generate(&mut self, service: Service, buf: &mut String) {
         // Server module name (e.g., hello_world_service_connect)
-        let service_module_name = format_ident!(
-            "{}_connect",
-            service.name.to_case(Case::Snake)
-        );
+        let service_module_name = format_ident!("{}_connect", service.name.to_case(Case::Snake));
 
         // Remove "Service" suffix from service name to avoid duplication (e.g., HelloWorldService -> HelloWorld)
         let service_base_name = service

@@ -24,8 +24,7 @@
 
 use connectrpc_axum_client::ClientError;
 use connectrpc_axum_examples::{
-    HelloRequest, HelloResponse,
-    hello_world_service_connect_client::HelloWorldServiceClient,
+    HelloRequest, HelloResponse, hello_world_service_connect_client::HelloWorldServiceClient,
 };
 use futures::StreamExt;
 use std::env;

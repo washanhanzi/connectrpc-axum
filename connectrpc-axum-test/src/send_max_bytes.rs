@@ -1,5 +1,5 @@
-mod server;
 mod client;
+mod server;
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;

@@ -1,5 +1,5 @@
-use connectrpc_axum::prelude::*;
 use crate::{EchoRequest, EchoResponse, echo_service_connect};
+use connectrpc_axum::prelude::*;
 use futures::{Stream, StreamExt};
 
 async fn echo_bidi_stream(

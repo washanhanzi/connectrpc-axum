@@ -1,7 +1,7 @@
+use crate::{HelloRequest, HelloResponse, hello_world_service_connect};
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use connectrpc_axum::prelude::*;
-use crate::{HelloRequest, HelloResponse, hello_world_service_connect};
 
 pub struct ApiKey(pub String);
 

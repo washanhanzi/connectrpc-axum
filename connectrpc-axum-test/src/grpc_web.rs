@@ -1,5 +1,5 @@
-mod server;
 mod client;
+mod server;
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -11,10 +11,8 @@ pub async fn run(rust_sock: &TestSocket, go_sock: &TestSocket) -> anyhow::Result
     let go_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("go");
 
     println!("Building Go binaries...");
-    let go_server_bin =
-        build_go_binary(&go_dir, "./grpc_web/server/", "grpc-web-server").await?;
-    let go_client_bin =
-        build_go_binary(&go_dir, "./grpc_web/client/", "grpc-web-client").await?;
+    let go_server_bin = build_go_binary(&go_dir, "./grpc_web/server/", "grpc-web-server").await?;
+    let go_client_bin = build_go_binary(&go_dir, "./grpc_web/client/", "grpc-web-client").await?;
 
     // Start both servers
     let rust_listener = rust_sock.bind()?;

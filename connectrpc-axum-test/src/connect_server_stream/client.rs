@@ -92,8 +92,7 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
 
     while cursor.len() >= 5 {
         let flags = cursor[0];
-        let len =
-            u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;
+        let len = u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;
         cursor = &cursor[5..];
         if cursor.len() < len {
             break;
@@ -122,7 +121,10 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
         .get("message")
         .and_then(|v| v.as_str())
         .ok_or_else(|| {
-            anyhow::anyhow!("expected message field in first frame, got: {}", messages[0])
+            anyhow::anyhow!(
+                "expected message field in first frame, got: {}",
+                messages[0]
+            )
         })?;
 
     if !first_message.contains(tc.expected_first_message_contains) {

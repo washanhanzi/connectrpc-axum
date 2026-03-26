@@ -128,16 +128,18 @@ async fn validate_response(resp: http::Response<hyper::body::Incoming>) -> anyho
     }
 
     if messages.len() < 3 {
-        anyhow::bail!(
-            "expected at least 3 messages, got {}",
-            messages.len()
-        );
+        anyhow::bail!("expected at least 3 messages, got {}", messages.len());
     }
 
     let first_message = messages[0]
         .get("message")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("expected message field in first frame, got: {}", messages[0]))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "expected message field in first frame, got: {}",
+                messages[0]
+            )
+        })?;
 
     if !first_message.contains("Echo #1") {
         anyhow::bail!(

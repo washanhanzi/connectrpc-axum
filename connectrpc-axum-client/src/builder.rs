@@ -3,7 +3,9 @@
 //! Provides a fluent API for configuring and building a [`ConnectClient`].
 
 use crate::client::ConnectClient;
-use crate::config::{Chain, HeaderWrapper, Interceptor, InterceptorInternal, MessageInterceptor, MessageWrapper};
+use crate::config::{
+    Chain, HeaderWrapper, Interceptor, InterceptorInternal, MessageInterceptor, MessageWrapper,
+};
 use crate::transport::{HyperTransport, HyperTransportBuilder, TlsClientConfig};
 use connectrpc_axum_core::{CompressionConfig, CompressionEncoding};
 use std::time::Duration;
@@ -250,7 +252,10 @@ impl<I: InterceptorInternal> ClientBuilder<I> {
     ///     .with_interceptor(auth_interceptor)
     ///     .build()?;
     /// ```
-    pub fn with_interceptor<J: Interceptor>(self, interceptor: J) -> ClientBuilder<Chain<I, HeaderWrapper<J>>> {
+    pub fn with_interceptor<J: Interceptor>(
+        self,
+        interceptor: J,
+    ) -> ClientBuilder<Chain<I, HeaderWrapper<J>>> {
         ClientBuilder {
             base_url: self.base_url,
             transport: self.transport,

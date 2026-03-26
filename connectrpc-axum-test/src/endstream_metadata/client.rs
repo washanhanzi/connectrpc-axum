@@ -81,8 +81,7 @@ async fn run_one(sock: &TestSocket, _tc: &TestCase) -> anyhow::Result<()> {
 
     while cursor.len() >= 5 {
         let flags = cursor[0];
-        let len =
-            u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;
+        let len = u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;
         cursor = &cursor[5..];
         if cursor.len() < len {
             break;
@@ -136,7 +135,9 @@ async fn run_one(sock: &TestSocket, _tc: &TestCase) -> anyhow::Result<()> {
     let metadata = end_stream
         .get("metadata")
         .and_then(|v| v.as_object())
-        .ok_or_else(|| anyhow::anyhow!("expected metadata object in EndStream, got: {end_stream}"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("expected metadata object in EndStream, got: {end_stream}")
+        })?;
 
     // Build a lowercase-keyed lookup since Go servers may title-case header names
     let metadata_lower: std::collections::HashMap<String, &serde_json::Value> = metadata
@@ -147,12 +148,10 @@ async fn run_one(sock: &TestSocket, _tc: &TestCase) -> anyhow::Result<()> {
     // Metadata values are arrays of strings per the Connect protocol spec
     let custom_meta = metadata_lower
         .get("x-custom-meta")
-        .ok_or_else(|| {
-            anyhow::anyhow!("expected x-custom-meta in metadata, got: {metadata:?}")
-        })?;
-    let custom_meta_values = custom_meta
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("expected x-custom-meta to be an array, got: {custom_meta}"))?;
+        .ok_or_else(|| anyhow::anyhow!("expected x-custom-meta in metadata, got: {metadata:?}"))?;
+    let custom_meta_values = custom_meta.as_array().ok_or_else(|| {
+        anyhow::anyhow!("expected x-custom-meta to be an array, got: {custom_meta}")
+    })?;
     if custom_meta_values.is_empty() || custom_meta_values[0].as_str() != Some("custom-value") {
         anyhow::bail!(
             "expected x-custom-meta ['custom-value'], got {:?}",
@@ -162,12 +161,10 @@ async fn run_one(sock: &TestSocket, _tc: &TestCase) -> anyhow::Result<()> {
 
     let request_id = metadata_lower
         .get("x-request-id")
-        .ok_or_else(|| {
-            anyhow::anyhow!("expected x-request-id in metadata, got: {metadata:?}")
-        })?;
-    let request_id_values = request_id
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("expected x-request-id to be an array, got: {request_id}"))?;
+        .ok_or_else(|| anyhow::anyhow!("expected x-request-id in metadata, got: {metadata:?}"))?;
+    let request_id_values = request_id.as_array().ok_or_else(|| {
+        anyhow::anyhow!("expected x-request-id to be an array, got: {request_id}")
+    })?;
     if request_id_values.is_empty() || request_id_values[0].as_str() != Some("req-123") {
         anyhow::bail!(
             "expected x-request-id ['req-123'], got {:?}",

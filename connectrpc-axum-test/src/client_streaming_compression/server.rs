@@ -1,6 +1,6 @@
+use crate::{EchoRequest, EchoResponse, echo_service_connect};
 use connectrpc_axum::CompressionConfig;
 use connectrpc_axum::prelude::*;
-use crate::{EchoRequest, EchoResponse, echo_service_connect};
 use futures::StreamExt;
 
 async fn echo_client_stream(

@@ -15,20 +15,41 @@ pub async fn run_tonic_extractor_tests(sock: &TestSocket) -> Vec<CaseResult> {
     let mut results = Vec::new();
 
     // Test 1: Connect without key -> unauthenticated error
-    let err = test_connect_without_key(sock).await.err().map(|e| e.to_string());
-    results.push(CaseResult { name: "Connect without api key returns unauthenticated", error: err });
+    let err = test_connect_without_key(sock)
+        .await
+        .err()
+        .map(|e| e.to_string());
+    results.push(CaseResult {
+        name: "Connect without api key returns unauthenticated",
+        error: err,
+    });
 
     // Test 2: Connect with key -> success
-    let err = test_connect_with_key(sock).await.err().map(|e| e.to_string());
-    results.push(CaseResult { name: "Connect with api key succeeds", error: err });
+    let err = test_connect_with_key(sock)
+        .await
+        .err()
+        .map(|e| e.to_string());
+    results.push(CaseResult {
+        name: "Connect with api key succeeds",
+        error: err,
+    });
 
     // Test 3: gRPC without key -> unauthenticated error
-    let err = test_grpc_without_key(sock).await.err().map(|e| e.to_string());
-    results.push(CaseResult { name: "gRPC without api key returns unauthenticated", error: err });
+    let err = test_grpc_without_key(sock)
+        .await
+        .err()
+        .map(|e| e.to_string());
+    results.push(CaseResult {
+        name: "gRPC without api key returns unauthenticated",
+        error: err,
+    });
 
     // Test 4: gRPC with key -> success
     let err = test_grpc_with_key(sock).await.err().map(|e| e.to_string());
-    results.push(CaseResult { name: "gRPC with api key succeeds", error: err });
+    results.push(CaseResult {
+        name: "gRPC with api key succeeds",
+        error: err,
+    });
 
     results
 }
@@ -129,7 +150,12 @@ async fn test_grpc_without_key(sock: &TestSocket) -> anyhow::Result<()> {
         .body(Full::new(Bytes::from(grpc_frame)))?;
 
     let resp = sender.send_request(req).await?;
-    let grpc_status = resp.headers().get("grpc-status").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+    let grpc_status = resp
+        .headers()
+        .get("grpc-status")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
 
     let body = resp.into_body().collect().await?.to_bytes();
 
@@ -148,7 +174,10 @@ async fn test_grpc_without_key(sock: &TestSocket) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    anyhow::bail!("expected unauthenticated error, got grpc-status: {grpc_status:?}, body len: {}", body.len());
+    anyhow::bail!(
+        "expected unauthenticated error, got grpc-status: {grpc_status:?}, body len: {}",
+        body.len()
+    );
 }
 
 async fn test_grpc_with_key(sock: &TestSocket) -> anyhow::Result<()> {

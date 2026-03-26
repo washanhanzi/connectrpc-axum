@@ -74,11 +74,7 @@ pub async fn run_axum_router_tests(sock: &TestSocket) -> Vec<CaseResult> {
     results
 }
 
-async fn run_get(
-    sock: &TestSocket,
-    path: &str,
-    expected_body: Option<&str>,
-) -> anyhow::Result<()> {
+async fn run_get(sock: &TestSocket, path: &str, expected_body: Option<&str>) -> anyhow::Result<()> {
     let stream = sock.connect().await?;
     let io = TokioIo::new(stream);
 
@@ -149,9 +145,7 @@ async fn run_rpc(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     if !content_type.starts_with("application/json") {
-        anyhow::bail!(
-            "expected content-type application/json, got: {content_type}"
-        );
+        anyhow::bail!("expected content-type application/json, got: {content_type}");
     }
 
     let resp_body = resp.into_body().collect().await?.to_bytes();
@@ -163,11 +157,7 @@ async fn run_rpc(
         .ok_or_else(|| anyhow::anyhow!("expected message field, got: {json}"))?;
 
     if message != expected_message {
-        anyhow::bail!(
-            "expected message {:?}, got {:?}",
-            expected_message,
-            message
-        );
+        anyhow::bail!("expected message {:?}, got {:?}", expected_message, message);
     }
 
     Ok(())

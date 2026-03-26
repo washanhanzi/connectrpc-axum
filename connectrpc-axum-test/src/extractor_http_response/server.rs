@@ -1,10 +1,10 @@
+use crate::{HelloRequest, HelloResponse, hello_world_service_connect};
 use axum::{
     extract::FromRequestParts,
     http::{StatusCode, request::Parts},
     response::{IntoResponse, Response},
 };
 use connectrpc_axum::prelude::*;
-use crate::{HelloRequest, HelloResponse, hello_world_service_connect};
 
 /// Custom rejection type that returns a plain HTTP 401 response.
 /// This bypasses Connect protocol encoding entirely.

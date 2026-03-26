@@ -18,10 +18,7 @@
 //!   cargo run --bin client-stream-client --no-default-features -- http://localhost:8080
 
 use connectrpc_axum_client::ClientError;
-use connectrpc_axum_examples::{
-    EchoRequest,
-    echo_service_connect_client::EchoServiceClient,
-};
+use connectrpc_axum_examples::{EchoRequest, echo_service_connect_client::EchoServiceClient};
 use futures::stream;
 use std::env;
 

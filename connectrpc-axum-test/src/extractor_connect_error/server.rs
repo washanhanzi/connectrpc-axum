@@ -1,7 +1,7 @@
+use crate::{HelloRequest, HelloResponse, hello_world_service_connect};
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use connectrpc_axum::prelude::*;
-use crate::{HelloRequest, HelloResponse, hello_world_service_connect};
 
 /// Custom extractor that validates the x-user-id header.
 /// Returns `ConnectError` on rejection, which gets encoded with Connect protocol.

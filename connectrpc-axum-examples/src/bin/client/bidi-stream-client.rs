@@ -18,11 +18,8 @@
 //!   cargo run --bin bidi-stream-client --no-default-features -- http://localhost:8080
 
 use connectrpc_axum_client::{ClientBuildError, ClientError};
-use connectrpc_axum_examples::{
-    EchoRequest,
-    echo_service_connect_client::EchoServiceClient,
-};
-use futures::{stream, StreamExt};
+use connectrpc_axum_examples::{EchoRequest, echo_service_connect_client::EchoServiceClient};
+use futures::{StreamExt, stream};
 use std::env;
 use std::time::Duration;
 

@@ -11,7 +11,8 @@
 use axum::extract::State;
 use connectrpc_axum::prelude::*;
 use connectrpc_axum_examples::{
-    EchoRequest, EchoResponse, HelloRequest, HelloResponse, echo_service_server, hello_world_service_connect,
+    EchoRequest, EchoResponse, HelloRequest, HelloResponse, echo_service_server,
+    hello_world_service_connect,
 };
 use futures::{Stream, StreamExt};
 // SocketAddr now provided by server_addr()

@@ -17,15 +17,13 @@ pub fn generate_tonic_code(
     service_base_name: &str,
 ) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
     // Tonic-related identifiers
-    let tonic_builder_name =
-        format_ident!("{}ServiceTonicCompatibleBuilder", service_base_name);
+    let tonic_builder_name = format_ident!("{}ServiceTonicCompatibleBuilder", service_base_name);
     let tonic_server_builder_name =
         format_ident!("{}ServiceTonicCompatibleServerBuilder", service_base_name);
     let tonic_service_name = format_ident!("{}TonicService", service_base_name);
 
     // Tonic server trait paths (e.g., hello_world_service_server::HelloWorldService)
-    let server_mod_name =
-        format_ident!("{}_server", service.proto_name.to_case(Case::Snake));
+    let server_mod_name = format_ident!("{}_server", service.proto_name.to_case(Case::Snake));
     let tonic_trait_ident = format_ident!("{}", service.proto_name);
     let tonic_server_type_name = format_ident!("{}Server", service.proto_name);
 
@@ -212,21 +210,21 @@ pub fn generate_tonic_code(
     let tonic_server_handler_fields: Vec<_> = method_info
         .iter()
         .map(
-            |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs, _, _)| {
-                match (*is_ss, *is_cs) {
-                    (false, false) => quote! {
-                        pub #method_name: Option<BoxedCall<#request_type, #response_type>>
-                    },
-                    (true, false) => quote! {
-                        pub #method_name: Option<BoxedStreamCall<#request_type, #response_type>>
-                    },
-                    (false, true) => quote! {
-                        pub #method_name: Option<BoxedClientStreamCall<#request_type, #response_type>>
-                    },
-                    (true, true) => quote! {
-                        pub #method_name: Option<BoxedBidiStreamCall<#request_type, #response_type>>
-                    },
-                }
+            |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs, _, _)| match (
+                *is_ss, *is_cs,
+            ) {
+                (false, false) => quote! {
+                    pub #method_name: Option<BoxedCall<#request_type, #response_type>>
+                },
+                (true, false) => quote! {
+                    pub #method_name: Option<BoxedStreamCall<#request_type, #response_type>>
+                },
+                (false, true) => quote! {
+                    pub #method_name: Option<BoxedClientStreamCall<#request_type, #response_type>>
+                },
+                (true, true) => quote! {
+                    pub #method_name: Option<BoxedBidiStreamCall<#request_type, #response_type>>
+                },
             },
         )
         .collect();
@@ -268,33 +266,33 @@ pub fn generate_tonic_code(
     let tonic_build_handlers_no_state: Vec<_> = method_info
         .iter()
         .map(
-            |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs, _, _)| {
-                match (*is_ss, *is_cs) {
-                    (false, false) => quote! {
-                        let #method_name: BoxedCall<#request_type, #response_type> =
-                            self.#method_name
-                                .map(|mk| mk(&()))
-                                .unwrap_or_else(|| unimplemented_boxed_call());
-                    },
-                    (true, false) => quote! {
-                        let #method_name: BoxedStreamCall<#request_type, #response_type> =
-                            self.#method_name
-                                .map(|mk| mk(&()))
-                                .unwrap_or_else(|| unimplemented_boxed_stream_call());
-                    },
-                    (false, true) => quote! {
-                        let #method_name: BoxedClientStreamCall<#request_type, #response_type> =
-                            self.#method_name
-                                .map(|mk| mk(&()))
-                                .unwrap_or_else(|| unimplemented_boxed_client_stream_call());
-                    },
-                    (true, true) => quote! {
-                        let #method_name: BoxedBidiStreamCall<#request_type, #response_type> =
-                            self.#method_name
-                                .map(|mk| mk(&()))
-                                .unwrap_or_else(|| unimplemented_boxed_bidi_stream_call());
-                    },
-                }
+            |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs, _, _)| match (
+                *is_ss, *is_cs,
+            ) {
+                (false, false) => quote! {
+                    let #method_name: BoxedCall<#request_type, #response_type> =
+                        self.#method_name
+                            .map(|mk| mk(&()))
+                            .unwrap_or_else(|| unimplemented_boxed_call());
+                },
+                (true, false) => quote! {
+                    let #method_name: BoxedStreamCall<#request_type, #response_type> =
+                        self.#method_name
+                            .map(|mk| mk(&()))
+                            .unwrap_or_else(|| unimplemented_boxed_stream_call());
+                },
+                (false, true) => quote! {
+                    let #method_name: BoxedClientStreamCall<#request_type, #response_type> =
+                        self.#method_name
+                            .map(|mk| mk(&()))
+                            .unwrap_or_else(|| unimplemented_boxed_client_stream_call());
+                },
+                (true, true) => quote! {
+                    let #method_name: BoxedBidiStreamCall<#request_type, #response_type> =
+                        self.#method_name
+                            .map(|mk| mk(&()))
+                            .unwrap_or_else(|| unimplemented_boxed_bidi_stream_call());
+                },
             },
         )
         .collect();
@@ -303,29 +301,29 @@ pub fn generate_tonic_code(
     let tonic_build_handlers_with_state: Vec<_> = method_info
         .iter()
         .map(
-            |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs, _, _)| {
-                match (*is_ss, *is_cs) {
-                    (false, false) => quote! {
-                        let #method_name: BoxedCall<#request_type, #response_type> =
-                            self.#method_name
-                                .unwrap_or_else(|| unimplemented_boxed_call());
-                    },
-                    (true, false) => quote! {
-                        let #method_name: BoxedStreamCall<#request_type, #response_type> =
-                            self.#method_name
-                                .unwrap_or_else(|| unimplemented_boxed_stream_call());
-                    },
-                    (false, true) => quote! {
-                        let #method_name: BoxedClientStreamCall<#request_type, #response_type> =
-                            self.#method_name
-                                .unwrap_or_else(|| unimplemented_boxed_client_stream_call());
-                    },
-                    (true, true) => quote! {
-                        let #method_name: BoxedBidiStreamCall<#request_type, #response_type> =
-                            self.#method_name
-                                .unwrap_or_else(|| unimplemented_boxed_bidi_stream_call());
-                    },
-                }
+            |(method_name, request_type, response_type, _path, _assoc, is_ss, is_cs, _, _)| match (
+                *is_ss, *is_cs,
+            ) {
+                (false, false) => quote! {
+                    let #method_name: BoxedCall<#request_type, #response_type> =
+                        self.#method_name
+                            .unwrap_or_else(|| unimplemented_boxed_call());
+                },
+                (true, false) => quote! {
+                    let #method_name: BoxedStreamCall<#request_type, #response_type> =
+                        self.#method_name
+                            .unwrap_or_else(|| unimplemented_boxed_stream_call());
+                },
+                (false, true) => quote! {
+                    let #method_name: BoxedClientStreamCall<#request_type, #response_type> =
+                        self.#method_name
+                            .unwrap_or_else(|| unimplemented_boxed_client_stream_call());
+                },
+                (true, true) => quote! {
+                    let #method_name: BoxedBidiStreamCall<#request_type, #response_type> =
+                        self.#method_name
+                            .unwrap_or_else(|| unimplemented_boxed_bidi_stream_call());
+                },
             },
         )
         .collect();

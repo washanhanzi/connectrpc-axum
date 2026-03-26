@@ -316,7 +316,10 @@ async fn main() -> anyhow::Result<()> {
             .await?;
 
         let mut stream = response.into_inner();
-        let first_msg = stream.next().await.ok_or(anyhow::anyhow!("No messages"))??;
+        let first_msg = stream
+            .next()
+            .await
+            .ok_or(anyhow::anyhow!("No messages"))??;
 
         if first_msg.message.contains("closure-stream-test") {
             println!("  PASS: Closure interceptor header received");
@@ -356,7 +359,10 @@ async fn main() -> anyhow::Result<()> {
             .await?;
 
         let mut stream = response.into_inner();
-        let first_msg = stream.next().await.ok_or(anyhow::anyhow!("No messages"))??;
+        let first_msg = stream
+            .next()
+            .await
+            .ok_or(anyhow::anyhow!("No messages"))??;
 
         if first_msg.message.contains("chained-stream-test") {
             println!("  PASS: Chained interceptors work with server streaming");
@@ -515,10 +521,8 @@ async fn main() -> anyhow::Result<()> {
             .use_json()
             .http2_prior_knowledge()
             .with_interceptor(ClosureInterceptor::new(|ctx: &mut RequestContext<'_>| {
-                ctx.headers.insert(
-                    "x-interceptor-header",
-                    "closure-bidi-test".parse().unwrap(),
-                );
+                ctx.headers
+                    .insert("x-interceptor-header", "closure-bidi-test".parse().unwrap());
                 Ok(())
             }))
             .build()?;
@@ -536,7 +540,10 @@ async fn main() -> anyhow::Result<()> {
             .await?;
 
         let mut stream = response.into_inner();
-        let first_msg = stream.next().await.ok_or(anyhow::anyhow!("No messages"))??;
+        let first_msg = stream
+            .next()
+            .await
+            .ok_or(anyhow::anyhow!("No messages"))??;
 
         if first_msg.message.contains("closure-bidi-test") {
             println!("  PASS: Closure interceptor works with bidi streaming");
@@ -576,7 +583,10 @@ async fn main() -> anyhow::Result<()> {
             .await?;
 
         let mut stream = response.into_inner();
-        let first_msg = stream.next().await.ok_or(anyhow::anyhow!("No messages"))??;
+        let first_msg = stream
+            .next()
+            .await
+            .ok_or(anyhow::anyhow!("No messages"))??;
 
         if first_msg.message.contains("chained-bidi-test") {
             println!("  PASS: Chained interceptors work with bidi streaming");
@@ -614,7 +624,10 @@ async fn main() -> anyhow::Result<()> {
             .await?;
 
         let mut stream = response.into_inner();
-        let first_msg = stream.next().await.ok_or(anyhow::anyhow!("No messages"))??;
+        let first_msg = stream
+            .next()
+            .await
+            .ok_or(anyhow::anyhow!("No messages"))??;
 
         if first_msg.message.contains("proto-stream-test") {
             println!("  PASS: Proto encoding with interceptor works");

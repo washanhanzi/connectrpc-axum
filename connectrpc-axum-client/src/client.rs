@@ -390,7 +390,9 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         let response = if let Some(t) = effective_timeout {
             timeout(t, self.transport.request(req))
                 .await
-                .map_err(|_| ClientError::new(Code::DeadlineExceeded, "client timeout exceeded"))??
+                .map_err(|_| {
+                    ClientError::new(Code::DeadlineExceeded, "client timeout exceeded")
+                })??
         } else {
             self.transport.request(req).await?
         };
@@ -406,7 +408,11 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                 .await
                 .map_err(|e| ClientError::Transport(format!("failed to read error body: {}", e)))?
                 .to_bytes();
-            return Err(decompress_and_parse_error(status, &response_headers, body_bytes));
+            return Err(decompress_and_parse_error(
+                status,
+                &response_headers,
+                body_bytes,
+            ));
         }
 
         // 10. Handle response decompression
@@ -414,12 +420,13 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             .get(header::CONTENT_ENCODING)
             .and_then(|v| v.to_str().ok());
 
-        let response_encoding = CompressionEncoding::from_header(content_encoding).ok_or_else(|| {
-            ClientError::Protocol(format!(
-                "unsupported response encoding: {:?}",
-                content_encoding
-            ))
-        })?;
+        let response_encoding =
+            CompressionEncoding::from_header(content_encoding).ok_or_else(|| {
+                ClientError::Protocol(format!(
+                    "unsupported response encoding: {:?}",
+                    content_encoding
+                ))
+            })?;
 
         // 11. Get response body
         let body_bytes = response
@@ -511,7 +518,9 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         ConnectResponse<
             InterceptingStreaming<
                 FrameDecoder<
-                    impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin + use<'_, I, Req, Res>,
+                    impl futures::Stream<Item = Result<Bytes, ClientError>>
+                    + Unpin
+                    + use<'_, I, Req, Res>,
                     Res,
                 >,
                 Res,
@@ -1034,7 +1043,9 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         ConnectResponse<
             InterceptingStreaming<
                 FrameDecoder<
-                    impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin + use<'_, I, Req, Res, S>,
+                    impl futures::Stream<Item = Result<Bytes, ClientError>>
+                    + Unpin
+                    + use<'_, I, Req, Res, S>,
                     Res,
                 >,
                 Res,
@@ -1085,7 +1096,9 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         ConnectResponse<
             InterceptingStreaming<
                 FrameDecoder<
-                    impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin + use<'_, I, Req, Res, S>,
+                    impl futures::Stream<Item = Result<Bytes, ClientError>>
+                    + Unpin
+                    + use<'_, I, Req, Res, S>,
                     Res,
                 >,
                 Res,

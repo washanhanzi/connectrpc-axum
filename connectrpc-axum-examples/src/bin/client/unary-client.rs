@@ -19,8 +19,7 @@
 
 use connectrpc_axum_client::ClientError;
 use connectrpc_axum_examples::{
-    HelloRequest,
-    hello_world_service_connect_client::HelloWorldServiceClient,
+    HelloRequest, hello_world_service_connect_client::HelloWorldServiceClient,
 };
 use std::env;
 

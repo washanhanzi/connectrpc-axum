@@ -1,6 +1,6 @@
+use crate::{HelloRequest, HelloResponse, hello_world_service_connect};
 use connectrpc_axum::prelude::*;
 use tower::Layer;
-use crate::{HelloRequest, HelloResponse, hello_world_service_connect};
 
 async fn say_hello(
     ConnectRequest(req): ConnectRequest<HelloRequest>,

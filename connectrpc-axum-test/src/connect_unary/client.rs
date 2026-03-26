@@ -69,9 +69,7 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     if !content_type.starts_with("application/json") {
-        anyhow::bail!(
-            "expected content-type application/json, got: {content_type}"
-        );
+        anyhow::bail!("expected content-type application/json, got: {content_type}");
     }
 
     let resp_body = resp.into_body().collect().await?.to_bytes();

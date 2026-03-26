@@ -79,7 +79,10 @@ async fn run_one(sock: &TestSocket, _tc: &TestCase) -> anyhow::Result<()> {
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| anyhow::anyhow!("expected x-custom-meta header, headers: {:?}", headers))?;
     if custom_meta != "custom-value" {
-        anyhow::bail!("expected x-custom-meta 'custom-value', got {:?}", custom_meta);
+        anyhow::bail!(
+            "expected x-custom-meta 'custom-value', got {:?}",
+            custom_meta
+        );
     }
 
     let request_id = headers

@@ -24,13 +24,13 @@ use connectrpc_axum_client::{
     RequestContext, ResponseContext, StreamContext, StreamType,
 };
 use connectrpc_axum_examples::{EchoRequest, EchoResponse, HelloRequest, HelloResponse};
-use futures::{stream, StreamExt};
+use futures::{StreamExt, stream};
 use prost::Message;
 use serde::{Serialize, de::DeserializeOwned};
 use std::any::Any;
 use std::env;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Counting interceptor that tracks per-message interception.
 ///
@@ -94,11 +94,7 @@ impl MessageInterceptor for CountingMessageInterceptor {
         Ok(())
     }
 
-    fn on_stream_send<Req>(
-        &self,
-        ctx: &StreamContext,
-        request: &mut Req,
-    ) -> Result<(), ClientError>
+    fn on_stream_send<Req>(&self, ctx: &StreamContext, request: &mut Req) -> Result<(), ClientError>
     where
         Req: Message + Serialize + 'static,
     {
@@ -135,9 +131,7 @@ impl MessageInterceptor for CountingMessageInterceptor {
         let msg_info = if let Some(echo_res) = (response as &dyn Any).downcast_ref::<EchoResponse>()
         {
             format!("message={:?}", echo_res.message)
-        } else if let Some(hello_res) =
-            (response as &dyn Any).downcast_ref::<HelloResponse>()
-        {
+        } else if let Some(hello_res) = (response as &dyn Any).downcast_ref::<HelloResponse>() {
             format!("message={:?}", hello_res.message)
         } else {
             format!("encoded_len={}", response.encoded_len())
@@ -552,9 +546,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         println!("FAILURE: {} tests failed", failed);
         println!();
-        println!(
-            "Issue #29 message-level interception for streaming is NOT fully implemented."
-        );
+        println!("Issue #29 message-level interception for streaming is NOT fully implemented.");
         println!("The interceptor trait methods exist but are not called in streaming code paths.");
         Err(anyhow::anyhow!("{} tests failed", failed))
     }

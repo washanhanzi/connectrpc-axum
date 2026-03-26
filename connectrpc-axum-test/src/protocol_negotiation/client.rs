@@ -7,12 +7,8 @@ use hyper_util::rt::TokioIo;
 use crate::socket::TestSocket;
 
 enum TestMethod {
-    Post {
-        content_type: &'static str,
-    },
-    Get {
-        uri: &'static str,
-    },
+    Post { content_type: &'static str },
+    Get { uri: &'static str },
 }
 
 struct TestCase {
@@ -84,21 +80,17 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
     });
 
     let req = match &tc.method {
-        TestMethod::Post { content_type } => {
-            Request::builder()
-                .method("POST")
-                .uri("/hello.HelloWorldService/SayHello")
-                .header("Content-Type", *content_type)
-                .header("Host", "localhost")
-                .body(Full::new(Bytes::from(r#"{"name":"test"}"#)))?
-        }
-        TestMethod::Get { uri } => {
-            Request::builder()
-                .method("GET")
-                .uri(*uri)
-                .header("Host", "localhost")
-                .body(Full::new(Bytes::new()))?
-        }
+        TestMethod::Post { content_type } => Request::builder()
+            .method("POST")
+            .uri("/hello.HelloWorldService/SayHello")
+            .header("Content-Type", *content_type)
+            .header("Host", "localhost")
+            .body(Full::new(Bytes::from(r#"{"name":"test"}"#)))?,
+        TestMethod::Get { uri } => Request::builder()
+            .method("GET")
+            .uri(*uri)
+            .header("Host", "localhost")
+            .body(Full::new(Bytes::new()))?,
     };
 
     let resp = sender.send_request(req).await?;

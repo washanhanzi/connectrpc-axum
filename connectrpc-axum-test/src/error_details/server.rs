@@ -1,5 +1,5 @@
-use connectrpc_axum::prelude::*;
 use crate::{HelloRequest, HelloResponse, hello_world_service_connect};
+use connectrpc_axum::prelude::*;
 async fn say_hello(
     ConnectRequest(_req): ConnectRequest<HelloRequest>,
 ) -> Result<ConnectResponse<HelloResponse>, ConnectError> {
@@ -7,10 +7,8 @@ async fn say_hello(
     // Encode a google.protobuf.StringValue as the error detail.
     let string_value = encode_string_value("provide a name");
 
-    Err(
-        ConnectError::new(Code::InvalidArgument, "name is required")
-            .add_detail("google.protobuf.StringValue", string_value),
-    )
+    Err(ConnectError::new(Code::InvalidArgument, "name is required")
+        .add_detail("google.protobuf.StringValue", string_value))
 }
 
 /// Encode a google.protobuf.StringValue protobuf message manually.

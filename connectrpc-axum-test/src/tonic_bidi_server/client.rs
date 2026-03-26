@@ -15,13 +15,25 @@ pub async fn run_tonic_bidi_server_tests(sock: &TestSocket) -> Vec<CaseResult> {
     let mut results = Vec::new();
 
     let err = test_connect_unary(sock).await.err().map(|e| e.to_string());
-    results.push(CaseResult { name: "tonic bidi server Connect unary", error: err });
+    results.push(CaseResult {
+        name: "tonic bidi server Connect unary",
+        error: err,
+    });
 
     let err = test_grpc_bidi(sock).await.err().map(|e| e.to_string());
-    results.push(CaseResult { name: "tonic bidi server gRPC bidi stream", error: err });
+    results.push(CaseResult {
+        name: "tonic bidi server gRPC bidi stream",
+        error: err,
+    });
 
-    let err = test_grpc_client_stream(sock).await.err().map(|e| e.to_string());
-    results.push(CaseResult { name: "tonic bidi server gRPC client stream", error: err });
+    let err = test_grpc_client_stream(sock)
+        .await
+        .err()
+        .map(|e| e.to_string());
+    results.push(CaseResult {
+        name: "tonic bidi server gRPC client stream",
+        error: err,
+    });
 
     results
 }
@@ -48,7 +60,11 @@ async fn test_connect_unary(sock: &TestSocket) -> anyhow::Result<()> {
     let status = resp.status();
     if status != 200 {
         let body = resp.into_body().collect().await?.to_bytes();
-        anyhow::bail!("expected 200, got {}: {}", status, String::from_utf8_lossy(&body));
+        anyhow::bail!(
+            "expected 200, got {}: {}",
+            status,
+            String::from_utf8_lossy(&body)
+        );
     }
 
     let body = resp.into_body().collect().await?.to_bytes();
@@ -100,7 +116,9 @@ async fn test_grpc_bidi(sock: &TestSocket) -> anyhow::Result<()> {
         let flags = cursor[0];
         let len = u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;
         cursor = &cursor[5..];
-        if cursor.len() < len { break; }
+        if cursor.len() < len {
+            break;
+        }
         let _payload = &cursor[..len];
         cursor = &cursor[len..];
 

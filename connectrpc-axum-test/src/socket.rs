@@ -102,11 +102,8 @@ pub async fn http2_connect(
     let stream = sock.connect().await?;
     let io = hyper_util::rt::TokioIo::new(stream);
 
-    let (sender, conn) = hyper::client::conn::http2::handshake(
-        hyper_util::rt::TokioExecutor::new(),
-        io,
-    )
-    .await?;
+    let (sender, conn) =
+        hyper::client::conn::http2::handshake(hyper_util::rt::TokioExecutor::new(), io).await?;
 
     let handle = tokio::spawn(async move {
         if let Err(e) = conn.await {

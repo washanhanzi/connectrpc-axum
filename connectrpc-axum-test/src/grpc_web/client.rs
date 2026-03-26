@@ -13,7 +13,10 @@ pub struct CaseResult {
 
 pub async fn run_grpc_web_tests(sock: &TestSocket) -> Vec<CaseResult> {
     let err = test_grpc_web_unary(sock).await.err().map(|e| e.to_string());
-    vec![CaseResult { name: "gRPC-Web unary request is accepted", error: err }]
+    vec![CaseResult {
+        name: "gRPC-Web unary request is accepted",
+        error: err,
+    }]
 }
 
 async fn test_grpc_web_unary(sock: &TestSocket) -> anyhow::Result<()> {
@@ -52,7 +55,10 @@ async fn test_grpc_web_unary(sock: &TestSocket) -> anyhow::Result<()> {
 
     if status != 200 {
         let body = resp.into_body().collect().await?.to_bytes();
-        anyhow::bail!("expected HTTP 200, got {status}: {}", String::from_utf8_lossy(&body));
+        anyhow::bail!(
+            "expected HTTP 200, got {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
     }
 
     let body = resp.into_body().collect().await?.to_bytes();
@@ -64,7 +70,11 @@ async fn test_grpc_web_unary(sock: &TestSocket) -> anyhow::Result<()> {
 
     let msg_len = u32::from_be_bytes([body[1], body[2], body[3], body[4]]) as usize;
     if body.len() < 5 + msg_len {
-        anyhow::bail!("incomplete gRPC-Web response: expected {} bytes, got {}", 5 + msg_len, body.len());
+        anyhow::bail!(
+            "incomplete gRPC-Web response: expected {} bytes, got {}",
+            5 + msg_len,
+            body.len()
+        );
     }
 
     let msg_bytes = &body[5..5 + msg_len];

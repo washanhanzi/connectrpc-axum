@@ -199,14 +199,11 @@ where
         };
 
         // 2. Compress if beneficial (per-envelope compression for streaming)
-        let (data, compressed) = match compress_bytes(
-            payload,
-            response_encoding,
-            &ctx.compression.config,
-        ) {
-            Ok(result) => result,
-            Err(_) => return internal_error_streaming_response(content_type),
-        };
+        let (data, compressed) =
+            match compress_bytes(payload, response_encoding, &ctx.compression.config) {
+                Ok(result) => result,
+                Err(_) => return internal_error_streaming_response(content_type),
+            };
 
         // 3. Check send size limit (following connect-go behavior)
         if let Some(max) = ctx.limits.get_send_max_bytes() {
@@ -438,7 +435,10 @@ impl ResponsePipeline {
     /// Encode response message to HTTP response.
     ///
     /// Reads Context from request extensions.
-    pub fn encode<T>(req: &axum::http::Request<Body>, message: &T) -> Result<Response<Body>, ContextError>
+    pub fn encode<T>(
+        req: &axum::http::Request<Body>,
+        message: &T,
+    ) -> Result<Response<Body>, ContextError>
     where
         T: Message + Serialize,
     {

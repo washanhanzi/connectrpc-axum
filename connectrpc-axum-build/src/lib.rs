@@ -73,7 +73,13 @@ impl BuildMarker for Disabled {
 ///     .include_file("protos2.rs")
 ///     .compile()?;
 /// ```
-pub struct CompileBuilder<Source = NoSource, Connect = Enabled, Tonic = Disabled, TonicClient = Disabled, ConnectClient = Disabled> {
+pub struct CompileBuilder<
+    Source = NoSource,
+    Connect = Enabled,
+    Tonic = Disabled,
+    TonicClient = Disabled,
+    ConnectClient = Disabled,
+> {
     source: Source,
     out_dir: Option<PathBuf>,
     include_file: Option<PathBuf>,
@@ -476,7 +482,8 @@ impl<S, C, T, TC, CC> CompileBuilder<S, C, T, TC, CC> {
         proto_path: impl Into<String>,
         rust_path: impl Into<String>,
     ) -> Self {
-        self.extern_reexports.push((proto_path.into(), rust_path.into()));
+        self.extern_reexports
+            .push((proto_path.into(), rust_path.into()));
         self
     }
 }
@@ -620,7 +627,9 @@ impl<S, C, T, TC> CompileBuilder<S, C, T, TC, Disabled> {
 // Compile method - only available when Source = WithSource
 // ============================================================================
 
-impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBuilder<WithSource, C, T, TC, CC> {
+impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
+    CompileBuilder<WithSource, C, T, TC, CC>
+{
     /// Execute code generation for the proto source.
     ///
     /// When `include_file` is set, a module tree file is generated after
@@ -819,7 +828,9 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBu
         descriptor_path: &str,
         proto_files: &[PathBuf],
         includes: &[PathBuf],
-        tonic_config: Option<&Box<dyn Fn(tonic_prost_build::Builder) -> tonic_prost_build::Builder>>,
+        tonic_config: Option<
+            &Box<dyn Fn(tonic_prost_build::Builder) -> tonic_prost_build::Builder>,
+        >,
     ) -> Result<()> {
         use prost::Message;
         use std::fs;
@@ -898,7 +909,9 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker> CompileBu
         descriptor_path: &str,
         proto_files: &[PathBuf],
         includes: &[PathBuf],
-        tonic_client_config: Option<&Box<dyn Fn(tonic_prost_build::Builder) -> tonic_prost_build::Builder>>,
+        tonic_client_config: Option<
+            &Box<dyn Fn(tonic_prost_build::Builder) -> tonic_prost_build::Builder>,
+        >,
     ) -> Result<()> {
         use prost::Message;
         use std::fs;

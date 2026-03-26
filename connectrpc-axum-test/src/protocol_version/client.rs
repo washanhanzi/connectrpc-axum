@@ -82,15 +82,15 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
         let message = json
             .get("message")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                anyhow::anyhow!("expected success with message, got: {json}")
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("expected success with message, got: {json}"))?;
         if message.is_empty() {
             anyhow::bail!("expected non-empty message");
         }
     } else {
         if status == 200 {
-            anyhow::bail!("expected non-200 status for invalid protocol version, got 200 with body: {json}");
+            anyhow::bail!(
+                "expected non-200 status for invalid protocol version, got 200 with body: {json}"
+            );
         }
         // Verify the response contains an error code
         let code = json.get("code").and_then(|v| v.as_str());

@@ -1,6 +1,6 @@
+use crate::{HelloRequest, HelloResponse, hello_world_service_connect};
 use axum::{extract::FromRequestParts, http::request::Parts};
 use connectrpc_axum::prelude::*;
-use crate::{HelloRequest, HelloResponse, hello_world_service_connect};
 use futures::Stream;
 
 /// Custom extractor that validates the x-api-key header.

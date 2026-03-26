@@ -23,9 +23,8 @@
 //!   cargo run --bin typed-client --no-default-features -- http://localhost:8080
 
 use connectrpc_axum_examples::{
-    HelloRequest, HelloResponse,
+    HelloRequest, HelloResponse, hello_world_service_connect_client::HelloWorldServiceClient,
     hello_world_service_procedures,
-    hello_world_service_connect_client::HelloWorldServiceClient,
 };
 use std::env;
 
