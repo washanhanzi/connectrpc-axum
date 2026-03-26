@@ -78,10 +78,17 @@ async fn main() -> anyhow::Result<()> {
     println!("Service: HelloWorldService");
     println!("  - SayHelloStream (server streaming): POST /hello.HelloWorldService/SayHelloStream");
     println!();
-    println!("Test with:");
-    println!("  curl -X POST http://localhost:3000/hello.HelloWorldService/SayHelloStream \\");
-    println!("    -H 'Content-Type: application/connect+json' \\");
-    println!("    -d '{{\"name\": \"Alice\", \"hobbies\": [\"coding\", \"reading\"]}}'");
+    println!("Test with a framed Connect request:");
+    println!(
+        "{}",
+        connectrpc_axum_examples::connect_streaming_curl_command(
+            "/hello.HelloWorldService/SayHelloStream",
+            r#"{"name": "Alice", "hobbies": ["coding", "reading"]}"#,
+        )
+    );
+    println!();
+    println!("The response body is Connect-framed, so raw curl output includes frame bytes.");
+    println!("For decoded output, run: cargo run --bin server-stream-client");
 
     axum::serve(listener, app).await?;
     Ok(())

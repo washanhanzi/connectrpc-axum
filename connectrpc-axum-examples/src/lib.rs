@@ -28,3 +28,52 @@ pub fn server_addr() -> SocketAddr {
         .parse()
         .expect("invalid PORT env var")
 }
+
+/// Build a `curl` command for a Connect streaming request body.
+///
+/// Connect streaming requests use a 5-byte envelope before the JSON payload, so
+/// raw `-d '{"..."}'` requests are invalid for `application/connect+json`.
+pub fn connect_streaming_curl_command(path: &str, payload_json: &str) -> String {
+    let mut framed_payload = String::new();
+
+    framed_payload.push_str(r"\x00");
+    for byte in (payload_json.len() as u32).to_be_bytes() {
+        framed_payload.push_str(&format!(r"\x{byte:02x}"));
+    }
+
+    for ch in payload_json.chars() {
+        match ch {
+            '\\' => framed_payload.push_str(r"\\"),
+            '\'' => framed_payload.push_str(r"'\''"),
+            c if c.is_ascii() && !c.is_ascii_control() => framed_payload.push(c),
+            c => {
+                let mut buf = [0; 4];
+                for byte in c.encode_utf8(&mut buf).as_bytes() {
+                    framed_payload.push_str(&format!(r"\x{byte:02x}"));
+                }
+            }
+        }
+    }
+
+    format!(
+        "printf '%b' '{framed_payload}' | \\\n  curl -X POST http://localhost:3000{path} \\\n    -H 'Content-Type: application/connect+json' \\\n    --data-binary @-"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::connect_streaming_curl_command;
+
+    #[test]
+    fn streaming_curl_command_prefixes_the_connect_envelope() {
+        let command = connect_streaming_curl_command(
+            "/hello.HelloWorldService/SayHelloStream",
+            r#"{"name": "Alice", "hobbies": ["coding", "reading"]}"#,
+        );
+
+        assert_eq!(
+            command,
+            "printf '%b' '\\x00\\x00\\x00\\x00\\x33{\"name\": \"Alice\", \"hobbies\": [\"coding\", \"reading\"]}' | \\\n  curl -X POST http://localhost:3000/hello.HelloWorldService/SayHelloStream \\\n    -H 'Content-Type: application/connect+json' \\\n    --data-binary @-"
+        );
+    }
+}

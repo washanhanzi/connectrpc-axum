@@ -109,10 +109,16 @@ async fn main() -> anyhow::Result<()> {
     println!("  - HTTP 200 with Content-Type: application/connect+json");
     println!("  - Error in EndStream frame (flag 0x02)");
     println!();
-    println!("Manual test:");
-    println!("  curl -X POST http://localhost:3000/hello.HelloWorldService/SayHelloStream \\");
-    println!("    -H 'Content-Type: application/connect+json' \\");
-    println!("    -d '{{\"name\": \"unauthorized\"}}' -v");
+    println!("Manual test with a framed Connect request:");
+    println!(
+        "{} -v",
+        connectrpc_axum_examples::connect_streaming_curl_command(
+            "/hello.HelloWorldService/SayHelloStream",
+            r#"{"name": "unauthorized"}"#,
+        )
+    );
+    println!();
+    println!("The raw curl response is Connect-framed, including the EndStream error frame.");
 
     axum::serve(listener, app).await?;
     Ok(())
