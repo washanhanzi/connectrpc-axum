@@ -1,22 +1,22 @@
 [package]
-name = "compare-buffa-beta5-cases-beta5"
+name = "compare-buffa-beta5-cases-connectrpc"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
 [dependencies]
 axum = { workspace = true }
+buffa = { version = "0.2", features = ["json"] }
+buffa-types = { version = "0.2", features = ["json"] }
 bytes = { workspace = true }
-connectrpc-axum = { version = "=0.1.0-beta.5", package = "connectrpc-axum" }
+connectrpc = { version = "=0.2.1" }
 futures = { workspace = true }
 http = { workspace = true }
+http-body = "1"
 http-body-util = { workspace = true }
-pbjson = "0.9"
-pbjson-types = "0.9"
-prost = "0.14"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tower = { workspace = true }
 
 [build-dependencies]
-connectrpc-axum-build = { version = "=0.1.0-beta.5", package = "connectrpc-axum-build" }
+connectrpc-build = { version = "=0.2.0" }

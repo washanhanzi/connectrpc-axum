@@ -1,12 +1,18 @@
-use compare_buffa_beta5_cases_beta5 as beta5;
+use axum::Router;
+use bytes::Bytes;
 use compare_buffa_beta5_cases_buffa as buffa;
+use compare_buffa_beta5_cases_connectrpc as connectrust;
+use compare_buffa_beta5_cases_release as release;
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use http::StatusCode;
-use http_body_util::BodyExt;
+use http::{Request, StatusCode};
+use http_body_util::{BodyExt, Full};
+use hyper_util::client::legacy::{Client, connect::HttpConnector};
+use hyper_util::rt::TokioExecutor;
 use std::fs::File;
 use std::os::fd::AsRawFd;
 use tokio::runtime::Runtime;
-use tower::ServiceExt;
+use tokio::sync::oneshot;
+use tokio::time::{Duration, sleep};
 
 struct StderrSilencer {
     original_fd: i32,
@@ -38,128 +44,86 @@ impl Drop for StderrSilencer {
     }
 }
 
-fn proto_encode_benchmarks(c: &mut Criterion) {
-    let mut group = c.benchmark_group("proto_encode_hello_request");
+type HttpClient = Client<HttpConnector, Full<Bytes>>;
 
-    for size in [
-        buffa::PayloadSize::Small,
-        buffa::PayloadSize::Medium,
-        buffa::PayloadSize::Large,
-    ] {
-        let buffa_request = buffa::hello_request(size);
-        let beta5_request = beta5::hello_request(match size {
-            buffa::PayloadSize::Small => beta5::PayloadSize::Small,
-            buffa::PayloadSize::Medium => beta5::PayloadSize::Medium,
-            buffa::PayloadSize::Large => beta5::PayloadSize::Large,
-        });
+const UNARY_PATH: &str = "/hello.HelloWorldService/SayHello";
+const STREAM_PATH: &str = "/hello.HelloWorldService/SayHelloStream";
 
-        group.throughput(Throughput::Bytes(
-            buffa::encode_hello_request_proto(&buffa_request).len() as u64,
-        ));
-
-        group.bench_function(BenchmarkId::new("buffa", size.as_str()), |b| {
-            b.iter(|| black_box(buffa::encode_hello_request_proto(black_box(&buffa_request))))
-        });
-
-        group.bench_function(BenchmarkId::new("beta5", size.as_str()), |b| {
-            b.iter(|| black_box(beta5::encode_hello_request_proto(black_box(&beta5_request))))
-        });
-    }
-
-    group.finish();
+struct BenchmarkServer {
+    base_url: String,
+    shutdown: Option<oneshot::Sender<()>>,
 }
 
-fn proto_decode_benchmarks(c: &mut Criterion) {
-    let mut group = c.benchmark_group("proto_decode_hello_request");
-
-    for size in [
-        buffa::PayloadSize::Small,
-        buffa::PayloadSize::Medium,
-        buffa::PayloadSize::Large,
-    ] {
-        let buffa_bytes = buffa::encode_hello_request_proto(&buffa::hello_request(size));
-        let beta5_bytes = beta5::encode_hello_request_proto(&beta5::hello_request(match size {
-            buffa::PayloadSize::Small => beta5::PayloadSize::Small,
-            buffa::PayloadSize::Medium => beta5::PayloadSize::Medium,
-            buffa::PayloadSize::Large => beta5::PayloadSize::Large,
-        }));
-
-        group.throughput(Throughput::Bytes(buffa_bytes.len() as u64));
-
-        group.bench_function(BenchmarkId::new("buffa", size.as_str()), |b| {
-            b.iter(|| black_box(buffa::decode_hello_request_proto(black_box(&buffa_bytes))))
-        });
-
-        group.bench_function(BenchmarkId::new("beta5", size.as_str()), |b| {
-            b.iter(|| black_box(beta5::decode_hello_request_proto(black_box(&beta5_bytes))))
-        });
+impl Drop for BenchmarkServer {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
     }
-
-    group.finish();
 }
 
-fn json_encode_benchmarks(c: &mut Criterion) {
-    let mut group = c.benchmark_group("json_encode_hello_request");
-
-    for size in [
-        buffa::PayloadSize::Small,
-        buffa::PayloadSize::Medium,
-        buffa::PayloadSize::Large,
-    ] {
-        let buffa_request = buffa::hello_request(size);
-        let beta5_request = beta5::hello_request(match size {
-            buffa::PayloadSize::Small => beta5::PayloadSize::Small,
-            buffa::PayloadSize::Medium => beta5::PayloadSize::Medium,
-            buffa::PayloadSize::Large => beta5::PayloadSize::Large,
-        });
-
-        group.throughput(Throughput::Bytes(
-            buffa::encode_hello_request_json(&buffa_request).len() as u64,
-        ));
-
-        group.bench_function(BenchmarkId::new("buffa", size.as_str()), |b| {
-            b.iter(|| black_box(buffa::encode_hello_request_json(black_box(&buffa_request))))
-        });
-
-        group.bench_function(BenchmarkId::new("beta5", size.as_str()), |b| {
-            b.iter(|| black_box(beta5::encode_hello_request_json(black_box(&beta5_request))))
-        });
-    }
-
-    group.finish();
+fn http_client() -> HttpClient {
+    let connector = HttpConnector::new();
+    Client::builder(TokioExecutor::new()).build(connector)
 }
 
-fn json_decode_benchmarks(c: &mut Criterion) {
-    let mut group = c.benchmark_group("json_decode_hello_request");
+async fn spawn_server(app: Router) -> BenchmarkServer {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind benchmark server");
+    let addr = listener.local_addr().expect("server local addr");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-    for size in [
-        buffa::PayloadSize::Small,
-        buffa::PayloadSize::Medium,
-        buffa::PayloadSize::Large,
-    ] {
-        let buffa_bytes = buffa::encode_hello_request_json(&buffa::hello_request(size));
-        let beta5_bytes = beta5::encode_hello_request_json(&beta5::hello_request(match size {
-            buffa::PayloadSize::Small => beta5::PayloadSize::Small,
-            buffa::PayloadSize::Medium => beta5::PayloadSize::Medium,
-            buffa::PayloadSize::Large => beta5::PayloadSize::Large,
-        }));
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .expect("run benchmark server");
+    });
 
-        group.throughput(Throughput::Bytes(buffa_bytes.len() as u64));
+    sleep(Duration::from_millis(10)).await;
 
-        group.bench_function(BenchmarkId::new("buffa", size.as_str()), |b| {
-            b.iter(|| black_box(buffa::decode_hello_request_json(black_box(&buffa_bytes))))
-        });
-
-        group.bench_function(BenchmarkId::new("beta5", size.as_str()), |b| {
-            b.iter(|| black_box(beta5::decode_hello_request_json(black_box(&beta5_bytes))))
-        });
+    BenchmarkServer {
+        base_url: format!("http://{addr}"),
+        shutdown: Some(shutdown_tx),
     }
+}
 
-    group.finish();
+fn connect_request(
+    base_url: &str,
+    path: &str,
+    content_type: &str,
+    body: Vec<u8>,
+) -> Request<Full<Bytes>> {
+    Request::builder()
+        .method("POST")
+        .uri(format!("{base_url}{path}"))
+        .header("Content-Type", content_type)
+        .header("Connect-Protocol-Version", "1")
+        .body(Full::new(Bytes::from(body)))
+        .expect("build benchmark request")
+}
+
+async fn send_request(client: &HttpClient, request: Request<Full<Bytes>>) -> Bytes {
+    let response = client.request(request).await.expect("client response");
+    assert_eq!(response.status(), StatusCode::OK);
+    response
+        .into_body()
+        .collect()
+        .await
+        .expect("collect response body")
+        .to_bytes()
 }
 
 fn connect_unary_proto_roundtrip_benchmarks(c: &mut Criterion) {
     let rt = Runtime::new().expect("create tokio runtime");
+    let buffa_server = rt.block_on(spawn_server(buffa::connect_app()));
+    let release_server = rt.block_on(spawn_server(release::connect_app()));
+    let connectrust_server = rt.block_on(spawn_server(connectrust::connect_app()));
+    let client = http_client();
+
     let mut group = c.benchmark_group("connect_unary_proto_roundtrip");
     group.sample_size(10);
 
@@ -168,55 +132,55 @@ fn connect_unary_proto_roundtrip_benchmarks(c: &mut Criterion) {
         buffa::PayloadSize::Medium,
         buffa::PayloadSize::Large,
     ] {
-        let buffa_app = buffa::connect_app();
-        let beta5_app = beta5::connect_app();
-        let buffa_body = buffa::encode_hello_request_proto(&buffa::hello_request(size));
-        let beta5_body = beta5::encode_hello_request_proto(&beta5::hello_request(match size {
-            buffa::PayloadSize::Small => beta5::PayloadSize::Small,
-            buffa::PayloadSize::Medium => beta5::PayloadSize::Medium,
-            buffa::PayloadSize::Large => beta5::PayloadSize::Large,
-        }));
+        let request = buffa::hello_request(size);
+        let proto_body = buffa::encode_hello_request_proto(&request);
 
-        group.throughput(Throughput::Bytes(buffa_body.len() as u64));
+        group.throughput(Throughput::Bytes(proto_body.len() as u64));
 
         group.bench_function(BenchmarkId::new("buffa", size.as_str()), |b| {
             b.to_async(&rt).iter(|| {
-                let app = buffa_app.clone();
-                let body = buffa_body.clone();
+                let client = client.clone();
+                let base_url = buffa_server.base_url.clone();
+                let body = proto_body.clone();
                 async move {
-                    let response = app
-                        .oneshot(buffa::unary_proto_request(body))
-                        .await
-                        .expect("service response");
-                    assert_eq!(response.status(), StatusCode::OK);
-                    let bytes = response
-                        .into_body()
-                        .collect()
-                        .await
-                        .expect("collect body")
-                        .to_bytes();
+                    let bytes = send_request(
+                        &client,
+                        connect_request(&base_url, UNARY_PATH, "application/proto", body),
+                    )
+                    .await;
                     black_box(buffa::decode_hello_response_proto(&bytes));
                 }
             });
         });
 
-        group.bench_function(BenchmarkId::new("beta5", size.as_str()), |b| {
+        group.bench_function(BenchmarkId::new("v0.1.0", size.as_str()), |b| {
             b.to_async(&rt).iter(|| {
-                let app = beta5_app.clone();
-                let body = beta5_body.clone();
+                let client = client.clone();
+                let base_url = release_server.base_url.clone();
+                let body = proto_body.clone();
                 async move {
-                    let response = app
-                        .oneshot(beta5::unary_proto_request(body))
-                        .await
-                        .expect("service response");
-                    assert_eq!(response.status(), StatusCode::OK);
-                    let bytes = response
-                        .into_body()
-                        .collect()
-                        .await
-                        .expect("collect body")
-                        .to_bytes();
-                    black_box(beta5::decode_hello_response_proto(&bytes));
+                    let bytes = send_request(
+                        &client,
+                        connect_request(&base_url, UNARY_PATH, "application/proto", body),
+                    )
+                    .await;
+                    black_box(buffa::decode_hello_response_proto(&bytes));
+                }
+            });
+        });
+
+        group.bench_function(BenchmarkId::new("connect-rust", size.as_str()), |b| {
+            b.to_async(&rt).iter(|| {
+                let client = client.clone();
+                let base_url = connectrust_server.base_url.clone();
+                let body = proto_body.clone();
+                async move {
+                    let bytes = send_request(
+                        &client,
+                        connect_request(&base_url, UNARY_PATH, "application/proto", body),
+                    )
+                    .await;
+                    black_box(buffa::decode_hello_response_proto(&bytes));
                 }
             });
         });
@@ -227,6 +191,11 @@ fn connect_unary_proto_roundtrip_benchmarks(c: &mut Criterion) {
 
 fn connect_unary_json_roundtrip_benchmarks(c: &mut Criterion) {
     let rt = Runtime::new().expect("create tokio runtime");
+    let buffa_server = rt.block_on(spawn_server(buffa::connect_app()));
+    let release_server = rt.block_on(spawn_server(release::connect_app()));
+    let connectrust_server = rt.block_on(spawn_server(connectrust::connect_app()));
+    let client = http_client();
+
     let mut group = c.benchmark_group("connect_unary_json_roundtrip");
     group.sample_size(10);
 
@@ -235,55 +204,55 @@ fn connect_unary_json_roundtrip_benchmarks(c: &mut Criterion) {
         buffa::PayloadSize::Medium,
         buffa::PayloadSize::Large,
     ] {
-        let buffa_app = buffa::connect_app();
-        let beta5_app = beta5::connect_app();
-        let buffa_body = buffa::encode_hello_request_json(&buffa::hello_request(size));
-        let beta5_body = beta5::encode_hello_request_json(&beta5::hello_request(match size {
-            buffa::PayloadSize::Small => beta5::PayloadSize::Small,
-            buffa::PayloadSize::Medium => beta5::PayloadSize::Medium,
-            buffa::PayloadSize::Large => beta5::PayloadSize::Large,
-        }));
+        let request = buffa::hello_request(size);
+        let json_body = buffa::encode_hello_request_json(&request);
 
-        group.throughput(Throughput::Bytes(buffa_body.len() as u64));
+        group.throughput(Throughput::Bytes(json_body.len() as u64));
 
         group.bench_function(BenchmarkId::new("buffa", size.as_str()), |b| {
             b.to_async(&rt).iter(|| {
-                let app = buffa_app.clone();
-                let body = buffa_body.clone();
+                let client = client.clone();
+                let base_url = buffa_server.base_url.clone();
+                let body = json_body.clone();
                 async move {
-                    let response = app
-                        .oneshot(buffa::unary_json_request(body))
-                        .await
-                        .expect("service response");
-                    assert_eq!(response.status(), StatusCode::OK);
-                    let bytes = response
-                        .into_body()
-                        .collect()
-                        .await
-                        .expect("collect body")
-                        .to_bytes();
+                    let bytes = send_request(
+                        &client,
+                        connect_request(&base_url, UNARY_PATH, "application/json", body),
+                    )
+                    .await;
                     black_box(buffa::decode_hello_response_json(&bytes));
                 }
             });
         });
 
-        group.bench_function(BenchmarkId::new("beta5", size.as_str()), |b| {
+        group.bench_function(BenchmarkId::new("v0.1.0", size.as_str()), |b| {
             b.to_async(&rt).iter(|| {
-                let app = beta5_app.clone();
-                let body = beta5_body.clone();
+                let client = client.clone();
+                let base_url = release_server.base_url.clone();
+                let body = json_body.clone();
                 async move {
-                    let response = app
-                        .oneshot(beta5::unary_json_request(body))
-                        .await
-                        .expect("service response");
-                    assert_eq!(response.status(), StatusCode::OK);
-                    let bytes = response
-                        .into_body()
-                        .collect()
-                        .await
-                        .expect("collect body")
-                        .to_bytes();
-                    black_box(beta5::decode_hello_response_json(&bytes));
+                    let bytes = send_request(
+                        &client,
+                        connect_request(&base_url, UNARY_PATH, "application/json", body),
+                    )
+                    .await;
+                    black_box(buffa::decode_hello_response_json(&bytes));
+                }
+            });
+        });
+
+        group.bench_function(BenchmarkId::new("connect-rust", size.as_str()), |b| {
+            b.to_async(&rt).iter(|| {
+                let client = client.clone();
+                let base_url = connectrust_server.base_url.clone();
+                let body = json_body.clone();
+                async move {
+                    let bytes = send_request(
+                        &client,
+                        connect_request(&base_url, UNARY_PATH, "application/json", body),
+                    )
+                    .await;
+                    black_box(buffa::decode_hello_response_json(&bytes));
                 }
             });
         });
@@ -294,6 +263,11 @@ fn connect_unary_json_roundtrip_benchmarks(c: &mut Criterion) {
 
 fn connect_stream_proto_roundtrip_benchmarks(c: &mut Criterion) {
     let rt = Runtime::new().expect("create tokio runtime");
+    let buffa_server = rt.block_on(spawn_server(buffa::connect_app()));
+    let release_server = rt.block_on(spawn_server(release::connect_app()));
+    let connectrust_server = rt.block_on(spawn_server(connectrust::connect_app()));
+    let client = http_client();
+
     let mut group = c.benchmark_group("connect_stream_proto_roundtrip");
     group.sample_size(10);
     let _stderr_silencer = StderrSilencer::new();
@@ -303,55 +277,55 @@ fn connect_stream_proto_roundtrip_benchmarks(c: &mut Criterion) {
         buffa::PayloadSize::Medium,
         buffa::PayloadSize::Large,
     ] {
-        let buffa_app = buffa::connect_app();
-        let beta5_app = beta5::connect_app();
-        let buffa_body = buffa::encode_hello_request_proto(&buffa::hello_request(size));
-        let beta5_body = beta5::encode_hello_request_proto(&beta5::hello_request(match size {
-            buffa::PayloadSize::Small => beta5::PayloadSize::Small,
-            buffa::PayloadSize::Medium => beta5::PayloadSize::Medium,
-            buffa::PayloadSize::Large => beta5::PayloadSize::Large,
-        }));
+        let request = buffa::hello_request(size);
+        let proto_body = buffa::envelope_frame(&buffa::encode_hello_request_proto(&request));
 
-        group.throughput(Throughput::Bytes(buffa_body.len() as u64));
+        group.throughput(Throughput::Bytes(proto_body.len() as u64));
 
         group.bench_function(BenchmarkId::new("buffa", size.as_str()), |b| {
             b.to_async(&rt).iter(|| {
-                let app = buffa_app.clone();
-                let body = buffa_body.clone();
+                let client = client.clone();
+                let base_url = buffa_server.base_url.clone();
+                let body = proto_body.clone();
                 async move {
-                    let response = app
-                        .oneshot(buffa::stream_proto_request(body))
-                        .await
-                        .expect("service response");
-                    assert_eq!(response.status(), StatusCode::OK);
-                    let bytes = response
-                        .into_body()
-                        .collect()
-                        .await
-                        .expect("collect body")
-                        .to_bytes();
+                    let bytes = send_request(
+                        &client,
+                        connect_request(&base_url, STREAM_PATH, "application/connect+proto", body),
+                    )
+                    .await;
                     black_box(buffa::parse_streaming_proto_responses(&bytes));
                 }
             });
         });
 
-        group.bench_function(BenchmarkId::new("beta5", size.as_str()), |b| {
+        group.bench_function(BenchmarkId::new("v0.1.0", size.as_str()), |b| {
             b.to_async(&rt).iter(|| {
-                let app = beta5_app.clone();
-                let body = beta5_body.clone();
+                let client = client.clone();
+                let base_url = release_server.base_url.clone();
+                let body = proto_body.clone();
                 async move {
-                    let response = app
-                        .oneshot(beta5::stream_proto_request(body))
-                        .await
-                        .expect("service response");
-                    assert_eq!(response.status(), StatusCode::OK);
-                    let bytes = response
-                        .into_body()
-                        .collect()
-                        .await
-                        .expect("collect body")
-                        .to_bytes();
-                    black_box(beta5::parse_streaming_proto_responses(&bytes));
+                    let bytes = send_request(
+                        &client,
+                        connect_request(&base_url, STREAM_PATH, "application/connect+proto", body),
+                    )
+                    .await;
+                    black_box(buffa::parse_streaming_proto_responses(&bytes));
+                }
+            });
+        });
+
+        group.bench_function(BenchmarkId::new("connect-rust", size.as_str()), |b| {
+            b.to_async(&rt).iter(|| {
+                let client = client.clone();
+                let base_url = connectrust_server.base_url.clone();
+                let body = proto_body.clone();
+                async move {
+                    let bytes = send_request(
+                        &client,
+                        connect_request(&base_url, STREAM_PATH, "application/connect+proto", body),
+                    )
+                    .await;
+                    black_box(buffa::parse_streaming_proto_responses(&bytes));
                 }
             });
         });
@@ -368,10 +342,6 @@ criterion_group! {
     name = benches;
     config = benchmark_configuration();
     targets =
-        proto_encode_benchmarks,
-        proto_decode_benchmarks,
-        json_encode_benchmarks,
-        json_decode_benchmarks,
         connect_unary_proto_roundtrip_benchmarks,
         connect_unary_json_roundtrip_benchmarks,
         connect_stream_proto_roundtrip_benchmarks

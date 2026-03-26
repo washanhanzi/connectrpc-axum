@@ -7,20 +7,26 @@ cd "$ROOT_DIR"
 if command -v hyperfine >/dev/null 2>&1; then
   hyperfine \
     --warmup 1 \
-    --prepare 'rm -rf target/codegen-buffa target/codegen-beta5' \
+    --prepare 'rm -rf target/codegen-buffa target/codegen-v0.1.0 target/codegen-connectrpc' \
     'CARGO_TARGET_DIR=target/codegen-buffa cargo check -p compare-buffa-beta5-cases-buffa' \
-    'CARGO_TARGET_DIR=target/codegen-beta5 cargo check -p compare-buffa-beta5-cases-beta5'
+    'CARGO_TARGET_DIR=target/codegen-v0.1.0 cargo check -p compare-buffa-beta5-cases-release' \
+    'CARGO_TARGET_DIR=target/codegen-connectrpc cargo check -p compare-buffa-beta5-cases-connectrpc'
   exit 0
 fi
 
 echo "hyperfine not found; falling back to shell builtin time -p"
 
-for target in buffa beta5; do
-  crate="compare-buffa-beta5-cases-${target}"
-  target_dir="target/codegen-${target}"
+run_case() {
+  local label="$1"
+  local crate="$2"
+  local target_dir="$3"
 
   echo
-  echo "==> ${crate}"
+  echo "==> ${label}"
   rm -rf "$target_dir"
   time -p env CARGO_TARGET_DIR="$target_dir" cargo check -p "$crate"
-done
+}
+
+run_case "buffa" "compare-buffa-beta5-cases-buffa" "target/codegen-buffa"
+run_case "connect-axum-0.1.0" "compare-buffa-beta5-cases-release" "target/codegen-v0.1.0"
+run_case "connect-rust" "compare-buffa-beta5-cases-connectrpc" "target/codegen-connectrpc"

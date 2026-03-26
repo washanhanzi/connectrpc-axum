@@ -10,10 +10,6 @@ if [[ ! -d "$CRITERION_DIR" ]]; then
 fi
 
 groups=(
-  proto_encode_hello_request
-  proto_decode_hello_request
-  json_encode_hello_request
-  json_decode_hello_request
   connect_unary_proto_roundtrip
   connect_unary_json_roundtrip
   connect_stream_proto_roundtrip
@@ -21,26 +17,33 @@ groups=(
 
 sizes=(small medium large)
 
-printf "| Benchmark | Size | Buffa median (ns) | Beta5 median (ns) | Buffa delta |\n"
-printf "|---|---:|---:|---:|---:|\n"
+printf "| Benchmark | Size | Buffa median (ns) | 0.1.0 median (ns) | Connect-rust median (ns) | Buffa delta vs 0.1.0 | Connect-rust delta vs 0.1.0 |\n"
+printf "|---|---:|---:|---:|---:|---:|---:|\n"
 
 for group in "${groups[@]}"; do
   for size in "${sizes[@]}"; do
     buffa_file="$CRITERION_DIR/$group/buffa/$size/new/estimates.json"
-    beta5_file="$CRITERION_DIR/$group/beta5/$size/new/estimates.json"
+    release_file="$CRITERION_DIR/$group/v0.1.0/$size/new/estimates.json"
+    connectrust_file="$CRITERION_DIR/$group/connect-rust/$size/new/estimates.json"
 
-    if [[ ! -f "$buffa_file" || ! -f "$beta5_file" ]]; then
+    if [[ ! -f "$buffa_file" || ! -f "$release_file" || ! -f "$connectrust_file" ]]; then
       continue
     fi
 
     buffa_median="$(jq -r '.median.point_estimate' "$buffa_file")"
-    beta5_median="$(jq -r '.median.point_estimate' "$beta5_file")"
-    delta_pct="$(
-      awk -v b="$buffa_median" -v p="$beta5_median" \
+    release_median="$(jq -r '.median.point_estimate' "$release_file")"
+    connectrust_median="$(jq -r '.median.point_estimate' "$connectrust_file")"
+    buffa_delta_pct="$(
+      awk -v b="$buffa_median" -v p="$release_median" \
         'BEGIN { printf "%.1f%%", ((p - b) / p) * 100 }'
     )"
+    connectrust_delta_pct="$(
+      awk -v c="$connectrust_median" -v p="$release_median" \
+        'BEGIN { printf "%.1f%%", ((p - c) / p) * 100 }'
+    )"
 
-    printf "| %s | %s | %.3f | %.3f | %s |\n" \
-      "$group" "$size" "$buffa_median" "$beta5_median" "$delta_pct"
+    printf "| %s | %s | %.3f | %.3f | %.3f | %s | %s |\n" \
+      "$group" "$size" "$buffa_median" "$release_median" "$connectrust_median" \
+      "$buffa_delta_pct" "$connectrust_delta_pct"
   done
 done

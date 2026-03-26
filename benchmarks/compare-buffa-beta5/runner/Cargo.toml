@@ -11,12 +11,15 @@ harness = false
 [dependencies]
 
 [dev-dependencies]
+axum = { workspace = true }
 bytes = { workspace = true }
-compare-buffa-beta5-cases-beta5 = { path = "../cases-beta5" }
 compare-buffa-beta5-cases-buffa = { path = "../cases-buffa" }
+compare-buffa-beta5-cases-connectrpc = { path = "../cases-connectrpc" }
+compare-buffa-beta5-cases-release = { path = "../cases-release" }
 criterion = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
+hyper = { version = "1", features = ["client", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "tokio"] }
 libc = "0.2"
 tokio = { workspace = true }
-tower = { workspace = true }
