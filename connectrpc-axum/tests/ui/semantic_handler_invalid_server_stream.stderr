@@ -1,28 +1,28 @@
-error[E0631]: type mismatch in function arguments
-  --> tests/ui/semantic_handler_invalid_server_stream.rs:57:62
+error[E0277]: the trait bound `ConnectHandlerWrapper<fn(connectrpc_axum::ConnectRequest<HelloResponse>) -> impl futures::Future<Output = Result<connectrpc_axum::ConnectResponse<connectrpc_axum::StreamBody<futures::stream::Empty<Result<HelloResponse, connectrpc_axum::ConnectError>>>>, connectrpc_axum::ConnectError>> {say_hello_stream}, HelloRequest, HelloResponse>: Handler<_, _>` is not satisfied
+  --> tests/ui/semantic_handler_invalid_server_stream.rs:53:62
    |
-50 | / async fn say_hello_stream(
-51 | |     ConnectRequest(_req): ConnectRequest<HelloResponse>,
-52 | | ) -> Result<ConnectResponse<StreamBody<ResponseStream>>, ConnectError> {
-   | |______________________________________________________________________- found signature defined here
-...
-57 |       let _ = HelloWorldServiceBuilder::new().say_hello_stream(say_hello_stream);
-   |                                               ---------------- ^^^^^^^^^^^^^^^^ expected due to this
-   |                                               |
-   |                                               required by a bound introduced by this call
+53 |     let _ = HelloWorldServiceBuilder::new().say_hello_stream(say_hello_stream);
+   |                                             ---------------- ^^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |                                             |
+   |                                             required by a bound introduced by this call
    |
-   = note: expected function signature `fn(connectrpc_axum::ConnectRequest<HelloRequest>) -> _`
-              found function signature `fn(connectrpc_axum::ConnectRequest<HelloResponse>) -> _`
-   = note: required for `ConnectHandlerWrapper<fn(connectrpc_axum::ConnectRequest<HelloResponse>) -> impl futures::Future<Output = Result<connectrpc_axum::ConnectResponse<connectrpc_axum::StreamBody<futures::stream::Empty<Result<HelloResponse, connectrpc_axum::ConnectError>>>>, connectrpc_axum::ConnectError>> {say_hello_stream}>` to implement `Handler<(connectrpc_axum::ConnectRequest<HelloRequest>, connectrpc_axum::StreamBody<_>), ()>`
+   = help: the trait `Handler<_, _>` is not implemented for `ConnectHandlerWrapper<fn(connectrpc_axum::ConnectRequest<HelloResponse>) -> impl futures::Future<Output = Result<connectrpc_axum::ConnectResponse<connectrpc_axum::StreamBody<futures::stream::Empty<Result<HelloResponse, connectrpc_axum::ConnectError>>>>, connectrpc_axum::ConnectError>> {say_hello_stream}, HelloRequest, HelloResponse>`
+   = note: Consider using `#[axum::debug_handler]` to improve the error message
+   = help: the following other types implement trait `Handler<T, S>`:
+             `ConnectHandlerWrapper<F, Req, Resp>` implements `Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, connectrpc_axum::ConnectRequest<Req>), S>`
+             `ConnectHandlerWrapper<F, Req, Resp>` implements `Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), S>`
+             `ConnectHandlerWrapper<F, Req, Resp>` implements `Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), S>`
+             `ConnectHandlerWrapper<F, Req, Resp>` implements `Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), S>`
+             `ConnectHandlerWrapper<F, Req, Resp>` implements `Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, connectrpc_axum::ConnectRequest<Req>), S>`
+             `ConnectHandlerWrapper<F, Req, Resp>` implements `Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), S>`
+             `ConnectHandlerWrapper<F, Req, Resp>` implements `Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), S>`
+             `ConnectHandlerWrapper<F, Req, Resp>` implements `Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), S>`
+           and $N others
 note: required by a bound in `HelloWorldServiceBuilder::<S>::say_hello_stream`
-  --> tests/ui/semantic_handler_invalid_server_stream.rs:42:13
+  --> tests/ui/semantic_handler_invalid_server_stream.rs:38:64
    |
-39 |     fn say_hello_stream<F, T>(self, _handler: F) -> Self
+36 |     fn say_hello_stream<F, T>(self, _handler: F) -> Self
    |        ---------------- required by a bound in this associated function
-...
-42 |             Handler<T, S> + ServerStreamConnectHandler<T, HelloRequest, HelloResponse, S>,
-   |             ^^^^^^^^^^^^^ required by this bound in `HelloWorldServiceBuilder::<S>::say_hello_stream`
-help: consider wrapping the function in a closure
-   |
-57 |     let _ = HelloWorldServiceBuilder::new().say_hello_stream(|arg0: connectrpc_axum::ConnectRequest<HelloRequest>| say_hello_stream(/* connectrpc_axum::ConnectRequest<HelloResponse> */));
-   |                                                              +++++++++++++++++++++++++++++++++++++++++++++++++++++                 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+37 |     where
+38 |         ConnectHandlerWrapper<F, HelloRequest, HelloResponse>: Handler<T, S>,
+   |                                                                ^^^^^^^^^^^^^ required by this bound in `HelloWorldServiceBuilder::<S>::say_hello_stream`

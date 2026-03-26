@@ -114,7 +114,7 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
         // For unary methods with NoSideEffects, automatically enables GET requests (per Connect spec)
         let connect_builder_methods: Vec<_> = method_info
             .iter()
-            .map(|(method_name, _request_type, _response_type, path, _assoc, is_ss, is_cs, idempotency_level, idempotency_tokens)| {
+            .map(|(method_name, request_type, response_type, path, _assoc, is_ss, is_cs, idempotency_level, idempotency_tokens)| {
                 // Generate doc comment based on streaming type and idempotency
                 let is_unary = !*is_ss && !*is_cs;
                 let supports_get = is_unary && is_no_side_effects(*idempotency_level);
@@ -137,12 +137,30 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                 // This follows the Connect protocol spec where NO_SIDE_EFFECTS enables HTTP GET
                 let method_router_expr = if supports_get {
                     quote! {
-                        connectrpc_axum::handler::get_connect(handler.clone())
-                            .merge(connectrpc_axum::handler::post_connect(handler))
+                        connectrpc_axum::handler::get_connect::<
+                            F,
+                            T,
+                            S,
+                            #request_type,
+                            #response_type,
+                        >(handler.clone())
+                        .merge(connectrpc_axum::handler::post_connect::<
+                            F,
+                            T,
+                            S,
+                            #request_type,
+                            #response_type,
+                        >(handler))
                     }
                 } else {
                     quote! {
-                        connectrpc_axum::handler::post_connect(handler)
+                        connectrpc_axum::handler::post_connect::<
+                            F,
+                            T,
+                            S,
+                            #request_type,
+                            #response_type,
+                        >(handler)
                     }
                 };
 
@@ -154,7 +172,11 @@ impl ServiceGenerator for AxumConnectServiceGenerator {
                     #[doc = #doc]
                     pub fn #method_name<F, T>(self, handler: F) -> #service_builder_name<S>
                     where
-                        connectrpc_axum::handler::ConnectHandlerWrapper<F>: axum::handler::Handler<T, S>,
+                        connectrpc_axum::handler::ConnectHandlerWrapper<
+                            F,
+                            #request_type,
+                            #response_type,
+                        >: axum::handler::Handler<T, S>,
                         F: Clone + Send + Sync + 'static,
                         T: 'static,
                     {

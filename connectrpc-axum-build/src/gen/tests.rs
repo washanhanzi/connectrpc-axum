@@ -230,7 +230,7 @@ fn test_idempotency_level_unknown_default() {
 
     // Verify only POST is used (not GET) for methods without NoSideEffects
     assert!(
-        buf.contains("post_connect (handler)"),
+        buf.contains("post_connect :: <"),
         "Should use post_connect only for non-idempotent methods.\nGenerated:\n{}",
         buf
     );
@@ -293,6 +293,87 @@ fn test_no_side_effects_enables_get_routing() {
     assert!(
         buf.contains("GET+POST enabled"),
         "Should document that GET+POST is enabled.\nGenerated:\n{}",
+        buf
+    );
+}
+
+#[test]
+fn test_connect_codegen_enforces_exact_handler_signatures() {
+    let service = Service {
+        name: "HelloWorldService".to_string(),
+        proto_name: "HelloWorldService".to_string(),
+        package: "hello".to_string(),
+        comments: Default::default(),
+        methods: vec![
+            Method {
+                name: "SayHello".to_string(),
+                proto_name: "SayHello".to_string(),
+                comments: Default::default(),
+                input_type: ".hello.HelloRequest".to_string(),
+                output_type: ".hello.HelloResponse".to_string(),
+                input_proto_type: "HelloRequest".to_string(),
+                output_proto_type: "HelloResponse".to_string(),
+                options: Default::default(),
+                client_streaming: false,
+                server_streaming: false,
+            },
+            Method {
+                name: "SayHelloStream".to_string(),
+                proto_name: "SayHelloStream".to_string(),
+                comments: Default::default(),
+                input_type: ".hello.HelloRequest".to_string(),
+                output_type: ".hello.HelloResponse".to_string(),
+                input_proto_type: "HelloRequest".to_string(),
+                output_proto_type: "HelloResponse".to_string(),
+                options: Default::default(),
+                client_streaming: false,
+                server_streaming: true,
+            },
+            Method {
+                name: "UploadHello".to_string(),
+                proto_name: "UploadHello".to_string(),
+                comments: Default::default(),
+                input_type: ".hello.HelloRequest".to_string(),
+                output_type: ".hello.HelloResponse".to_string(),
+                input_proto_type: "HelloRequest".to_string(),
+                output_proto_type: "HelloResponse".to_string(),
+                options: Default::default(),
+                client_streaming: true,
+                server_streaming: false,
+            },
+            Method {
+                name: "ChatHello".to_string(),
+                proto_name: "ChatHello".to_string(),
+                comments: Default::default(),
+                input_type: ".hello.HelloRequest".to_string(),
+                output_type: ".hello.HelloResponse".to_string(),
+                input_proto_type: "HelloRequest".to_string(),
+                output_proto_type: "HelloResponse".to_string(),
+                options: Default::default(),
+                client_streaming: true,
+                server_streaming: true,
+            },
+        ],
+        options: Default::default(),
+    };
+
+    let mut generator = AxumConnectServiceGenerator::new().with_connect_server(true);
+    let mut buf = String::new();
+    generator.generate(service, &mut buf);
+
+    assert!(
+        !buf.contains("UnaryConnectHandler")
+            && !buf.contains("ServerStreamConnectHandler")
+            && !buf.contains("ClientStreamConnectHandler")
+            && !buf.contains("BidiStreamConnectHandler"),
+        "Generated code should not rely on RPC-specific marker traits.\nGenerated:\n{}",
+        buf
+    );
+    assert!(
+        buf.matches("ConnectHandlerWrapper < F , . hello . HelloRequest , . hello . HelloResponse , >")
+            .count()
+            >= 4,
+        "Each RPC method should constrain the typed ConnectHandlerWrapper with the proto request and response types.\nGenerated:\n{}",
         buf
     );
 }

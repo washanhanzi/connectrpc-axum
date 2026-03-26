@@ -63,3 +63,6 @@ compression-zstd = ["compression-zstd-unary", "compression-zstd-stream"]
 
 # Full compression
 compression-full = ["compression-gzip", "compression-deflate", "compression-br", "compression-zstd"]
+
+[dev-dependencies]
+trybuild = { workspace = true }

@@ -1,8 +1,5 @@
 use axum::handler::Handler;
-use connectrpc_axum::{
-    handler::{ConnectHandlerWrapper, ServerStreamConnectHandler},
-    prelude::*,
-};
+use connectrpc_axum::{handler::ConnectHandlerWrapper, prelude::*};
 use futures::stream;
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -38,8 +35,7 @@ where
 
     fn say_hello_stream<F, T>(self, _handler: F) -> Self
     where
-        ConnectHandlerWrapper<F>:
-            Handler<T, S> + ServerStreamConnectHandler<T, HelloRequest, HelloResponse, S>,
+        ConnectHandlerWrapper<F, HelloRequest, HelloResponse>: Handler<T, S>,
         F: Clone + Send + Sync + 'static,
         T: 'static,
     {

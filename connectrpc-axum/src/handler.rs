@@ -4,7 +4,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::MethodRouter,
 };
-use std::{any::Any, future::Future, pin::Pin};
+use std::{any::Any, future::Future, marker::PhantomData, pin::Pin};
 
 use crate::{
     context::{
@@ -70,11 +70,22 @@ pub(crate) fn validate_streaming_protocol(ctx: &ConnectContext) -> Option<Respon
 }
 
 /// A wrapper that adapts ConnectHandler functions to work with Axum's Handler trait
-#[derive(Clone)]
-pub struct ConnectHandlerWrapper<F>(pub F);
+pub struct ConnectHandlerWrapper<F, Req = (), Resp = ()>(pub F, PhantomData<fn() -> (Req, Resp)>);
+
+impl<F, Req, Resp> ConnectHandlerWrapper<F, Req, Resp> {
+    pub fn new(handler: F) -> Self {
+        Self(handler, PhantomData)
+    }
+}
+
+impl<F: Clone, Req, Resp> Clone for ConnectHandlerWrapper<F, Req, Resp> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
 
 /// Type alias for compatibility with generated code
-pub type ConnectHandler<F> = ConnectHandlerWrapper<F>;
+pub type ConnectHandler<F, Req = (), Resp = ()> = ConnectHandlerWrapper<F, Req, Resp>;
 
 // Macro for non-empty tuples only (excludes empty case)
 macro_rules! all_tuples_nonempty {
@@ -105,7 +116,7 @@ macro_rules! all_tuples_nonempty {
 // =============== 2) Handler implementations ===============
 
 // Special case implementation for zero extractors (S must be ())
-impl<F, Fut, Req, Resp> Handler<(ConnectRequest<Req>,), ()> for ConnectHandlerWrapper<F>
+impl<F, Fut, Req, Resp> Handler<(ConnectRequest<Req>,), ()> for ConnectHandlerWrapper<F, Req, Resp>
 where
     F: Fn(ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
@@ -154,7 +165,7 @@ macro_rules! impl_handler_for_connect_handler_wrapper {
     ([$($A:ident),*]) => {
         // Implement Handler for ConnectHandlerWrapper
         impl<F, Fut, S, Req, Resp, $($A,)*> Handler<($($A,)* ConnectRequest<Req>,), S>
-            for ConnectHandlerWrapper<F>
+            for ConnectHandlerWrapper<F, Req, Resp>
         where
             F: Fn($($A,)* ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
             Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
@@ -236,7 +247,7 @@ mod generated_handler_impls {
 macro_rules! impl_server_stream_handler_for_connect_handler_wrapper {
     ([$($A:ident),*]) => {
         impl<F, Fut, S, Req, Resp, St, $($A,)*> Handler<($($A,)* ConnectRequest<Req>, StreamBody<St>), S>
-            for ConnectHandlerWrapper<F>
+            for ConnectHandlerWrapper<F, Req, Resp>
         where
             F: Fn($($A,)* ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
             Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
@@ -310,7 +321,7 @@ mod generated_server_stream_handler_impls {
 macro_rules! impl_client_stream_handler_for_connect_handler_wrapper {
     ([$($A:ident),*]) => {
         impl<F, Fut, S, Req, Resp, $($A,)*> Handler<($($A,)* ConnectRequest<Streaming<Req>>, Resp), S>
-            for ConnectHandlerWrapper<F>
+            for ConnectHandlerWrapper<F, Req, Resp>
         where
             F: Fn($($A,)* ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
             Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
@@ -384,7 +395,7 @@ mod generated_client_stream_handler_impls {
 macro_rules! impl_bidi_stream_handler_for_connect_handler_wrapper {
     ([$($A:ident),*]) => {
         impl<F, Fut, S, Req, Resp, St, $($A,)*> Handler<($($A,)* ConnectRequest<Streaming<Req>>, StreamBody<St>), S>
-            for ConnectHandlerWrapper<F>
+            for ConnectHandlerWrapper<F, Req, Resp>
         where
             F: Fn($($A,)* ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
             Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
@@ -459,7 +470,7 @@ mod generated_bidi_stream_handler_impls {
 /// Handler implementation for server streaming using the unified ConnectHandlerWrapper.
 /// Input: single message, Output: stream of messages
 impl<F, Fut, Req, Resp, St> Handler<(ConnectRequest<Req>, StreamBody<St>), ()>
-    for ConnectHandlerWrapper<F>
+    for ConnectHandlerWrapper<F, Req, Resp>
 where
     F: Fn(ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
@@ -507,7 +518,7 @@ where
 /// Handler implementation for client streaming using the unified ConnectHandlerWrapper.
 /// Input: stream of messages, Output: single message
 impl<F, Fut, Req, Resp> Handler<(ConnectRequest<Streaming<Req>>, Resp), ()>
-    for ConnectHandlerWrapper<F>
+    for ConnectHandlerWrapper<F, Req, Resp>
 where
     F: Fn(ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
@@ -556,7 +567,7 @@ where
 /// Input: stream of messages, Output: stream of messages
 /// Note: Requires HTTP/2 for full-duplex communication.
 impl<F, Fut, Req, Resp, St> Handler<(ConnectRequest<Streaming<Req>>, StreamBody<St>), ()>
-    for ConnectHandlerWrapper<F>
+    for ConnectHandlerWrapper<F, Req, Resp>
 where
     F: Fn(ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
@@ -628,13 +639,13 @@ where
 ///     .route("/client", post_connect(client_stream))
 ///     .route("/bidi", post_connect(bidi_stream))
 /// ```
-pub fn post_connect<F, T, S>(f: F) -> MethodRouter<S>
+pub fn post_connect<F, T, S, Req, Resp>(f: F) -> MethodRouter<S>
 where
     S: Clone + Send + Sync + 'static,
-    ConnectHandlerWrapper<F>: Handler<T, S>,
+    ConnectHandlerWrapper<F, Req, Resp>: Handler<T, S>,
     T: 'static,
 {
-    axum::routing::post(ConnectHandlerWrapper(f))
+    axum::routing::post(ConnectHandlerWrapper::<F, Req, Resp>::new(f))
 }
 
 /// Creates a GET method router for unary RPC handlers.
@@ -653,11 +664,11 @@ where
 /// ```ignore
 /// .route("/path", get_connect(handler).merge(post_connect(handler)))
 /// ```
-pub fn get_connect<F, T, S>(f: F) -> MethodRouter<S>
+pub fn get_connect<F, T, S, Req, Resp>(f: F) -> MethodRouter<S>
 where
     S: Clone + Send + Sync + 'static,
-    ConnectHandlerWrapper<F>: Handler<T, S>,
+    ConnectHandlerWrapper<F, Req, Resp>: Handler<T, S>,
     T: 'static,
 {
-    axum::routing::get(ConnectHandlerWrapper(f))
+    axum::routing::get(ConnectHandlerWrapper::<F, Req, Resp>::new(f))
 }
