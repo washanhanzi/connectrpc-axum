@@ -1,6 +1,6 @@
 [package]
 name = "connectrpc-axum-client"
-version = "0.1.0-beta.4"
+version = "0.1.0"
 edition = "2024"
 description = "Connect protocol client for connectrpc-axum"
 repository = "https://github.com/washanhanzi/connectrpc-axum"
@@ -19,18 +19,12 @@ hyper-util = { workspace = true, features = [
     "http2",
     "tokio",
 ] }
-hyper-rustls = { workspace = true, features = [
-    "http2",
-    "tls12",
-] }
+hyper-rustls = { workspace = true, features = ["http2", "tls12"] }
 http-body = { workspace = true }
 http-body-util = { workspace = true }
 tower = { workspace = true }
 tower-service = { workspace = true }
-rustls = { workspace = true, features = [
-    "std",
-    "tls12",
-] }
+rustls = { workspace = true, features = ["std", "tls12"] }
 pin-project-lite = { workspace = true }
 
 # TLS - crypto providers (optional)
