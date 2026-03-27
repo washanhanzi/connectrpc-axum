@@ -10,11 +10,12 @@ The benchmark workspace directory still carries its original `compare-buffa-beta
 name, but the published `connectrpc-axum` comparison target is now the released
 `0.1.0` crates.
 
-The benchmark suite focuses on framework-level round trips over loopback TCP:
+The benchmark suite now focuses on a Fortune-style unary workload over loopback TCP:
 
-- Loopback Connect unary proto round trips
-- Loopback Connect unary JSON round trips
-- Loopback Connect server-streaming proto round trips
+- A real Valkey-backed Fortune service in each target
+- A shared load generator that drives concurrent Connect unary proto requests
+- A second shared load generator that drives concurrent Connect unary JSON requests through `reqwest`
+- Timed throughput and latency output (`req/s`, `p50`, `p99`)
 - Code generation timing via a separate script
 
 ## Layout
@@ -22,38 +23,43 @@ The benchmark suite focuses on framework-level round trips over loopback TCP:
 - `cases-buffa/`: helper crate built against the local checkout
 - `cases-release/`: helper crate built against the published `0.1.0` release crates
 - `cases-connectrpc/`: helper crate built against the published `connect-rust` crates
-- `runner/`: Criterion benchmark runner
+- `common/`: shared Fortune and Valkey helpers
+- `runner/`: custom Fortune benchmark runner
 - `proto/`: shared benchmark proto fixtures
 - `results/`: checked-in benchmark summaries
 - `scripts/bench_codegen.sh`: codegen timing helper
-- `scripts/summarize_results.sh`: Criterion result summary helper
 
 ## Run
 
 From this directory:
 
 ```bash
-cargo bench -p compare-buffa-beta5-runner
+cargo bench -p compare-buffa-beta5-runner --bench fortunes
 ```
 
-To run a subset:
+Quick mode:
 
 ```bash
-cargo bench -p compare-buffa-beta5-runner --bench compare -- 'connect_unary_proto_roundtrip'
+cargo bench -p compare-buffa-beta5-runner --bench fortunes -- --quick
 ```
 
-Criterion HTML output will be written under:
+Specific concurrency levels:
 
-```text
-target/criterion/
+```bash
+cargo bench -p compare-buffa-beta5-runner --bench fortunes -- --concurrency=16,64
 ```
 
 ## Notes
 
 - The current setup compares the local checkout against the published `0.1.0` release crates from crates.io and the published `connect-rust` crates.
-- The Criterion suite intentionally excludes standalone encode/decode microbenchmarks so the reported numbers stay focused on framework-level RPC behavior.
-- Each target runs as a real loopback TCP server, and the runner sends a common wire-format request through the same HTTP client for all three targets.
-- The runner redirects `stderr` to `/dev/null` while executing `connect_stream_proto_roundtrip` so the runtimes' per-message debug output does not distort those measurements.
+- The current suite removes the older synthetic `hello` RPC benchmark and replaces it with a Valkey-backed Fortune workload.
+- The runner uses the generated `connect-rust` Fortune client as the uniform Connect client for the proto benchmark rows, matching the upstream `fortune_bench` load loop more closely.
+- The JSON benchmark rows use `reqwest` to send `application/json` Connect unary requests to all three servers.
+- The `connect-rust` target now runs through its native `connectrpc::server::Server` path instead of the earlier Axum fallback wrapper.
+- Each target still runs as a real loopback TCP server backed by the same Valkey dataset.
+- If `VALKEY_ADDR` is unset, the runner starts a disposable `valkey/valkey:8-alpine` container through `docker`, seeds it, and tears it down on exit.
+- If `VALKEY_ADDR` is set, the runner uses that existing Valkey instance instead.
+- The output is a markdown table printed to stdout, not Criterion JSON or HTML.
 
 ## Codegen Timing
 
@@ -63,15 +69,6 @@ target/criterion/
 
 If `hyperfine` is installed, the script uses it automatically. Otherwise it falls back to `time -p`.
 
-## Summarize Results
-
-```bash
-./scripts/summarize_results.sh
-```
-
-The summary script reads Criterion `estimates.json` files and prints a markdown table.
-Positive `Buffa delta vs 0.1.0` and `Connect-rust delta vs 0.1.0` values mean those targets are faster than `0.1.0`.
-
 ## Current Conclusion
 
-See `results/2026-03-26-initial.md` and `results/2026-03-26-conclusion.md` for the older pre-`0.1.0` / pre-`connect-rust` measurements and decision note. Rerun the benchmark workspace after this change to collect updated three-way results.
+See `results/2026-03-26-initial.md` and `results/2026-03-26-conclusion.md` for the older synthetic benchmark notes, `results/2026-03-26-fortunes.md` for the first Fortune-harness pass, `results/2026-03-27-fortunes-aligned.md` for the aligned proto-only Fortune run, and `results/2026-03-27-fortunes-proto-json.md` for the current proto+json Fortune run.
