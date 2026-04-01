@@ -31,7 +31,7 @@ impl CliOptions {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum Suite {
     ProtocolBenchmarks,
@@ -60,7 +60,7 @@ impl Suite {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum Target {
     ConnectrpcAxum,
@@ -91,7 +91,7 @@ impl Target {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum WireProtocol {
     ConnectJson,
@@ -119,7 +119,7 @@ impl WireProtocol {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum PayloadSize {
     Small,
@@ -139,7 +139,7 @@ impl PayloadSize {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum CompressionMode {
     Identity,
@@ -375,49 +375,58 @@ async fn main() -> Result<()> {
             .filter(|target| filtered_cases.iter().any(|case| case.target == *target))
             .collect();
 
+        let ordered_cases = interleaved_case_order(&filtered_cases);
         let server_specs = suite_server_specs(suite, &go_binaries, &selected_targets_for_suite)?;
+        let mut processes = Vec::with_capacity(server_specs.len());
+        for server in &server_specs {
+            let process = ServerProcess::start(server, valkey.as_ref().map(ValkeyContainer::addr))?;
+            processes.push((server.target, process));
+        }
         let mut suite_results = Vec::new();
-        for server in server_specs {
-            let cases_for_target: Vec<BenchmarkCase> = filtered_cases
+        for case in ordered_cases {
+            let process = processes
                 .iter()
-                .copied()
-                .filter(|case| case.target == server.target)
-                .collect();
-            if cases_for_target.is_empty() {
-                continue;
+                .find(|(target, _)| *target == case.target)
+                .map(|(_, process)| process)
+                .expect("every case target should have a running server");
+
+            for &concurrency in levels {
+                let benchmark = case.benchmark_name();
+                eprintln!("  {} @ concurrency={}", benchmark, concurrency);
+
+                let result = run_connect_go_benchmark(
+                    &go_binaries.client,
+                    process.addr,
+                    case,
+                    concurrency,
+                    warmup,
+                    measurement,
+                )?;
+
+                eprintln!(
+                    "    => {:.0} req/s, p50={:.2}ms, p99={:.2}ms",
+                    result.rps,
+                    result.p50_us as f64 / 1000.0,
+                    result.p99_us as f64 / 1000.0,
+                );
+                suite_results.push(result);
             }
-
-            let process =
-                ServerProcess::start(&server, valkey.as_ref().map(ValkeyContainer::addr))?;
-            for case in cases_for_target {
-                for &concurrency in levels {
-                    let benchmark = case.benchmark_name();
-                    eprintln!("  {} @ concurrency={}", benchmark, concurrency);
-
-                    let result = run_connect_go_benchmark(
-                        &go_binaries.client,
-                        process.addr,
-                        case,
-                        concurrency,
-                        warmup,
-                        measurement,
-                    )?;
-
-                    eprintln!(
-                        "    => {:.0} req/s, p50={:.2}ms, p99={:.2}ms",
-                        result.rps,
-                        result.p50_us as f64 / 1000.0,
-                        result.p99_us as f64 / 1000.0,
-                    );
-                    suite_results.push(result);
-                }
-            }
-            drop(process);
         }
 
         print_results(suite, &suite_results);
         all_results.extend(suite_results);
     }
+
+    all_results.sort_by_key(|result| {
+        (
+            result.suite,
+            result.target,
+            result.protocol,
+            result.payload_size,
+            result.compression,
+            result.concurrency,
+        )
+    });
 
     let report = BenchRunReport {
         generated_at_unix_ms: unix_timestamp_ms()?,
@@ -520,6 +529,46 @@ fn benchmark_cases(suite: Suite) -> Vec<BenchmarkCase> {
     cases
 }
 
+fn interleaved_case_order(cases: &[BenchmarkCase]) -> Vec<BenchmarkCase> {
+    let mut sorted = cases.to_vec();
+    sorted.sort_by_key(|case| {
+        (
+            case.protocol,
+            case.payload_size,
+            case.compression,
+            case.target,
+        )
+    });
+
+    let mut ordered = Vec::with_capacity(sorted.len());
+    let mut start = 0;
+    while start < sorted.len() {
+        let key = (
+            sorted[start].protocol,
+            sorted[start].payload_size,
+            sorted[start].compression,
+        );
+        let mut end = start + 1;
+        while end < sorted.len()
+            && (
+                sorted[end].protocol,
+                sorted[end].payload_size,
+                sorted[end].compression,
+            ) == key
+        {
+            end += 1;
+        }
+
+        let mut group = sorted[start..end].to_vec();
+        let rotate_by = ordered.len() % group.len();
+        group.rotate_left(rotate_by);
+        ordered.extend(group);
+        start = end;
+    }
+
+    ordered
+}
+
 fn suite_server_specs(
     suite: Suite,
     go_binaries: &GoBinaries,
@@ -559,6 +608,17 @@ fn suite_server_specs(
 }
 
 fn print_results(suite: Suite, results: &[BenchResult]) {
+    let mut rows: Vec<&BenchResult> = results.iter().collect();
+    rows.sort_by_key(|result| {
+        (
+            result.target,
+            result.protocol,
+            result.payload_size,
+            result.compression,
+            result.concurrency,
+        )
+    });
+
     println!();
     println!("{}", suite.label());
     println!(
@@ -566,7 +626,7 @@ fn print_results(suite: Suite, results: &[BenchResult]) {
         "Benchmark", "Concurrency", "Requests/sec", "p50 (ms)", "p99 (ms)"
     );
     println!("{}", "-".repeat(98));
-    for result in results {
+    for result in rows {
         println!(
             "{:<44} {:>12} {:>14.0} {:>12.2} {:>12.2}",
             result.benchmark,
