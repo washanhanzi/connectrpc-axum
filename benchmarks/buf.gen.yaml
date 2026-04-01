@@ -1,0 +1,10 @@
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: connect-go
+    opt:
+      - module=github.com/washanhanzi/connectrpc-axum/benchmarks/connect-go
+  - local: ["go", "-C", "../connect-go", "run", "./cmd/protoc-gen-connect-go"]
+    out: connect-go
+    opt:
+      - module=github.com/washanhanzi/connectrpc-axum/benchmarks/connect-go

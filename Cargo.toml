@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+  "benchmarks",
   "connectrpc-axum",
   "connectrpc-axum-build",
   "connectrpc-axum-client",

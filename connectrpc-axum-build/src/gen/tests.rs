@@ -370,8 +370,10 @@ fn test_connect_codegen_enforces_exact_handler_signatures() {
         buf
     );
     assert!(
-        buf.matches("ConnectHandlerWrapper < F , . hello . HelloRequest , . hello . HelloResponse , >")
-            .count()
+        buf.matches(
+            "ConnectHandlerWrapper < F , . hello . HelloRequest , . hello . HelloResponse , >"
+        )
+        .count()
             >= 4,
         "Each RPC method should constrain the typed ConnectHandlerWrapper with the proto request and response types.\nGenerated:\n{}",
         buf

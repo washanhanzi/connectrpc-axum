@@ -1,0 +1,62 @@
+[package]
+name = "connectrpc-axum-benchmarks"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "benchmarks"
+path = "src/bin/benchmarks.rs"
+
+[[bin]]
+name = "connectrpc_axum_protocol_server"
+path = "src/bin/connectrpc_axum_protocol_server.rs"
+
+[[bin]]
+name = "connectrpc_axum_app_server"
+path = "src/bin/connectrpc_axum_app_server.rs"
+
+[[bin]]
+name = "connect_rust_protocol_server"
+path = "src/bin/connect_rust_protocol_server.rs"
+
+[[bin]]
+name = "connect_rust_app_server"
+path = "src/bin/connect_rust_app_server.rs"
+
+[[bin]]
+name = "tonic_protocol_server"
+path = "src/bin/tonic_protocol_server.rs"
+
+[[bin]]
+name = "tonic_app_server"
+path = "src/bin/tonic_app_server.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true }
+buffa = { version = "0.2", features = ["json"] }
+buffa-types = { version = "0.2", features = ["json"] }
+bytes = { workspace = true }
+connectrpc = { git = "https://github.com/anthropics/connect-rust.git", rev = "e3fafcb94fc14daf970224f0eff2ba597c71ae47", features = ["server", "client"] }
+connectrpc-axum = { path = "../connectrpc-axum", features = ["tonic", "compression-gzip"] }
+futures = { workspace = true }
+http = { workspace = true }
+http-body = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true, features = ["client", "http1", "http2"] }
+hyper-util = { workspace = true, features = ["client", "client-legacy", "http1", "http2", "tokio"] }
+pbjson = { workspace = true }
+prost = { workspace = true }
+redis = { version = "1", default-features = false, features = ["tokio-comp"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tonic = { workspace = true, features = ["gzip"] }
+tonic-prost = { workspace = true }
+tower = { workspace = true }
+
+[build-dependencies]
+connectrpc-build = { git = "https://github.com/anthropics/connect-rust.git", rev = "e3fafcb94fc14daf970224f0eff2ba597c71ae47", package = "connectrpc-build" }
+connectrpc-axum-build = { path = "../connectrpc-axum-build", features = ["tonic"] }

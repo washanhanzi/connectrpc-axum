@@ -161,14 +161,27 @@ path = "src/bin/connect-bidi-stream.rs"
 name = "connect-client-stream"
 path = "src/bin/connect-client-stream.rs"
 
+[[bin]]
+name = "grpc-perf-smoke"
+path = "src/bin/grpc-perf-smoke.rs"
+required-features = ["tonic"]
+
+[[bin]]
+name = "bench-server"
+path = "src/bin/bench-server.rs"
+required-features = ["tonic"]
+
 [dependencies]
 anyhow = { workspace = true }
 async-stream = { workspace = true }
 axum = { workspace = true }
+bytes = { workspace = true }
 connectrpc-axum = { path = "../connectrpc-axum" }
 connectrpc-axum-client = { path = "../connectrpc-axum-client" }
 futures = { workspace = true }
-hyper = { workspace = true, features = ["server", "http2"] }
+http = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true, features = ["client", "server", "http2"] }
 hyper-util = { workspace = true, features = [
   "tokio",
   "server",

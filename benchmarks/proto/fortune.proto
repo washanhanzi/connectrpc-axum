@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package fortune.v1;
+
+option go_package = "github.com/washanhanzi/connectrpc-axum/benchmarks/connect-go/gen/fortune/v1;fortunev1";
+
+service FortuneService {
+  rpc GetFortunes(GetFortunesRequest) returns (GetFortunesResponse);
+}
+
+message GetFortunesRequest {
+  repeated int32 fortune_ids = 1;
+  repeated string search_terms = 2;
+  repeated string audience_segments = 3;
+  map<string, string> metadata = 4;
+}
+
+message GetFortunesResponse {
+  repeated Fortune fortunes = 1;
+}
+
+message Fortune {
+  int32 id = 1;
+  string message = 2;
+}

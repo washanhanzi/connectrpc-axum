@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 include!(concat!(env!("OUT_DIR"), "/protos.rs"));
 
 // Re-export for convenience
+pub use bench::v1::*;
 pub use echo::*;
 pub use hello::*;
 
