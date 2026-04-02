@@ -16,6 +16,7 @@ edition = "2024"
 repository = "https://github.com/washanhanzi/connectrpc-axum"
 
 [workspace.dependencies]
+# Keep this semver requirement aligned with connectrpc-axum-core/Cargo.toml.
 connectrpc-axum-core = { version = "0.1.0", path = "./connectrpc-axum-core" }
 anyhow = "1.0"
 async-stream = "0.3"

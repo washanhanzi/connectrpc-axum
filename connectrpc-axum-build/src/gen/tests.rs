@@ -1,381 +1,378 @@
 use super::AxumConnectServiceGenerator;
-use prost_build::{Method, Service, ServiceGenerator};
+use crate::schema::SchemaSet;
 use prost_types::method_options::IdempotencyLevel;
+use prost_types::{
+    DescriptorProto, FileDescriptorProto, FileDescriptorSet, MethodDescriptorProto, MethodOptions,
+    ServiceDescriptorProto,
+};
+use std::{collections::BTreeSet, fs};
+use tempfile::tempdir;
+
+fn render_service(
+    package: &str,
+    service_name: &str,
+    methods: Vec<MethodDescriptorProto>,
+    generator: AxumConnectServiceGenerator,
+) -> String {
+    let message_types = message_types_for_methods(&methods);
+    let schema = SchemaSet::from_file_descriptor_set(&FileDescriptorSet {
+        file: vec![FileDescriptorProto {
+            name: Some("test.proto".to_string()),
+            package: if package.is_empty() {
+                None
+            } else {
+                Some(package.to_string())
+            },
+            message_type: message_types,
+            service: vec![ServiceDescriptorProto {
+                name: Some(service_name.to_string()),
+                method: methods,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+    });
+
+    generator
+        .generate_service(&schema, &schema.services[0])
+        .expect("service generation should succeed")
+}
+
+fn message_types_for_methods(methods: &[MethodDescriptorProto]) -> Vec<DescriptorProto> {
+    let mut names = BTreeSet::new();
+    for method in methods {
+        if let Some(input_type) = method.input_type.as_deref() {
+            if let Some(name) = input_type.rsplit('.').next()
+                && !name.is_empty()
+            {
+                names.insert(name.to_string());
+            }
+        }
+        if let Some(output_type) = method.output_type.as_deref() {
+            if let Some(name) = output_type.rsplit('.').next()
+                && !name.is_empty()
+            {
+                names.insert(name.to_string());
+            }
+        }
+    }
+
+    names
+        .into_iter()
+        .map(|name| DescriptorProto {
+            name: Some(name),
+            ..Default::default()
+        })
+        .collect()
+}
+
+fn method(
+    package: &str,
+    name: &str,
+    input: &str,
+    output: &str,
+    client_streaming: bool,
+    server_streaming: bool,
+    options: MethodOptions,
+) -> MethodDescriptorProto {
+    let qualify = |ty: &str| {
+        if package.is_empty() {
+            format!(".{ty}")
+        } else {
+            format!(".{package}.{ty}")
+        }
+    };
+
+    MethodDescriptorProto {
+        name: Some(name.to_string()),
+        input_type: Some(qualify(input)),
+        output_type: Some(qualify(output)),
+        client_streaming: Some(client_streaming),
+        server_streaming: Some(server_streaming),
+        options: Some(options),
+        ..Default::default()
+    }
+}
 
 #[test]
 fn test_no_tonic_codegen() {
-    // Create a mock service
-    let service = Service {
-        name: "HelloWorldService".to_string(),
-        proto_name: "HelloWorldService".to_string(),
-        package: "hello".to_string(),
-        comments: Default::default(),
-        methods: vec![Method {
-            name: "SayHello".to_string(),
-            proto_name: "SayHello".to_string(),
-            comments: Default::default(),
-            input_type: ".hello.HelloRequest".to_string(),
-            output_type: ".hello.HelloResponse".to_string(),
-            input_proto_type: "HelloRequest".to_string(),
-            output_proto_type: "HelloResponse".to_string(),
-            options: Default::default(),
-            client_streaming: false,
-            server_streaming: false,
-        }],
-        options: Default::default(),
-    };
-
-    // Generate WITHOUT tonic
-    let mut generator = AxumConnectServiceGenerator::new().with_connect_server(true);
-    let mut buf = String::new();
-    generator.generate(service, &mut buf);
-
-    // Verify no tonic-related code is generated
-    assert!(
-        !buf.contains("TonicCompatible"),
-        "Should not contain TonicCompatible when tonic is disabled"
-    );
-    assert!(
-        !buf.contains("TonicService"),
-        "Should not contain TonicService when tonic is disabled"
-    );
-    assert!(
-        !buf.contains("tonic::"),
-        "Should not contain tonic:: references when tonic is disabled"
-    );
-    assert!(
-        !buf.contains("BoxedCall"),
-        "Should not contain BoxedCall when tonic is disabled"
-    );
-    assert!(
-        !buf.contains("_server::"),
-        "Should not contain _server:: module references when tonic is disabled"
+    let buf = render_service(
+        "hello",
+        "HelloWorldService",
+        vec![method(
+            "hello",
+            "SayHello",
+            "HelloRequest",
+            "HelloResponse",
+            false,
+            false,
+            Default::default(),
+        )],
+        AxumConnectServiceGenerator::new().with_connect_server(true),
     );
 
-    // Verify Connect-only code IS generated
-    assert!(
-        buf.contains("HelloWorldServiceBuilder"),
-        "Should contain HelloWorldServiceBuilder"
-    );
-    assert!(buf.contains("say_hello"), "Should contain say_hello method");
-    assert!(
-        buf.contains("ConnectHandlerWrapper"),
-        "Should contain ConnectHandlerWrapper for unary methods"
-    );
+    assert!(!buf.contains("TonicCompatible"));
+    assert!(!buf.contains("TonicService"));
+    assert!(!buf.contains("tonic::"));
+    assert!(!buf.contains("BoxedCall"));
+    assert!(!buf.contains("_server::"));
+    assert!(buf.contains("HelloWorldServiceBuilder"));
+    assert!(buf.contains("say_hello"));
+    assert!(buf.contains("ConnectHandlerWrapper"));
 }
 
 #[test]
 fn test_with_tonic_codegen() {
-    // Create a mock service
-    let service = Service {
-        name: "HelloWorldService".to_string(),
-        proto_name: "HelloWorldService".to_string(),
-        package: "hello".to_string(),
-        comments: Default::default(),
-        methods: vec![Method {
-            name: "SayHello".to_string(),
-            proto_name: "SayHello".to_string(),
-            comments: Default::default(),
-            input_type: ".hello.HelloRequest".to_string(),
-            output_type: ".hello.HelloResponse".to_string(),
-            input_proto_type: "HelloRequest".to_string(),
-            output_proto_type: "HelloResponse".to_string(),
-            options: Default::default(),
-            client_streaming: false,
-            server_streaming: false,
-        }],
-        options: Default::default(),
-    };
-
-    // Generate WITH tonic
-    let mut generator = AxumConnectServiceGenerator::new()
-        .with_connect_server(true)
-        .with_tonic(true);
-    let mut buf = String::new();
-    generator.generate(service, &mut buf);
-
-    // Verify tonic-related code IS generated
-    assert!(
-        buf.contains("TonicCompatible"),
-        "Should contain TonicCompatible when tonic is enabled"
-    );
-    assert!(
-        buf.contains("HelloWorldTonicService"),
-        "Should contain HelloWorldTonicService when tonic is enabled"
-    );
-    assert!(
-        buf.contains("BoxedCall"),
-        "Should contain BoxedCall when tonic is enabled"
+    let buf = render_service(
+        "hello",
+        "HelloWorldService",
+        vec![method(
+            "hello",
+            "SayHello",
+            "HelloRequest",
+            "HelloResponse",
+            false,
+            false,
+            Default::default(),
+        )],
+        AxumConnectServiceGenerator::new()
+            .with_connect_server(true)
+            .with_tonic(true),
     );
 
-    // Verify Connect-only code is also generated
-    assert!(
-        buf.contains("HelloWorldServiceBuilder"),
-        "Should contain HelloWorldServiceBuilder"
-    );
+    assert!(buf.contains("TonicCompatible"));
+    assert!(buf.contains("HelloWorldTonicService"));
+    assert!(buf.contains("BoxedCall"));
+    assert!(buf.contains("HelloWorldServiceBuilder"));
 }
 
 #[test]
 fn test_idempotency_level_no_side_effects() {
-    // Create a mock service with a NO_SIDE_EFFECTS method
-    let mut method_options = prost_types::MethodOptions::default();
+    let mut method_options = MethodOptions::default();
     method_options.idempotency_level = Some(IdempotencyLevel::NoSideEffects as i32);
 
-    let service = Service {
-        name: "UserService".to_string(),
-        proto_name: "UserService".to_string(),
-        package: "user".to_string(),
-        comments: Default::default(),
-        methods: vec![Method {
-            name: "GetUser".to_string(),
-            proto_name: "GetUser".to_string(),
-            comments: Default::default(),
-            input_type: ".user.GetUserRequest".to_string(),
-            output_type: ".user.GetUserResponse".to_string(),
-            input_proto_type: "GetUserRequest".to_string(),
-            output_proto_type: "GetUserResponse".to_string(),
-            options: method_options,
-            client_streaming: false,
-            server_streaming: false,
-        }],
-        options: Default::default(),
-    };
-
-    let mut generator = AxumConnectServiceGenerator::new().with_connect_server(true);
-    let mut buf = String::new();
-    generator.generate(service, &mut buf);
-
-    // Verify idempotency level is present in generated code
-    // Note: quote! outputs tokens with spaces around ::
-    assert!(
-        buf.contains("IdempotencyLevel :: NoSideEffects"),
-        "Should contain IdempotencyLevel::NoSideEffects for NO_SIDE_EFFECTS method.\nGenerated:\n{}",
-        buf
+    let buf = render_service(
+        "user",
+        "UserService",
+        vec![method(
+            "user",
+            "GetUser",
+            "GetUserRequest",
+            "GetUserResponse",
+            false,
+            false,
+            method_options,
+        )],
+        AxumConnectServiceGenerator::new().with_connect_server(true),
     );
+
+    assert!(buf.contains("IdempotencyLevel :: NoSideEffects"));
 }
 
 #[test]
 fn test_idempotency_level_idempotent() {
-    // Create a mock service with an IDEMPOTENT method
-    let mut method_options = prost_types::MethodOptions::default();
+    let mut method_options = MethodOptions::default();
     method_options.idempotency_level = Some(IdempotencyLevel::Idempotent as i32);
 
-    let service = Service {
-        name: "UserService".to_string(),
-        proto_name: "UserService".to_string(),
-        package: "user".to_string(),
-        comments: Default::default(),
-        methods: vec![Method {
-            name: "DeleteUser".to_string(),
-            proto_name: "DeleteUser".to_string(),
-            comments: Default::default(),
-            input_type: ".user.DeleteUserRequest".to_string(),
-            output_type: ".user.DeleteUserResponse".to_string(),
-            input_proto_type: "DeleteUserRequest".to_string(),
-            output_proto_type: "DeleteUserResponse".to_string(),
-            options: method_options,
-            client_streaming: false,
-            server_streaming: false,
-        }],
-        options: Default::default(),
-    };
-
-    let mut generator = AxumConnectServiceGenerator::new().with_connect_server(true);
-    let mut buf = String::new();
-    generator.generate(service, &mut buf);
-
-    // Verify idempotency level is present in generated code
-    // Note: quote! outputs tokens with spaces around ::
-    assert!(
-        buf.contains("IdempotencyLevel :: Idempotent"),
-        "Should contain IdempotencyLevel::Idempotent for IDEMPOTENT method.\nGenerated:\n{}",
-        buf
+    let buf = render_service(
+        "user",
+        "UserService",
+        vec![method(
+            "user",
+            "DeleteUser",
+            "DeleteUserRequest",
+            "DeleteUserResponse",
+            false,
+            false,
+            method_options,
+        )],
+        AxumConnectServiceGenerator::new().with_connect_server(true),
     );
+
+    assert!(buf.contains("IdempotencyLevel :: Idempotent"));
 }
 
 #[test]
 fn test_idempotency_level_unknown_default() {
-    // Create a mock service without idempotency_level set (default)
-    let service = Service {
-        name: "UserService".to_string(),
-        proto_name: "UserService".to_string(),
-        package: "user".to_string(),
-        comments: Default::default(),
-        methods: vec![Method {
-            name: "CreateUser".to_string(),
-            proto_name: "CreateUser".to_string(),
-            comments: Default::default(),
-            input_type: ".user.CreateUserRequest".to_string(),
-            output_type: ".user.CreateUserResponse".to_string(),
-            input_proto_type: "CreateUserRequest".to_string(),
-            output_proto_type: "CreateUserResponse".to_string(),
-            options: Default::default(),
-            client_streaming: false,
-            server_streaming: false,
-        }],
-        options: Default::default(),
-    };
-
-    let mut generator = AxumConnectServiceGenerator::new().with_connect_server(true);
-    let mut buf = String::new();
-    generator.generate(service, &mut buf);
-
-    // Verify idempotency level defaults to Unknown
-    // Note: quote! outputs tokens with spaces around ::
-    assert!(
-        buf.contains("IdempotencyLevel :: Unknown"),
-        "Should contain IdempotencyLevel::Unknown for unset idempotency_level.\nGenerated:\n{}",
-        buf
+    let buf = render_service(
+        "user",
+        "UserService",
+        vec![method(
+            "user",
+            "CreateUser",
+            "CreateUserRequest",
+            "CreateUserResponse",
+            false,
+            false,
+            Default::default(),
+        )],
+        AxumConnectServiceGenerator::new().with_connect_server(true),
     );
 
-    // Verify only POST is used (not GET) for methods without NoSideEffects
-    assert!(
-        buf.contains("post_connect :: <"),
-        "Should use post_connect only for non-idempotent methods.\nGenerated:\n{}",
-        buf
-    );
-    assert!(
-        !buf.contains("get_connect"),
-        "Should NOT use get_connect for non-idempotent methods.\nGenerated:\n{}",
-        buf
-    );
+    assert!(buf.contains("IdempotencyLevel :: Unknown"));
+    assert!(buf.contains("post_connect :: <"));
+    assert!(!buf.contains("get_connect"));
 }
 
 #[test]
 fn test_no_side_effects_enables_get_routing() {
-    // Create a mock service with a NO_SIDE_EFFECTS method
-    let mut method_options = prost_types::MethodOptions::default();
+    let mut method_options = MethodOptions::default();
     method_options.idempotency_level = Some(IdempotencyLevel::NoSideEffects as i32);
 
-    let service = Service {
-        name: "UserService".to_string(),
-        proto_name: "UserService".to_string(),
-        package: "user".to_string(),
-        comments: Default::default(),
-        methods: vec![Method {
-            name: "GetUser".to_string(),
-            proto_name: "GetUser".to_string(),
-            comments: Default::default(),
-            input_type: ".user.GetUserRequest".to_string(),
-            output_type: ".user.GetUserResponse".to_string(),
-            input_proto_type: "GetUserRequest".to_string(),
-            output_proto_type: "GetUserResponse".to_string(),
-            options: method_options,
-            client_streaming: false,
-            server_streaming: false,
-        }],
-        options: Default::default(),
-    };
+    let buf = render_service(
+        "user",
+        "UserService",
+        vec![method(
+            "user",
+            "GetUser",
+            "GetUserRequest",
+            "GetUserResponse",
+            false,
+            false,
+            method_options,
+        )],
+        AxumConnectServiceGenerator::new().with_connect_server(true),
+    );
 
-    let mut generator = AxumConnectServiceGenerator::new().with_connect_server(true);
-    let mut buf = String::new();
-    generator.generate(service, &mut buf);
-
-    // Verify GET routing is auto-enabled for NoSideEffects unary methods
-    assert!(
-        buf.contains("get_connect"),
-        "Should auto-enable get_connect for NO_SIDE_EFFECTS unary methods.\nGenerated:\n{}",
-        buf
-    );
-    assert!(
-        buf.contains("post_connect"),
-        "Should also include post_connect for NO_SIDE_EFFECTS unary methods.\nGenerated:\n{}",
-        buf
-    );
-    // Verify both are merged together
-    // Note: quote! outputs tokens with spaces around .
-    assert!(
-        buf.contains(". merge"),
-        "Should merge get_connect and post_connect for NO_SIDE_EFFECTS unary methods.\nGenerated:\n{}",
-        buf
-    );
-    // Verify the doc comment mentions GET+POST
-    assert!(
-        buf.contains("GET+POST enabled"),
-        "Should document that GET+POST is enabled.\nGenerated:\n{}",
-        buf
-    );
+    assert!(buf.contains("get_connect"));
+    assert!(buf.contains("post_connect"));
+    assert!(buf.contains(". merge"));
+    assert!(buf.contains("GET+POST enabled"));
 }
 
 #[test]
 fn test_connect_codegen_enforces_exact_handler_signatures() {
-    let service = Service {
-        name: "HelloWorldService".to_string(),
-        proto_name: "HelloWorldService".to_string(),
-        package: "hello".to_string(),
-        comments: Default::default(),
-        methods: vec![
-            Method {
-                name: "SayHello".to_string(),
-                proto_name: "SayHello".to_string(),
-                comments: Default::default(),
-                input_type: ".hello.HelloRequest".to_string(),
-                output_type: ".hello.HelloResponse".to_string(),
-                input_proto_type: "HelloRequest".to_string(),
-                output_proto_type: "HelloResponse".to_string(),
-                options: Default::default(),
-                client_streaming: false,
-                server_streaming: false,
-            },
-            Method {
-                name: "SayHelloStream".to_string(),
-                proto_name: "SayHelloStream".to_string(),
-                comments: Default::default(),
-                input_type: ".hello.HelloRequest".to_string(),
-                output_type: ".hello.HelloResponse".to_string(),
-                input_proto_type: "HelloRequest".to_string(),
-                output_proto_type: "HelloResponse".to_string(),
-                options: Default::default(),
-                client_streaming: false,
-                server_streaming: true,
-            },
-            Method {
-                name: "UploadHello".to_string(),
-                proto_name: "UploadHello".to_string(),
-                comments: Default::default(),
-                input_type: ".hello.HelloRequest".to_string(),
-                output_type: ".hello.HelloResponse".to_string(),
-                input_proto_type: "HelloRequest".to_string(),
-                output_proto_type: "HelloResponse".to_string(),
-                options: Default::default(),
-                client_streaming: true,
-                server_streaming: false,
-            },
-            Method {
-                name: "ChatHello".to_string(),
-                proto_name: "ChatHello".to_string(),
-                comments: Default::default(),
-                input_type: ".hello.HelloRequest".to_string(),
-                output_type: ".hello.HelloResponse".to_string(),
-                input_proto_type: "HelloRequest".to_string(),
-                output_proto_type: "HelloResponse".to_string(),
-                options: Default::default(),
-                client_streaming: true,
-                server_streaming: true,
-            },
+    let buf = render_service(
+        "hello",
+        "HelloWorldService",
+        vec![
+            method(
+                "hello",
+                "SayHello",
+                "HelloRequest",
+                "HelloResponse",
+                false,
+                false,
+                Default::default(),
+            ),
+            method(
+                "hello",
+                "SayHelloStream",
+                "HelloRequest",
+                "HelloResponse",
+                false,
+                true,
+                Default::default(),
+            ),
+            method(
+                "hello",
+                "UploadHello",
+                "HelloRequest",
+                "HelloResponse",
+                true,
+                false,
+                Default::default(),
+            ),
+            method(
+                "hello",
+                "ChatHello",
+                "HelloRequest",
+                "HelloResponse",
+                true,
+                true,
+                Default::default(),
+            ),
         ],
-        options: Default::default(),
-    };
-
-    let mut generator = AxumConnectServiceGenerator::new().with_connect_server(true);
-    let mut buf = String::new();
-    generator.generate(service, &mut buf);
+        AxumConnectServiceGenerator::new().with_connect_server(true),
+    );
 
     assert!(
         !buf.contains("UnaryConnectHandler")
             && !buf.contains("ServerStreamConnectHandler")
             && !buf.contains("ClientStreamConnectHandler")
             && !buf.contains("BidiStreamConnectHandler"),
-        "Generated code should not rely on RPC-specific marker traits.\nGenerated:\n{}",
-        buf
     );
     assert!(
         buf.matches(
-            "ConnectHandlerWrapper < F , . hello . HelloRequest , . hello . HelloResponse , >"
+            "ConnectHandlerWrapper < F , super :: HelloRequest , super :: HelloResponse , >"
         )
         .count()
             >= 4,
-        "Each RPC method should constrain the typed ConnectHandlerWrapper with the proto request and response types.\nGenerated:\n{}",
+        "Generated:\n{}",
         buf
     );
+}
+
+#[test]
+fn test_keyword_method_names_generate_valid_rust_identifiers() {
+    let buf = render_service(
+        "keyword",
+        "Mover",
+        vec![method(
+            "keyword",
+            "Move",
+            "Empty",
+            "Empty",
+            false,
+            false,
+            Default::default(),
+        )],
+        AxumConnectServiceGenerator::new()
+            .with_connect_server(true)
+            .with_connect_client(true)
+            .with_tonic(true),
+    );
+
+    assert!(buf.contains("pub fn r#move"));
+    assert!(buf.contains("pub async fn r#move"));
+    assert!(buf.contains("move_interceptors"));
+    assert!(!buf.contains("r#move_interceptors"));
+    assert!(buf.contains("pub const MOVE"));
+}
+
+#[test]
+fn test_keyword_method_names_append_to_existing_output_file() {
+    let message_types = vec![DescriptorProto {
+        name: Some("Empty".to_string()),
+        ..Default::default()
+    }];
+    let schema = SchemaSet::from_file_descriptor_set(&FileDescriptorSet {
+        file: vec![FileDescriptorProto {
+            name: Some("keyword.proto".to_string()),
+            package: Some("keyword".to_string()),
+            message_type: message_types,
+            service: vec![ServiceDescriptorProto {
+                name: Some("Mover".to_string()),
+                method: vec![method(
+                    "keyword",
+                    "Move",
+                    "Empty",
+                    "Empty",
+                    false,
+                    false,
+                    Default::default(),
+                )],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+    });
+
+    let out_dir = tempdir().expect("temp dir");
+    let keyword_file = out_dir.path().join("keyword.rs");
+    fs::write(&keyword_file, "// prost output\n").expect("write placeholder prost output");
+
+    AxumConnectServiceGenerator::new()
+        .with_connect_server(true)
+        .with_connect_client(true)
+        .with_tonic(true)
+        .append_to_out_dir(&schema, out_dir.path().to_str().expect("utf-8 temp path"))
+        .expect("append generated code");
+
+    let generated = fs::read_to_string(&keyword_file).expect("read appended output");
+    assert!(generated.starts_with("// prost output\n"));
+    assert!(generated.contains("// --- Connect service/client code ---"));
+    assert!(generated.contains("pub fn r#move"));
+    assert!(generated.contains("pub async fn r#move"));
+    assert!(generated.contains("pub const MOVE"));
 }

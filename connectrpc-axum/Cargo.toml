@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 description = "axum style and axum compatible Connect Protocol server"
 readme = "../README.md"
-repository = "https://github.com/washanhanzi/connectrpc-axum"
+repository.workspace = true
 license = "MIT"
 
 [dependencies]

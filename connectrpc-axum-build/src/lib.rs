@@ -1,4 +1,6 @@
+use crate::merge::append_generated_file;
 use r#gen::AxumConnectServiceGenerator;
+use schema::SchemaSet;
 use std::io::Result;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
@@ -6,6 +8,8 @@ use std::path::{Path, PathBuf};
 /// Code generation module for service builders.
 mod r#gen;
 mod include_file;
+mod merge;
+mod schema;
 
 /// Source of proto files - either auto-discovered from a directory or explicit file list.
 enum ProtoSource {
@@ -703,27 +707,30 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
         // Always generate descriptor set for pbjson-build (internal config takes precedence)
         config.file_descriptor_set_path(&descriptor_path);
 
-        // Generate connect (and tonic-compatible wrapper builders if requested) in first pass
-        if generate_handlers || connect_client {
-            let service_generator = AxumConnectServiceGenerator::new()
-                .with_connect_server(generate_handlers)
-                .with_tonic(grpc)
-                .with_connect_client(connect_client);
-            config.service_generator(Box::new(service_generator));
-        }
-
         let include_refs: Vec<&Path> = includes.iter().map(|p| p.as_path()).collect();
         config.compile_protos(&proto_files, &include_refs)?;
 
+        let descriptor_bytes = fs::read(&descriptor_path)
+            .map_err(|e| std::io::Error::other(format!("read descriptor: {e}")))?;
+
+        let schema = SchemaSet::from_descriptor_bytes(&descriptor_bytes)?;
+
+        let connect_generator = AxumConnectServiceGenerator::new()
+            .with_connect_server(generate_handlers)
+            .with_tonic(grpc)
+            .with_connect_client(connect_client);
+
+        connect_generator.append_to_out_dir(&schema, &out_dir)?;
+
         // -------- Pass 1.5: pbjson serde implementations (always) --------
-        Self::generate_pbjson(&out_dir, &descriptor_path, self.pbjson_config.as_ref())?;
+        Self::generate_pbjson(&out_dir, &descriptor_bytes, self.pbjson_config.as_ref())?;
 
         // -------- Pass 2: tonic server-only (feature + user requested) --------
         #[cfg(feature = "tonic")]
         if grpc {
             Self::generate_tonic_server(
                 &out_dir,
-                &descriptor_path,
+                &schema,
                 &proto_files,
                 &includes,
                 self.tonic_config.as_ref(),
@@ -735,7 +742,7 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
         if grpc_client {
             Self::generate_tonic_client(
                 &out_dir,
-                &descriptor_path,
+                &schema,
                 &proto_files,
                 &includes,
                 self.tonic_client_config.as_ref(),
@@ -775,13 +782,10 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
 
     fn generate_pbjson(
         out_dir: &str,
-        descriptor_path: &str,
+        descriptor_bytes: &[u8],
         pbjson_config: Option<&Box<dyn Fn(&mut pbjson_build::Builder)>>,
     ) -> Result<()> {
         use std::fs;
-
-        let descriptor_bytes = fs::read(descriptor_path)
-            .map_err(|e| std::io::Error::other(format!("read descriptor: {e}")))?;
 
         let mut pbjson_builder = pbjson_build::Builder::new();
         pbjson_builder.out_dir(out_dir);
@@ -807,11 +811,11 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
                 let main_file = format!("{}/{}.rs", out_dir, base_name);
 
                 if std::path::Path::new(&main_file).exists() {
-                    // Append serde implementations to the main file
-                    let mut content = fs::read_to_string(&main_file)?;
-                    content.push_str("\n// --- pbjson serde implementations ---\n");
-                    content.push_str(&fs::read_to_string(&path)?);
-                    fs::write(&main_file, content)?;
+                    append_generated_file(
+                        std::path::Path::new(&main_file),
+                        "// --- pbjson serde implementations ---",
+                        &path,
+                    )?;
 
                     // Remove the separate .serde.rs file
                     let _ = fs::remove_file(&path);
@@ -825,22 +829,15 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
     #[cfg(feature = "tonic")]
     fn generate_tonic_server(
         out_dir: &str,
-        descriptor_path: &str,
+        schema: &SchemaSet,
         proto_files: &[PathBuf],
         includes: &[PathBuf],
         tonic_config: Option<
             &Box<dyn Fn(tonic_prost_build::Builder) -> tonic_prost_build::Builder>,
         >,
     ) -> Result<()> {
-        use prost::Message;
         use std::fs;
-
-        let bytes = fs::read(descriptor_path)
-            .map_err(|e| std::io::Error::other(format!("read descriptor: {e}")))?;
-        let fds = prost_types::FileDescriptorSet::decode(bytes.as_slice())
-            .map_err(|e| std::io::Error::other(format!("decode descriptor: {e}")))?;
-
-        let type_refs = collect_type_refs(&fds);
+        let type_refs = schema.prost().type_path_mappings();
 
         // Generate tonic server stubs referencing existing types
         let temp_out_dir = format!("{}/tonic_server", out_dir);
@@ -861,7 +858,7 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
 
         // Add extern_path mappings for generated types
         for tr in &type_refs {
-            builder = builder.extern_path(&tr.full, &tr.rust);
+            builder = builder.extern_path(&tr.proto_path, &tr.rust_path);
         }
         let proto_paths: Vec<&str> = proto_files.iter().map(|p| p.to_str().unwrap()).collect();
         let include_strs: Vec<&str> = includes.iter().map(|p| p.to_str().unwrap()).collect();
@@ -887,13 +884,11 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
                     continue;
                 }
 
-                // Append tonic server code to first-pass file
-                let mut content = fs::read_to_string(&first_pass_file)?;
-                content.push_str(
-                    "\n// --- Tonic gRPC server stubs (extern_path reused messages) ---\n",
-                );
-                content.push_str(&fs::read_to_string(&tonic_file)?);
-                fs::write(&first_pass_file, content)?;
+                append_generated_file(
+                    std::path::Path::new(&first_pass_file),
+                    "// --- Tonic gRPC server stubs (extern_path reused messages) ---",
+                    &tonic_file,
+                )?;
             }
         }
 
@@ -906,22 +901,15 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
     #[cfg(feature = "tonic-client")]
     fn generate_tonic_client(
         out_dir: &str,
-        descriptor_path: &str,
+        schema: &SchemaSet,
         proto_files: &[PathBuf],
         includes: &[PathBuf],
         tonic_client_config: Option<
             &Box<dyn Fn(tonic_prost_build::Builder) -> tonic_prost_build::Builder>,
         >,
     ) -> Result<()> {
-        use prost::Message;
         use std::fs;
-
-        let bytes = fs::read(descriptor_path)
-            .map_err(|e| std::io::Error::other(format!("read descriptor: {e}")))?;
-        let fds = prost_types::FileDescriptorSet::decode(bytes.as_slice())
-            .map_err(|e| std::io::Error::other(format!("decode descriptor: {e}")))?;
-
-        let type_refs = collect_type_refs(&fds);
+        let type_refs = schema.prost().type_path_mappings();
 
         // Generate tonic client stubs referencing existing types
         let temp_out_dir = format!("{}/tonic_client", out_dir);
@@ -942,7 +930,7 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
 
         // Add extern_path mappings for generated types
         for tr in &type_refs {
-            builder = builder.extern_path(&tr.full, &tr.rust);
+            builder = builder.extern_path(&tr.proto_path, &tr.rust_path);
         }
         let proto_paths: Vec<&str> = proto_files.iter().map(|p| p.to_str().unwrap()).collect();
         let include_strs: Vec<&str> = includes.iter().map(|p| p.to_str().unwrap()).collect();
@@ -968,13 +956,11 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
                     continue;
                 }
 
-                // Append tonic client code to first-pass file
-                let mut content = fs::read_to_string(&first_pass_file)?;
-                content.push_str(
-                    "\n// --- Tonic gRPC client stubs (extern_path reused messages) ---\n",
-                );
-                content.push_str(&fs::read_to_string(&tonic_file)?);
-                fs::write(&first_pass_file, content)?;
+                append_generated_file(
+                    std::path::Path::new(&first_pass_file),
+                    "// --- Tonic gRPC client stubs (extern_path reused messages) ---",
+                    &tonic_file,
+                )?;
             }
         }
 
@@ -982,139 +968,6 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
         let _ = fs::remove_dir_all(&temp_out_dir);
 
         Ok(())
-    }
-}
-#[cfg(any(feature = "tonic", feature = "tonic-client"))]
-#[derive(Debug)]
-struct TypeRef {
-    full: String,
-    rust: String,
-}
-
-#[cfg(any(feature = "tonic", feature = "tonic-client"))]
-fn collect_type_refs(fds: &prost_types::FileDescriptorSet) -> Vec<TypeRef> {
-    let mut out = Vec::new();
-    for file in &fds.file {
-        let pkg = file.package.clone().unwrap_or_default();
-        // Process all files, including those without package declarations
-        for msg in &file.message_type {
-            recurse_message(&pkg, msg, &[], &mut out);
-        }
-        for en in &file.enum_type {
-            recurse_enum(&pkg, en, &[], &mut out);
-        }
-    }
-    out
-}
-
-#[cfg(any(feature = "tonic", feature = "tonic-client"))]
-fn recurse_message(
-    pkg: &str,
-    msg: &prost_types::DescriptorProto,
-    parents: &[String],
-    out: &mut Vec<TypeRef>,
-) {
-    let name = msg.name.as_deref().unwrap_or("").to_string();
-    if !name.is_empty() {
-        // Generate protobuf fully-qualified name, handling empty packages
-        let full_proto = if pkg.is_empty() {
-            // No package: .TypeName or .Parent.TypeName
-            format!(
-                ".{}{}",
-                if parents.is_empty() {
-                    String::new()
-                } else {
-                    format!("{}.", parents.join("."))
-                },
-                name
-            )
-        } else {
-            // Has package: .pkg.TypeName or .pkg.Parent.TypeName
-            format!(
-                ".{}.{}{}",
-                pkg,
-                if parents.is_empty() {
-                    String::new()
-                } else {
-                    format!("{}.", parents.join("."))
-                },
-                name
-            )
-        };
-        // Prost flattens nested types by prefixing parent names with underscores; we mimic by joining with '_' for nested mapping.
-        let rust_ident = if parents.is_empty() {
-            name.clone()
-        } else {
-            format!("{}_{}", parents.join("_"), name)
-        };
-        // Don't use crate:: or super:: prefix because tonic will add `super::` when generating
-        // code inside the service module. Since the types are at the file root and the trait
-        // is inside a nested module (e.g., hello_world_service_server), tonic will correctly
-        // reference them as `super::TypeName` from inside the module.
-        out.push(TypeRef {
-            full: full_proto,
-            rust: rust_ident,
-        });
-    }
-    let mut new_parents = parents.to_vec();
-    if !name.is_empty() {
-        new_parents.push(name.clone());
-    }
-    for nested in &msg.nested_type {
-        recurse_message(pkg, nested, &new_parents, out);
-    }
-    for en in &msg.enum_type {
-        recurse_enum(pkg, en, &new_parents, out);
-    }
-}
-
-#[cfg(any(feature = "tonic", feature = "tonic-client"))]
-fn recurse_enum(
-    pkg: &str,
-    en: &prost_types::EnumDescriptorProto,
-    parents: &[String],
-    out: &mut Vec<TypeRef>,
-) {
-    let name = en.name.as_deref().unwrap_or("").to_string();
-    if !name.is_empty() {
-        // Generate protobuf fully-qualified name, handling empty packages
-        let full_proto = if pkg.is_empty() {
-            // No package: .TypeName or .Parent.TypeName
-            format!(
-                ".{}{}",
-                if parents.is_empty() {
-                    String::new()
-                } else {
-                    format!("{}.", parents.join("."))
-                },
-                name
-            )
-        } else {
-            // Has package: .pkg.TypeName or .pkg.Parent.TypeName
-            format!(
-                ".{}.{}{}",
-                pkg,
-                if parents.is_empty() {
-                    String::new()
-                } else {
-                    format!("{}.", parents.join("."))
-                },
-                name
-            )
-        };
-        let rust_ident = if parents.is_empty() {
-            name.clone()
-        } else {
-            format!("{}_{}", parents.join("_"), name)
-        };
-        // Don't use crate:: or super:: prefix because tonic will add `super::` when generating
-        // code inside the service module. Since the types are at the file root and the trait
-        // is inside a nested module (e.g., hello_world_service_server), tonic will correctly
-        // reference them as `super::TypeName` from inside the module.
-        out.push(TypeRef {
-            full: full_proto,
-            rust: rust_ident,
-        });
     }
 }
 

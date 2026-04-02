@@ -197,11 +197,14 @@ This allows generated code to work with user-provided trait implementations with
 
 Code generation uses staged passes to avoid type duplication while keeping serde and tonic output aligned:
 
-**Pass 1: Prost + Connect**
+**Pass 1: Prost + Schema + Connect**
 ```
 proto files → prost_build → Message types (Rust structs)
-                          → Connect service builders
                           → File descriptor set
+
+File descriptor set → internal prost-centric schema normalization
+                    → Connect service builders
+                    → Tonic extern_path mappings
 ```
 
 **Pass 1.5: pbjson serde generation**
@@ -222,7 +225,7 @@ File descriptor set → tonic_build → Client stubs
                                   → Uses extern_path to reference Pass 1 types
 ```
 
-The key is `extern_path`: tonic passes don't regenerate message types, they reference Pass 1 output. pbjson is a separate builder, so extern mappings for pbjson must be configured separately when needed (for example with `with_pbjson_config`).
+The key is `extern_path`: tonic passes don't regenerate message types, they reference Pass 1 output using the build crate's internal prost-compatible schema resolution. pbjson is a separate builder, so extern mappings for pbjson must be configured separately when needed (for example with `with_pbjson_config`).
 
 See `CompileBuilder` in `connectrpc-axum-build` for the type-state pattern that enforces valid configurations at compile time.
 
