@@ -146,3 +146,10 @@ All scenarios should show `X/X passed` (zero failures).
 **Go dependency issues**: Run `go mod tidy` in `connectrpc-axum-test/go/`.
 
 **cargo-make not installed**: Install with `cargo install cargo-make` or run directly with `cargo run -p connectrpc-axum-test`.
+
+**Known benign log**: During `receive_max_bytes_5mb`, the Rust client may print
+`connection error: error writing a body to connection` while the suite still passes.
+This happens because the server rejects the oversized request from `Content-Length`
+before consuming the full body, so the client-side HTTP/1 task can observe a write
+failure after the response has already been returned. Treat it as informational
+unless the scenario itself fails.

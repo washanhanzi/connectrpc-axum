@@ -13,6 +13,7 @@ use std::{
 };
 use tower::{Layer, Service};
 
+use crate::context::MessageLimits;
 use crate::context::protocol::detect_protocol;
 use crate::message::error::{Code, ConnectError};
 
@@ -42,12 +43,15 @@ pub struct BridgeLayer {
     /// Maximum request body size in bytes (compressed size).
     /// `None` means unlimited.
     receive_max_bytes: Option<usize>,
+    /// Maximum size for streaming error control frames.
+    send_max_bytes: Option<usize>,
 }
 
 impl Default for BridgeLayer {
     fn default() -> Self {
         Self {
             receive_max_bytes: None,
+            send_max_bytes: None,
         }
     }
 }
@@ -66,7 +70,18 @@ impl BridgeLayer {
     ///
     /// Use `None` for unlimited (not recommended for production).
     pub fn with_receive_limit(receive_max_bytes: Option<usize>) -> Self {
-        Self { receive_max_bytes }
+        Self {
+            receive_max_bytes,
+            send_max_bytes: None,
+        }
+    }
+
+    /// Create a new BridgeLayer with the specified message limits.
+    pub fn with_limits(limits: MessageLimits) -> Self {
+        Self {
+            receive_max_bytes: limits.get_receive_max_bytes(),
+            send_max_bytes: limits.get_send_max_bytes(),
+        }
     }
 }
 
@@ -77,6 +92,7 @@ impl<S> Layer<S> for BridgeLayer {
         BridgeService {
             inner,
             receive_max_bytes: self.receive_max_bytes,
+            send_max_bytes: self.send_max_bytes,
         }
     }
 }
@@ -86,6 +102,7 @@ impl<S> Layer<S> for BridgeLayer {
 pub struct BridgeService<S> {
     inner: S,
     receive_max_bytes: Option<usize>,
+    send_max_bytes: Option<usize>,
 }
 
 impl<S> Service<Request<Body>> for BridgeService<S>
@@ -116,7 +133,10 @@ where
                             content_length, max_size
                         ),
                     );
-                    return Box::pin(async move { Ok(err.into_response_with_protocol(protocol)) });
+                    let send_max_bytes = self.send_max_bytes;
+                    return Box::pin(async move {
+                        Ok(err.into_response_with_send_limit(protocol, send_max_bytes))
+                    });
                 }
             }
         }

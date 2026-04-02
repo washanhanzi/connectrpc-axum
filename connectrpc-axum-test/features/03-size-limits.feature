@@ -62,6 +62,8 @@ Feature: connectrpc-axum-test integration behavior — size limits
     Given a SayHelloStream server with send_max_bytes set to 64
     When the client sends a request that produces a stream message exceeding 64 bytes
     Then the EndStream frame contains a resource_exhausted error
+    # The Rust server is expected to degrade oversized EndStream errors and still send them.
+    # The vendored connect-go snapshot may still drop that control frame when it exceeds 64 bytes.
 
 
   # Source refs:
@@ -116,5 +118,4 @@ Feature: connectrpc-axum-test integration behavior — size limits
     Given a SayHello server with no receive_max_bytes limit
     When the client sends a 2MB request body
     Then the response is returned successfully
-
 

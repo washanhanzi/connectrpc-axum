@@ -65,7 +65,10 @@ impl MessageLimits {
     /// Returns `ResourceExhausted` error if a response would exceed this limit.
     ///
     /// Following connect-go's behavior, the size is checked after encoding
-    /// and after compression (if compression is applied).
+    /// and after compression (if compression is applied). For Connect streaming
+    /// responses, message envelopes are checked individually, and oversized
+    /// EndStream error frames degrade by stripping error details before being
+    /// sent.
     pub fn send_max_bytes(mut self, max: usize) -> Self {
         self.send_max_bytes = Some(max);
         self

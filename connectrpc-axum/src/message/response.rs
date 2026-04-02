@@ -11,7 +11,7 @@
 //! - [`set_connect_content_encoding`]: Set Connect-Content-Encoding header
 use crate::context::{CompressionConfig, CompressionEncoding, ConnectContext};
 use crate::message::error::{
-    Code, ConnectError, build_end_stream_frame, internal_error_end_stream_frame,
+    Code, ConnectError, build_end_stream_frame_with_limit, internal_error_end_stream_frame,
     internal_error_response, internal_error_streaming_response,
 };
 use crate::message::request::envelope_flags;
@@ -157,7 +157,7 @@ where
             if body.len() > max {
                 let msg = format!("message size {} exceeds sendMaxBytes {}", body.len(), max);
                 let err = ConnectError::new(crate::message::error::Code::ResourceExhausted, msg);
-                return err.into_response_with_protocol(ctx.protocol);
+                return err.into_response_with_context(ctx);
             }
         }
 
@@ -219,7 +219,7 @@ where
                 };
                 let err = ConnectError::new(crate::message::error::Code::ResourceExhausted, msg);
                 // For streaming protocols, errors are returned as EndStream frames
-                return err.into_response_with_protocol(ctx.protocol);
+                return err.into_response_with_context(ctx);
             }
         }
 
@@ -227,7 +227,8 @@ where
         let message_frame = wrap_envelope(&data, compressed);
 
         // 5. Build EndStream frame
-        let end_stream_frame = build_end_stream_frame(None, None);
+        let end_stream_frame =
+            build_end_stream_frame_with_limit(None, None, ctx.limits.get_send_max_bytes());
 
         // 6. Combine frames
         let mut body = message_frame;
@@ -346,11 +347,6 @@ where
                         };
 
                     // 3. Check send size limit (following connect-go behavior)
-                    eprintln!(
-                        "[DEBUG] Streaming message: size={}, send_max_bytes={:?}",
-                        data.len(),
-                        send_max_bytes
-                    );
                     if let Some(max) = send_max_bytes {
                         if data.len() > max {
                             let msg = if compressed {
@@ -363,7 +359,8 @@ where
                                 format!("message size {} exceeds sendMaxBytes {}", data.len(), max)
                             };
                             let err = ConnectError::new(Code::ResourceExhausted, msg);
-                            let frame = build_end_stream_frame(Some(&err), None);
+                            let frame =
+                                build_end_stream_frame_with_limit(Some(&err), None, send_max_bytes);
                             return (Bytes::from(frame), true);
                         }
                     }
@@ -374,7 +371,7 @@ where
                 }
                 Err(err) => {
                     // Send Error EndStreamResponse (includes error metadata in the frame)
-                    let frame = build_end_stream_frame(Some(&err), None);
+                    let frame = build_end_stream_frame_with_limit(Some(&err), None, send_max_bytes);
                     (Bytes::from(frame), true)
                 }
             })
@@ -396,7 +393,11 @@ where
                     if error_sent_clone.load(Ordering::SeqCst) {
                         None
                     } else {
-                        Some(Bytes::from(build_end_stream_frame(None, None)))
+                        Some(Bytes::from(build_end_stream_frame_with_limit(
+                            None,
+                            None,
+                            send_max_bytes,
+                        )))
                     }
                 })
                 .filter_map(|x| async { x }),
@@ -460,17 +461,22 @@ impl ResponsePipeline {
         T: Message + Serialize,
     {
         // 1. Encode based on protocol
-        let body: Bytes = if ctx.protocol.is_proto() {
-            Bytes::from(encode_proto(message))
-        } else {
-            Bytes::from(encode_json(message).map_err(|e| ContextError::new(ctx.protocol, e))?)
-        };
+        let body: Bytes =
+            if ctx.protocol.is_proto() {
+                Bytes::from(encode_proto(message))
+            } else {
+                Bytes::from(encode_json(message).map_err(|e| {
+                    ContextError::new(ctx.protocol, e, ctx.limits.get_send_max_bytes())
+                })?)
+            };
 
         // 2. Build HTTP response (compression handled by Tower's CompressionLayer)
         Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, ctx.protocol.response_content_type())
             .body(Body::from(body))
-            .map_err(|e| ContextError::internal(ctx.protocol, e.to_string()))
+            .map_err(|e| {
+                ContextError::internal(ctx.protocol, ctx.limits.get_send_max_bytes(), e.to_string())
+            })
     }
 }

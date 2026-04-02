@@ -570,7 +570,7 @@ where
 
             match result {
                 Ok(response) => response.into_response_with_context(&ctx),
-                Err(err) => err.into_response_with_protocol(ctx.protocol),
+                Err(err) => err.into_response_with_context(&ctx),
             }
         })
     }
@@ -604,7 +604,7 @@ macro_rules! impl_handler_for_unary_with_extractors {
                         #[allow(non_snake_case)]
                         let $A = match $A::from_request_parts(&mut parts, &state).await {
                             Ok(v) => v,
-                            Err(e) => return handle_extractor_rejection(e, ctx.protocol),
+                            Err(e) => return handle_extractor_rejection(e, &ctx),
                         };
                     )+
 
@@ -617,7 +617,7 @@ macro_rules! impl_handler_for_unary_with_extractors {
 
                     match (self.0)($($A,)+ connect_req).await {
                         Ok(resp) => resp.into_response_with_context(&ctx),
-                        Err(e) => e.into_response_with_protocol(ctx.protocol),
+                        Err(e) => e.into_response_with_context(&ctx),
                     }
                 })
             }
@@ -660,10 +660,7 @@ where
 
             match result {
                 Ok(response) => response.into_response_with_context(&ctx),
-                Err(err) => {
-                    let use_proto = ctx.protocol.is_proto();
-                    err.into_streaming_response(use_proto)
-                }
+                Err(err) => err.into_response_with_context(&ctx),
             }
         })
     }
@@ -698,7 +695,7 @@ macro_rules! impl_handler_for_server_stream_with_extractors {
                         #[allow(non_snake_case)]
                         let $A = match $A::from_request_parts(&mut parts, &state).await {
                             Ok(v) => v,
-                            Err(e) => return handle_extractor_rejection(e, ctx.protocol),
+                            Err(e) => return handle_extractor_rejection(e, &ctx),
                         };
                     )+
 
@@ -711,10 +708,7 @@ macro_rules! impl_handler_for_server_stream_with_extractors {
 
                     match (self.0)($($A,)+ connect_req).await {
                         Ok(resp) => resp.into_response_with_context(&ctx),
-                        Err(e) => {
-                            let use_proto = ctx.protocol.is_proto();
-                            e.into_streaming_response(use_proto)
-                        }
+                        Err(e) => e.into_response_with_context(&ctx),
                     }
                 })
             }
@@ -761,10 +755,7 @@ where
 
             match result {
                 Ok(response) => response.into_streaming_response_with_context(&ctx),
-                Err(err) => {
-                    let use_proto = ctx.protocol.is_proto();
-                    err.into_streaming_response(use_proto)
-                }
+                Err(err) => err.into_response_with_context(&ctx),
             }
         })
     }
@@ -803,7 +794,7 @@ macro_rules! impl_handler_for_client_stream_with_extractors {
                         #[allow(non_snake_case)]
                         let $A = match $A::from_request_parts(&mut parts, &state).await {
                             Ok(v) => v,
-                            Err(e) => return handle_extractor_rejection(e, ctx.protocol),
+                            Err(e) => return handle_extractor_rejection(e, &ctx),
                         };
                     )+
 
@@ -816,10 +807,7 @@ macro_rules! impl_handler_for_client_stream_with_extractors {
 
                     match (self.0)($($A,)+ streaming_req).await {
                         Ok(resp) => resp.into_streaming_response_with_context(&ctx),
-                        Err(e) => {
-                            let use_proto = ctx.protocol.is_proto();
-                            e.into_streaming_response(use_proto)
-                        }
+                        Err(e) => e.into_response_with_context(&ctx),
                     }
                 })
             }
@@ -867,10 +855,7 @@ where
 
             match result {
                 Ok(response) => response.into_response_with_context(&ctx),
-                Err(err) => {
-                    let use_proto = ctx.protocol.is_proto();
-                    err.into_streaming_response(use_proto)
-                }
+                Err(err) => err.into_response_with_context(&ctx),
             }
         })
     }
@@ -910,7 +895,7 @@ macro_rules! impl_handler_for_bidi_stream_with_extractors {
                         #[allow(non_snake_case)]
                         let $A = match $A::from_request_parts(&mut parts, &state).await {
                             Ok(v) => v,
-                            Err(e) => return handle_extractor_rejection(e, ctx.protocol),
+                            Err(e) => return handle_extractor_rejection(e, &ctx),
                         };
                     )+
 
@@ -923,10 +908,7 @@ macro_rules! impl_handler_for_bidi_stream_with_extractors {
 
                     match (self.0)($($A,)+ streaming_req).await {
                         Ok(resp) => resp.into_response_with_context(&ctx),
-                        Err(e) => {
-                            let use_proto = ctx.protocol.is_proto();
-                            e.into_streaming_response(use_proto)
-                        }
+                        Err(e) => e.into_response_with_context(&ctx),
                     }
                 })
             }

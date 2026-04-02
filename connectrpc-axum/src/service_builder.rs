@@ -283,7 +283,9 @@ where
     /// the compressed size of each message envelope.
     ///
     /// When a response would exceed this limit, a `ResourceExhausted` error
-    /// is returned to the client, following connect-go's behavior.
+    /// is returned to the client, following connect-go's behavior. Streaming
+    /// EndStream error frames degrade by stripping details before being sent if
+    /// the full control frame would exceed the limit.
     ///
     /// By default, no limit is applied.
     ///
@@ -701,11 +703,7 @@ fn build_connect_and_axum_router<S>(
 where
     S: Clone + Send + Sync + 'static,
 {
-    let receive_max_bytes = layers
-        .limits
-        .as_ref()
-        .and_then(|l| l.get_receive_max_bytes());
-    let bridge_layer = BridgeLayer::with_receive_limit(receive_max_bytes);
+    let bridge_layer = BridgeLayer::with_limits(layers.limits.unwrap_or_default());
 
     let mut router = connect_router.layer(layers.connect_layer);
 

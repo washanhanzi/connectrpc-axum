@@ -44,10 +44,16 @@ pub struct CaseResult {
     pub error: Option<String>,
 }
 
-pub async fn run_streaming_send_max_bytes_tests(sock: &TestSocket) -> Vec<CaseResult> {
+pub async fn run_streaming_send_max_bytes_tests(
+    sock: &TestSocket,
+    allow_empty_end_stream_error: bool,
+) -> Vec<CaseResult> {
     let mut results = Vec::new();
     for tc in TEST_CASES {
-        let err = run_one(sock, tc).await.err().map(|e| e.to_string());
+        let err = run_one(sock, tc, allow_empty_end_stream_error)
+            .await
+            .err()
+            .map(|e| e.to_string());
         results.push(CaseResult {
             name: tc.name,
             error: err,
@@ -56,7 +62,11 @@ pub async fn run_streaming_send_max_bytes_tests(sock: &TestSocket) -> Vec<CaseRe
     results
 }
 
-async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
+async fn run_one(
+    sock: &TestSocket,
+    tc: &TestCase,
+    allow_empty_end_stream_error: bool,
+) -> anyhow::Result<()> {
     let stream = sock.connect().await?;
     let io = TokioIo::new(stream);
 
@@ -132,11 +142,9 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
             }
         }
     } else {
-        // Should have a resource_exhausted error.
-        // Rust server: EndStream frame with resource_exhausted error (EndStream is exempt from send_max_bytes).
-        // Go server: EndStream frame may be absent because connect-go applies sendMaxBytes to
-        // EndStream frames too, causing the error EndStream (~90 bytes) to exceed the 64-byte limit.
-        // In that case, the body is empty (no data messages, no EndStream).
+        // Should have a resource_exhausted error. The Rust server now always sends
+        // an EndStream frame, but the vendored connect-go snapshot may still drop
+        // it when the control frame exceeds sendMaxBytes.
         if let Some(end_stream) = &end_stream_error {
             let error_obj = end_stream.get("error").ok_or_else(|| {
                 anyhow::anyhow!("expected error field in EndStream, got: {end_stream}")
@@ -156,8 +164,9 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
                 "expected resource_exhausted error, got {} data messages and no EndStream",
                 messages.len()
             );
+        } else if !allow_empty_end_stream_error {
+            anyhow::bail!("expected resource_exhausted EndStream frame, got empty body");
         }
-        // else: empty body (no messages, no EndStream) — acceptable for Go server
     }
 
     Ok(())

@@ -12,7 +12,7 @@ use axum::{
 use serde::{Serialize, Serializer};
 use std::collections::HashMap;
 
-use crate::context::RequestProtocol;
+use crate::context::{ConnectContext, RequestProtocol};
 
 // Re-export core types
 pub use connectrpc_axum_core::{Code, ErrorDetail, Status};
@@ -197,15 +197,39 @@ impl ConnectError {
 }
 
 impl ConnectError {
+    fn without_details(&self) -> Self {
+        let mut err = match self.message() {
+            Some(message) => Self::new(self.code(), message.to_owned()),
+            None => Self::from_code(self.code()),
+        };
+        err.meta = self.meta.clone();
+        err
+    }
+
     /// Convert this error into an HTTP response using the specified protocol.
     ///
     /// This is the primary method used by handler wrappers to convert errors
     /// to responses with the correct encoding based on the request protocol.
     pub(crate) fn into_response_with_protocol(self, protocol: RequestProtocol) -> Response {
+        self.into_response_with_send_limit(protocol, None)
+    }
+
+    /// Convert this error into an HTTP response using the request context.
+    pub(crate) fn into_response_with_context(self, ctx: &ConnectContext) -> Response {
+        self.into_response_with_send_limit(ctx.protocol, ctx.limits.get_send_max_bytes())
+    }
+
+    /// Convert this error into an HTTP response using the specified protocol
+    /// and streaming send limit.
+    pub(crate) fn into_response_with_send_limit(
+        self,
+        protocol: RequestProtocol,
+        send_max_bytes: Option<usize>,
+    ) -> Response {
         // For streaming protocols, errors must be returned as EndStream frames
         // with HTTP 200, not as HTTP error status codes
         if protocol.is_streaming() {
-            return self.into_streaming_error_response(protocol);
+            return self.into_streaming_error_response(protocol, send_max_bytes);
         }
 
         // For unary protocols, use HTTP status codes
@@ -274,27 +298,44 @@ impl ConnectError {
     /// - Use application/connect+json or application/connect+proto content-type
     /// - Deliver errors in an EndStream frame (flags = 0x02)
     pub fn into_streaming_response(self, use_proto: bool) -> Response {
+        self.into_streaming_response_with_limit(use_proto, None)
+    }
+
+    /// Create a streaming error response while respecting the configured send limit.
+    pub(crate) fn into_streaming_response_with_limit(
+        self,
+        use_proto: bool,
+        send_max_bytes: Option<usize>,
+    ) -> Response {
         let content_type = if use_proto {
             "application/connect+proto"
         } else {
             "application/connect+json"
         };
-        self.into_streaming_error_response_with_content_type(content_type)
+        self.into_streaming_error_response_with_content_type(content_type, send_max_bytes)
     }
 
     /// Internal helper for creating streaming error responses.
-    fn into_streaming_error_response(self, protocol: RequestProtocol) -> Response {
-        self.into_streaming_error_response_with_content_type(protocol.error_content_type())
+    fn into_streaming_error_response(
+        self,
+        protocol: RequestProtocol,
+        send_max_bytes: Option<usize>,
+    ) -> Response {
+        self.into_streaming_error_response_with_content_type(
+            protocol.error_content_type(),
+            send_max_bytes,
+        )
     }
 
     /// Create a streaming error response with the specified content-type.
     fn into_streaming_error_response_with_content_type(
         self,
         content_type: &'static str,
+        send_max_bytes: Option<usize>,
     ) -> Response {
         // Use build_end_stream_frame which properly includes error metadata in the
         // EndStream JSON payload's "metadata" field (per Connect protocol spec)
-        let frame = build_end_stream_frame(Some(&self), None);
+        let frame = build_end_stream_frame_with_limit(Some(&self), None, send_max_bytes);
 
         // Build the response with HTTP 200 and streaming content-type
         Response::builder()
@@ -559,6 +600,10 @@ pub fn build_end_stream_frame(
     error: Option<&ConnectError>,
     trailers: Option<&HeaderMap>,
 ) -> Vec<u8> {
+    build_end_stream_frame_with_limit(error, trailers, None)
+}
+
+fn build_end_stream_payload(error: Option<&ConnectError>, trailers: Option<&HeaderMap>) -> Vec<u8> {
     #[derive(Serialize)]
     struct EndStreamMessage<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -578,13 +623,40 @@ pub fn build_end_stream_frame(
     }
 
     let msg = EndStreamMessage { error, metadata };
-    let payload = serde_json::to_vec(&msg).unwrap_or_else(|_| b"{}".to_vec());
+    serde_json::to_vec(&msg).unwrap_or_else(|_| b"{}".to_vec())
+}
 
+fn wrap_end_stream_payload(payload: &[u8]) -> Vec<u8> {
     let mut frame = Vec::with_capacity(5 + payload.len());
     frame.push(envelope_flags::END_STREAM);
     frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
     frame.extend_from_slice(&payload);
     frame
+}
+
+/// Build an EndStream frame while applying the streaming send limit fallback.
+///
+/// The normal frame is attempted first. If it exceeds `send_max_bytes`, the
+/// error details are stripped and the frame is retried. If even the reduced
+/// frame is still too large, the reduced frame is sent anyway so the client
+/// still receives an error.
+pub(crate) fn build_end_stream_frame_with_limit(
+    error: Option<&ConnectError>,
+    trailers: Option<&HeaderMap>,
+    send_max_bytes: Option<usize>,
+) -> Vec<u8> {
+    let payload = build_end_stream_payload(error, trailers);
+    if send_max_bytes.is_none_or(|max| payload.len() <= max) {
+        return wrap_end_stream_payload(&payload);
+    }
+
+    let Some(error) = error else {
+        return wrap_end_stream_payload(&payload);
+    };
+
+    let reduced_error = error.without_details();
+    let reduced_payload = build_end_stream_payload(Some(&reduced_error), trailers);
+    wrap_end_stream_payload(&reduced_payload)
 }
 
 // ============================================================================
@@ -759,6 +831,43 @@ mod tests {
         let msg: serde_json::Value = serde_json::from_slice(payload).unwrap();
         assert_eq!(msg["error"]["code"], "internal");
         assert_eq!(msg["error"]["message"], "test error");
+    }
+
+    #[test]
+    fn test_build_end_stream_frame_with_limit_strips_details() {
+        let error = ConnectError::new(Code::Internal, "test error")
+            .add_detail("test.Detail", vec![0; 256])
+            .with_meta("x-request-id", "req-123");
+
+        let full = build_end_stream_frame(Some(&error), None);
+        let reduced = build_end_stream_frame(Some(&error.without_details()), None);
+        let full_payload_len = full.len() - 5;
+        let reduced_payload_len = reduced.len() - 5;
+
+        assert!(reduced_payload_len < full_payload_len);
+
+        let frame =
+            build_end_stream_frame_with_limit(Some(&error), None, Some(reduced_payload_len));
+
+        let payload = &frame[5..];
+        assert!(payload.len() <= reduced_payload_len);
+
+        let msg: serde_json::Value = serde_json::from_slice(payload).unwrap();
+        assert_eq!(msg["error"]["code"], "internal");
+        assert_eq!(msg["error"]["message"], "test error");
+        assert!(msg["error"].get("details").is_none());
+        assert_eq!(msg["metadata"]["x-request-id"][0], "req-123");
+    }
+
+    #[test]
+    fn test_build_end_stream_frame_with_limit_force_sends_reduced_frame() {
+        let error =
+            ConnectError::new(Code::Internal, "test error").add_detail("test.Detail", vec![0; 256]);
+
+        let reduced = build_end_stream_frame(Some(&error.without_details()), None);
+        let frame = build_end_stream_frame_with_limit(Some(&error), None, Some(1));
+
+        assert_eq!(frame, reduced);
     }
 
     #[test]

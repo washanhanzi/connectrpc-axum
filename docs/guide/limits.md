@@ -80,6 +80,16 @@ For streaming responses, each message is checked individually. If a message exce
 2. The oversized message triggers a `ResourceExhausted` error
 3. The stream terminates with the error
 
+If the final EndStream control frame would exceed `send_max_bytes` because it
+contains large error details, connectrpc-axum retries with a reduced EndStream
+frame that strips the details. If even that reduced frame is still too large,
+it is sent anyway so the client still receives the error code.
+
+This is a deliberate divergence from the current `connect-go` behavior discussed
+in [connectrpc/connect-go#907](https://github.com/connectrpc/connect-go/issues/907).
+connectrpc-axum prefers graceful degradation here so low `send_max_bytes` limits
+do not turn streaming errors into empty success-looking HTTP 200 responses.
+
 ::: warning
 By default, no limits are applied. For production environments, consider setting appropriate limits to protect against memory exhaustion attacks.
 :::

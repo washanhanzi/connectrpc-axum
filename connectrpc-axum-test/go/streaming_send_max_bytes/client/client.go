@@ -40,6 +40,7 @@ func main() {
 	if socketPath == "" {
 		log.Fatal("SOCKET_PATH env var is required")
 	}
+	allowEmptyEndStreamError := os.Getenv("ALLOW_EMPTY_END_STREAM_ERROR") == "1"
 
 	transport := &http.Transport{
 		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
@@ -50,7 +51,7 @@ func main() {
 
 	failures := 0
 	for _, tc := range testCases {
-		err := runTest(client, tc)
+		err := runTest(client, tc, allowEmptyEndStreamError)
 		if err != nil {
 			fmt.Printf("    FAIL  %s: %v\n", tc.name, err)
 			failures++
@@ -64,7 +65,7 @@ func main() {
 	}
 }
 
-func runTest(client *http.Client, tc testCase) error {
+func runTest(client *http.Client, tc testCase, allowEmptyEndStreamError bool) error {
 	url := "http://localhost/hello.HelloWorldService/SayHelloStream"
 
 	jsonBody := fmt.Sprintf(`{"name":"%s"}`, tc.requestName)
@@ -135,14 +136,11 @@ func runTest(client *http.Client, tc testCase) error {
 		return nil
 	}
 
-	// Expect resource_exhausted error.
-	// Rust server: EndStream frame with resource_exhausted error (EndStream is exempt from send_max_bytes).
-	// Go server: EndStream frame may be absent because connect-go applies sendMaxBytes to
-	// EndStream frames too, causing the error EndStream (~90 bytes) to exceed the 64-byte limit.
-	// In that case, the body is empty (no data messages, no EndStream).
+	// Expect resource_exhausted error. The Rust server now always sends an
+	// EndStream frame, but the vendored connect-go snapshot may still drop it
+	// when the control frame exceeds sendMaxBytes.
 	if resp.StatusCode == 200 {
-		// Empty body is acceptable (Go server behavior)
-		if len(body) == 0 {
+		if len(body) == 0 && allowEmptyEndStreamError {
 			return nil
 		}
 

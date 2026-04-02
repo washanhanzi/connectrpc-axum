@@ -217,6 +217,7 @@ where
         // 3. Extract values needed for async block before moving context
         let timeout = request_ctx.timeout;
         let protocol = request_ctx.protocol;
+        let send_max_bytes = request_ctx.limits.get_send_max_bytes();
 
         // 4. Store context in request extensions
         req.extensions_mut().insert(request_ctx);
@@ -238,7 +239,7 @@ where
                                 Code::DeadlineExceeded,
                                 "request timeout exceeded",
                             );
-                            Ok(err.into_response_with_protocol(protocol))
+                            Ok(err.into_response_with_send_limit(protocol, send_max_bytes))
                         }
                     }
                 }

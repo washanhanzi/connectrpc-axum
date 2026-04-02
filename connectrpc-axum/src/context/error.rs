@@ -12,23 +12,32 @@ use axum::response::Response;
 /// Used internally by the framework to carry protocol information
 /// alongside errors for proper JSON/Proto encoding in responses.
 #[derive(Debug)]
-pub struct ContextError(pub RequestProtocol, pub ConnectError);
+pub struct ContextError(pub RequestProtocol, pub ConnectError, pub Option<usize>);
 
 impl ContextError {
     /// Create a new response error.
-    pub fn new(protocol: RequestProtocol, err: ConnectError) -> Self {
-        Self(protocol, err)
+    pub fn new(
+        protocol: RequestProtocol,
+        err: ConnectError,
+        send_max_bytes: Option<usize>,
+    ) -> Self {
+        Self(protocol, err, send_max_bytes)
     }
 
     /// Create an internal error (hides details from client).
     ///
     /// The provided message is not exposed to clients for security.
     /// Clients receive a generic "internal error" message.
-    pub fn internal(protocol: RequestProtocol, _msg: impl Into<String>) -> Self {
+    pub fn internal(
+        protocol: RequestProtocol,
+        send_max_bytes: Option<usize>,
+        _msg: impl Into<String>,
+    ) -> Self {
         // Note: _msg could be logged here if needed
         Self(
             protocol,
             ConnectError::new(Code::Internal, "internal error"),
+            send_max_bytes,
         )
     }
 
@@ -44,7 +53,7 @@ impl ContextError {
 
     /// Convert to HTTP response with proper encoding.
     pub fn into_response(self) -> Response {
-        self.1.into_response_with_protocol(self.0)
+        self.1.into_response_with_send_limit(self.0, self.2)
     }
 
     /// Extract the underlying ConnectError.
@@ -110,6 +119,7 @@ mod tests {
         let err = ContextError::new(
             RequestProtocol::ConnectUnaryJson,
             ConnectError::new(Code::InvalidArgument, "test error"),
+            None,
         );
         assert!(matches!(err.error().code(), Code::InvalidArgument));
         assert!(matches!(err.protocol(), RequestProtocol::ConnectUnaryJson));
@@ -117,7 +127,7 @@ mod tests {
 
     #[test]
     fn test_response_error_internal() {
-        let err = ContextError::internal(RequestProtocol::ConnectUnaryJson, "secret details");
+        let err = ContextError::internal(RequestProtocol::ConnectUnaryJson, None, "secret details");
         // Internal errors hide the real message
         assert!(matches!(err.error().code(), Code::Internal));
         assert_eq!(err.error().message(), Some("internal error"));
@@ -128,6 +138,7 @@ mod tests {
         let err = ContextError::new(
             RequestProtocol::ConnectUnaryJson,
             ConnectError::new(Code::NotFound, "not found"),
+            None,
         );
         let _response = err.into_response();
     }
@@ -137,6 +148,7 @@ mod tests {
         let err = ContextError::new(
             RequestProtocol::ConnectUnaryProto,
             ConnectError::new(Code::NotFound, "not found"),
+            None,
         );
         assert_eq!(format!("{err}"), "not found");
     }

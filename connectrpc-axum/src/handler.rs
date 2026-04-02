@@ -7,10 +7,7 @@ use axum::{
 use std::{any::Any, future::Future, marker::PhantomData, pin::Pin};
 
 use crate::{
-    context::{
-        ConnectContext, RequestProtocol, validate_streaming_content_type,
-        validate_unary_content_type,
-    },
+    context::{ConnectContext, validate_streaming_content_type, validate_unary_content_type},
     message::{ConnectError, ConnectRequest, ConnectResponse, StreamBody, Streaming},
 };
 use futures::Stream;
@@ -22,14 +19,14 @@ use serde::de::DeserializeOwned;
 /// If the rejection is a `ConnectError`, it's encoded using the protocol from the request.
 /// Otherwise, the rejection is returned as-is via `IntoResponse`. This allows extractors
 /// to return non-Connect responses like HTTP redirects for authentication flows.
-pub(crate) fn handle_extractor_rejection<R>(rejection: R, protocol: RequestProtocol) -> Response
+pub(crate) fn handle_extractor_rejection<R>(rejection: R, ctx: &ConnectContext) -> Response
 where
     R: IntoResponse + Any,
 {
     let rejection_any: Box<dyn Any> = Box::new(rejection);
 
     match rejection_any.downcast::<ConnectError>() {
-        Ok(connect_err) => connect_err.into_response_with_protocol(protocol),
+        Ok(connect_err) => connect_err.into_response_with_context(ctx),
         Err(any_box) => {
             tracing::warn!(
                 "Extractor rejection is not ConnectError, returning as-is. \
@@ -42,7 +39,7 @@ where
                 .unwrap_or_else(|_| {
                     // Shouldn't happen, but fallback to internal error
                     ConnectError::new_internal("extractor rejection")
-                        .into_response_with_protocol(protocol)
+                        .into_response_with_context(ctx)
                 })
         }
     }
@@ -53,8 +50,7 @@ where
 /// Unary handlers only accept unary content-types (`application/json`, `application/proto`).
 /// Streaming content-types are rejected with `Code::Unknown`.
 fn validate_unary_protocol(ctx: &ConnectContext) -> Option<Response> {
-    validate_unary_content_type(ctx.protocol)
-        .map(|err| err.into_response_with_protocol(ctx.protocol))
+    validate_unary_content_type(ctx.protocol).map(|err| err.into_response_with_context(ctx))
 }
 
 /// Validate protocol for streaming handlers. Returns error response if invalid.
@@ -63,10 +59,7 @@ fn validate_unary_protocol(ctx: &ConnectContext) -> Option<Response> {
 /// (`application/connect+json`, `application/connect+proto`).
 /// Unary content-types are rejected with `Code::Unknown`.
 pub(crate) fn validate_streaming_protocol(ctx: &ConnectContext) -> Option<Response> {
-    validate_streaming_content_type(ctx.protocol).map(|err| {
-        let use_proto = ctx.protocol.is_proto();
-        err.into_streaming_response(use_proto)
-    })
+    validate_streaming_content_type(ctx.protocol).map(|err| err.into_response_with_context(ctx))
 }
 
 /// A wrapper that adapts ConnectHandler functions to work with Axum's Handler trait
@@ -153,7 +146,7 @@ where
             // Convert result to response using pipeline context
             match result {
                 Ok(response) => response.into_response_with_context(&ctx),
-                Err(err) => err.into_response_with_protocol(ctx.protocol),
+                Err(err) => err.into_response_with_context(&ctx),
             }
         })
     }
@@ -205,7 +198,7 @@ macro_rules! impl_handler_for_connect_handler_wrapper {
                     $(
                         let $A = match $A::from_request_parts(&mut parts, &state).await {
                             Ok(value) => value,
-                            Err(rejection) => return handle_extractor_rejection(rejection, ctx.protocol),
+                            Err(rejection) => return handle_extractor_rejection(rejection, &ctx),
                         };
                     )*
 
@@ -225,7 +218,7 @@ macro_rules! impl_handler_for_connect_handler_wrapper {
                     // Convert result to response using pipeline context
                     match result {
                         Ok(response) => response.into_response_with_context(&ctx),
-                        Err(err) => err.into_response_with_protocol(ctx.protocol),
+                        Err(err) => err.into_response_with_context(&ctx),
                     }
                 })
             }
@@ -283,7 +276,7 @@ macro_rules! impl_server_stream_handler_for_connect_handler_wrapper {
                     $(
                         let $A = match $A::from_request_parts(&mut parts, &state).await {
                             Ok(value) => value,
-                            Err(rejection) => return handle_extractor_rejection(rejection, ctx.protocol),
+                            Err(rejection) => return handle_extractor_rejection(rejection, &ctx),
                         };
                     )*
 
@@ -298,10 +291,7 @@ macro_rules! impl_server_stream_handler_for_connect_handler_wrapper {
 
                     match result {
                         Ok(response) => response.into_response_with_context(&ctx),
-                        Err(err) => {
-                            let use_proto = ctx.protocol.is_proto();
-                            err.into_streaming_response(use_proto)
-                        }
+                        Err(err) => err.into_response_with_context(&ctx),
                     }
                 })
             }
@@ -356,7 +346,7 @@ macro_rules! impl_client_stream_handler_for_connect_handler_wrapper {
                     $(
                         let $A = match $A::from_request_parts(&mut parts, &state).await {
                             Ok(value) => value,
-                            Err(rejection) => return handle_extractor_rejection(rejection, ctx.protocol),
+                            Err(rejection) => return handle_extractor_rejection(rejection, &ctx),
                         };
                     )*
 
@@ -372,10 +362,7 @@ macro_rules! impl_client_stream_handler_for_connect_handler_wrapper {
 
                     match result {
                         Ok(response) => response.into_streaming_response_with_context(&ctx),
-                        Err(err) => {
-                            let use_proto = ctx.protocol.is_proto();
-                            err.into_streaming_response(use_proto)
-                        }
+                        Err(err) => err.into_response_with_context(&ctx),
                     }
                 })
             }
@@ -431,7 +418,7 @@ macro_rules! impl_bidi_stream_handler_for_connect_handler_wrapper {
                     $(
                         let $A = match $A::from_request_parts(&mut parts, &state).await {
                             Ok(value) => value,
-                            Err(rejection) => return handle_extractor_rejection(rejection, ctx.protocol),
+                            Err(rejection) => return handle_extractor_rejection(rejection, &ctx),
                         };
                     )*
 
@@ -447,10 +434,7 @@ macro_rules! impl_bidi_stream_handler_for_connect_handler_wrapper {
 
                     match result {
                         Ok(response) => response.into_response_with_context(&ctx),
-                        Err(err) => {
-                            let use_proto = ctx.protocol.is_proto();
-                            err.into_streaming_response(use_proto)
-                        }
+                        Err(err) => err.into_response_with_context(&ctx),
                     }
                 })
             }
@@ -503,10 +487,7 @@ where
 
             match result {
                 Ok(response) => response.into_response_with_context(&ctx),
-                Err(err) => {
-                    let use_proto = ctx.protocol.is_proto();
-                    err.into_streaming_response(use_proto)
-                }
+                Err(err) => err.into_response_with_context(&ctx),
             }
         })
     }
@@ -551,10 +532,7 @@ where
             // Client streaming uses streaming framing for the response
             match result {
                 Ok(response) => response.into_streaming_response_with_context(&ctx),
-                Err(err) => {
-                    let use_proto = ctx.protocol.is_proto();
-                    err.into_streaming_response(use_proto)
-                }
+                Err(err) => err.into_response_with_context(&ctx),
             }
         })
     }
@@ -600,10 +578,7 @@ where
 
             match result {
                 Ok(response) => response.into_response_with_context(&ctx),
-                Err(err) => {
-                    let use_proto = ctx.protocol.is_proto();
-                    err.into_streaming_response(use_proto)
-                }
+                Err(err) => err.into_response_with_context(&ctx),
             }
         })
     }

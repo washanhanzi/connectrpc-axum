@@ -38,10 +38,10 @@ pub async fn run(rust_sock: &TestSocket, go_sock: &TestSocket) -> anyhow::Result
     println!("=== Streaming Send Max Bytes Integration Tests ===");
 
     let (rs_go, rs_rs, go_go, go_rs) = tokio::join!(
-        run_go_client(rust_sock, &go_client_bin),
-        client::run_streaming_send_max_bytes_tests(rust_sock),
-        run_go_client(go_sock, &go_client_bin),
-        client::run_streaming_send_max_bytes_tests(go_sock),
+        run_go_client(rust_sock, &go_client_bin, false),
+        client::run_streaming_send_max_bytes_tests(rust_sock, false),
+        run_go_client(go_sock, &go_client_bin, true),
+        client::run_streaming_send_max_bytes_tests(go_sock, true),
     );
 
     rust_server.abort();
@@ -105,9 +105,21 @@ async fn build_go_binary(go_dir: &Path, pkg: &str, name: &str) -> anyhow::Result
     Ok(out)
 }
 
-async fn run_go_client(sock: &TestSocket, go_client_bin: &Path) -> anyhow::Result<()> {
+async fn run_go_client(
+    sock: &TestSocket,
+    go_client_bin: &Path,
+    allow_empty_end_stream_error: bool,
+) -> anyhow::Result<()> {
     let status = Command::new(go_client_bin)
         .env("SOCKET_PATH", sock.go_addr())
+        .env(
+            "ALLOW_EMPTY_END_STREAM_ERROR",
+            if allow_empty_end_stream_error {
+                "1"
+            } else {
+                "0"
+            },
+        )
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()

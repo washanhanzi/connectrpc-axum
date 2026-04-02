@@ -131,8 +131,10 @@ impl ConnectContext {
 
         // Parse envelope compression for POST requests (streaming only, unary returns None)
         let compression = if *req.method() == Method::POST {
-            let envelope = parse_envelope_compression(req, protocol.is_streaming())
-                .map_err(|err| ContextError::new(protocol, err))?;
+            let envelope =
+                parse_envelope_compression(req, protocol.is_streaming()).map_err(|err| {
+                    ContextError::new(protocol, err, config.limits.get_send_max_bytes())
+                })?;
             CompressionContext {
                 envelope,
                 config: config.compression,
@@ -170,7 +172,11 @@ impl ConnectContext {
         // GET request validation
         if *req.method() == Method::GET {
             if let Some(err) = validate_get_query_params(req, self.require_protocol_header) {
-                return Err(ContextError::new(self.protocol, err));
+                return Err(ContextError::new(
+                    self.protocol,
+                    err,
+                    self.limits.get_send_max_bytes(),
+                ));
             }
             return Ok(());
         }
@@ -182,12 +188,20 @@ impl ConnectContext {
 
         // Check content-type is known
         if let Some(err) = validate_content_type(self.protocol) {
-            return Err(ContextError::new(self.protocol, err));
+            return Err(ContextError::new(
+                self.protocol,
+                err,
+                self.limits.get_send_max_bytes(),
+            ));
         }
 
         // Check protocol version header
         if let Some(err) = validate_protocol_version(req, self.require_protocol_header) {
-            return Err(ContextError::new(self.protocol, err));
+            return Err(ContextError::new(
+                self.protocol,
+                err,
+                self.limits.get_send_max_bytes(),
+            ));
         }
 
         Ok(())

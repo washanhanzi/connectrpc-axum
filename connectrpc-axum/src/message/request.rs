@@ -220,7 +220,7 @@ impl RequestPipeline {
         let max_size = ctx.limits.receive_max_bytes_or_max();
         let body = read_body(req.into_body(), max_size)
             .await
-            .map_err(|e| ContextError::new(ctx.protocol, e))?;
+            .map_err(|e| ContextError::new(ctx.protocol, e, ctx.limits.get_send_max_bytes()))?;
 
         Self::decode_bytes(&ctx, body)
     }
@@ -252,6 +252,7 @@ impl RequestPipeline {
             return Err(ContextError::new(
                 ctx.protocol,
                 ConnectError::new(Code::InvalidArgument, "protocol error: incomplete envelope"),
+                ctx.limits.get_send_max_bytes(),
             ));
         }
 
@@ -270,6 +271,7 @@ impl RequestPipeline {
                         body.len() - expected_len
                     ),
                 ),
+                ctx.limits.get_send_max_bytes(),
             ));
         } else if body.len() < expected_len {
             return Err(ContextError::new(
@@ -282,6 +284,7 @@ impl RequestPipeline {
                         body.len()
                     ),
                 ),
+                ctx.limits.get_send_max_bytes(),
             ));
         }
 
@@ -294,7 +297,7 @@ impl RequestPipeline {
             .unwrap_or(CompressionEncoding::Identity);
 
         let payload = process_envelope_payload(flags, raw_payload, encoding)
-            .map_err(|e| ContextError::new(ctx.protocol, e))?
+            .map_err(|e| ContextError::new(ctx.protocol, e, ctx.limits.get_send_max_bytes()))?
             .ok_or_else(|| {
                 ContextError::new(
                     ctx.protocol,
@@ -302,6 +305,7 @@ impl RequestPipeline {
                         Code::InvalidArgument,
                         "unexpected EndStreamResponse in request",
                     ),
+                    ctx.limits.get_send_max_bytes(),
                 )
             })?;
 
@@ -314,9 +318,11 @@ impl RequestPipeline {
         T: Message + DeserializeOwned + Default,
     {
         if ctx.protocol.is_proto() {
-            decode_proto(bytes).map_err(|e| ContextError::new(ctx.protocol, e))
+            decode_proto(bytes)
+                .map_err(|e| ContextError::new(ctx.protocol, e, ctx.limits.get_send_max_bytes()))
         } else {
-            decode_json(bytes).map_err(|e| ContextError::new(ctx.protocol, e))
+            decode_json(bytes)
+                .map_err(|e| ContextError::new(ctx.protocol, e, ctx.limits.get_send_max_bytes()))
         }
     }
 }
