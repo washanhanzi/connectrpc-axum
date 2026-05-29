@@ -73,10 +73,14 @@ pub fn parse_envelope_header(data: &[u8]) -> Result<(u8, u32), EnvelopeError> {
 /// Given the flags byte and payload bytes from an envelope, validates the flags
 /// and decompresses the payload if needed.
 ///
+/// Flags are a bitfield per the Connect spec, so they are matched with bitwise
+/// masks rather than exact equality: a compressed end-stream frame is `0x03`
+/// (`COMPRESSED | END_STREAM`), not a distinct value.
+///
 /// # Returns
-/// - `Ok(Some(payload))` for message frames (flags 0x00 or 0x01)
-/// - `Ok(None)` for end-stream frames (flag 0x02)
-/// - `Err` for invalid/unknown flags
+/// - `Ok(Some(payload))` for message frames (END_STREAM bit clear)
+/// - `Ok(None)` for end-stream frames (END_STREAM bit set, e.g. 0x02 or 0x03)
+/// - `Err` for flags with unknown bits set
 ///
 /// # Arguments
 /// - `flags`: The envelope flags byte
@@ -87,16 +91,20 @@ pub fn process_envelope_payload(
     payload: Bytes,
     encoding: CompressionEncoding,
 ) -> Result<Option<Bytes>, EnvelopeError> {
-    // EndStream frame (flags = 0x02) signals end of stream
-    if flags == envelope_flags::END_STREAM {
+    // Reject flags with bits outside the defined set (COMPRESSED | END_STREAM).
+    const KNOWN_FLAGS: u8 = envelope_flags::COMPRESSED | envelope_flags::END_STREAM;
+    if flags & !KNOWN_FLAGS != 0 {
+        return Err(EnvelopeError::InvalidFlags(flags));
+    }
+
+    // EndStream bit (0x02) signals end of stream; it may be combined with the
+    // COMPRESSED bit (0x03), so test the bit rather than the whole byte.
+    if flags & envelope_flags::END_STREAM != 0 {
         return Ok(None);
     }
 
-    // Validate message flags: 0x00 = uncompressed, 0x01 = compressed
-    let is_compressed = flags == envelope_flags::COMPRESSED;
-    if flags != envelope_flags::MESSAGE && !is_compressed {
-        return Err(EnvelopeError::InvalidFlags(flags));
-    }
+    // COMPRESSED bit (0x01) indicates a per-frame compressed payload.
+    let is_compressed = flags & envelope_flags::COMPRESSED != 0;
 
     // Decompress if needed
     let payload = if is_compressed {
@@ -202,6 +210,21 @@ mod tests {
         let result = process_envelope_payload(
             envelope_flags::END_STREAM,
             payload,
+            CompressionEncoding::Identity,
+        )
+        .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_process_envelope_payload_compressed_end_stream() {
+        // Flags are a bitfield: COMPRESSED | END_STREAM (0x03) is a valid
+        // end-stream frame and must not be rejected as invalid flags.
+        let flags = envelope_flags::COMPRESSED | envelope_flags::END_STREAM;
+        let result = process_envelope_payload(
+            flags,
+            Bytes::from_static(b"{}"),
             CompressionEncoding::Identity,
         )
         .unwrap();

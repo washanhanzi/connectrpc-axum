@@ -41,10 +41,11 @@ enum DecodedFrame<T> {
 /// [flags:1][length:4][payload:length]
 /// ```
 ///
-/// Flags:
+/// Flags (a bitfield):
 /// - `0x00`: Uncompressed message
-/// - `0x01`: Compressed message
-/// - `0x02`: End of stream
+/// - `0x01`: Compressed message (COMPRESSED bit)
+/// - `0x02`: End of stream (END_STREAM bit)
+/// - `0x03`: Compressed end-of-stream frame (COMPRESSED | END_STREAM)
 ///
 /// # Example
 ///
@@ -129,6 +130,19 @@ impl<S, T> FrameDecoder<S, T> {
         }
     }
 
+    /// Decompress an envelope payload using the decoder's configured encoding.
+    ///
+    /// Used for frames whose COMPRESSED bit (0x01) is set. Identity passes the
+    /// bytes through unchanged.
+    fn decompress(&self, payload: Bytes) -> Result<Bytes, ClientError> {
+        let Some(codec) = self.encoding.codec() else {
+            return Ok(payload); // identity: passthrough
+        };
+        codec
+            .decompress(&payload)
+            .map_err(|e| ClientError::Decode(format!("decompression failed: {}", e)))
+    }
+
     /// Try to parse a complete frame from the buffer.
     ///
     /// Returns:
@@ -157,8 +171,18 @@ impl<S, T> FrameDecoder<S, T> {
         let frame_bytes = self.buffer.split_to(frame_size);
         let payload = Bytes::copy_from_slice(&frame_bytes[ENVELOPE_HEADER_SIZE..]);
 
-        // Check if this is an EndStream frame
-        if flags == envelope_flags::END_STREAM {
+        // Flags are a bitfield: the EndStream frame is identified by the
+        // END_STREAM bit (0x02), which may be combined with the COMPRESSED bit
+        // (0x03) when the server compresses the trailer payload. Test the bit
+        // rather than matching the whole byte so compressed EndStream frames are
+        // not mistaken for messages.
+        if flags & envelope_flags::END_STREAM != 0 {
+            // Decompress the trailer payload first if the COMPRESSED bit is set.
+            let payload = if flags & envelope_flags::COMPRESSED != 0 {
+                self.decompress(payload)?
+            } else {
+                payload
+            };
             let (error, trailers) = parse_end_stream(&payload)?;
 
             // Store trailers
@@ -539,6 +563,59 @@ mod tests {
         let trailers = decoder.trailers().unwrap();
         let values: Vec<_> = trailers.get_all("x-custom").collect();
         assert_eq!(values, vec!["value1", "value2"]);
+    }
+
+    /// A `COMPRESSED | END_STREAM` frame (0x03) is a valid end-stream frame.
+    /// Flags are a bitfield, so the decoder must detect the END_STREAM bit
+    /// rather than matching exactly 0x02; otherwise the frame falls through to
+    /// the message path and fails with "unexpected None from message frame".
+    #[tokio::test]
+    async fn test_decode_compressed_flag_end_stream_with_identity() {
+        let frame = make_frame(0x00, br#"{"value":"hello"}"#);
+        // 0x03 = COMPRESSED | END_STREAM. With Identity encoding the payload is
+        // not actually compressed, exercising the bit-detection path.
+        let end_payload = br#"{"metadata":{"x-custom":["v"]}}"#;
+        let end_frame = make_frame(0x03, end_payload);
+
+        let mut all_data = frame.to_vec();
+        all_data.extend_from_slice(&end_frame);
+
+        let stream = stream::iter(vec![Ok::<_, ClientError>(Bytes::from(all_data))]);
+        let mut decoder =
+            FrameDecoder::<_, TestMessage>::new(stream, false, CompressionEncoding::Identity);
+
+        let msg = decoder.next().await.unwrap().unwrap();
+        assert_eq!(msg.value, "hello");
+
+        // Stream ends cleanly (no "unexpected None" protocol error).
+        assert!(decoder.next().await.is_none());
+
+        let trailers = decoder.trailers().unwrap();
+        assert_eq!(trailers.get("x-custom"), Some("v"));
+    }
+
+    /// A gzip-compressed `0x03` end-stream frame: the decoder must decompress
+    /// the trailer payload before parsing it.
+    #[cfg(feature = "compression-gzip-stream")]
+    #[tokio::test]
+    async fn test_decode_compressed_end_stream_decompresses_trailers() {
+        let codec = CompressionEncoding::Gzip.codec().unwrap();
+        let end_payload = br#"{"error":{"code":"internal","message":"boom"},"metadata":{"x-t":["1"]}}"#;
+        let compressed = codec.compress(end_payload).unwrap();
+        let end_frame = make_frame(0x03, &compressed);
+
+        let stream = stream::iter(vec![Ok::<_, ClientError>(end_frame)]);
+        let mut decoder =
+            FrameDecoder::<_, TestMessage>::new(stream, false, CompressionEncoding::Gzip);
+
+        // The end-stream error surfaces as the next item.
+        let err = decoder.next().await.unwrap().unwrap_err();
+        assert_eq!(err.code(), Code::Internal);
+        assert_eq!(err.message(), Some("boom"));
+
+        assert!(decoder.next().await.is_none());
+        let trailers = decoder.trailers().unwrap();
+        assert_eq!(trailers.get("x-t"), Some("1"));
     }
 
     #[tokio::test]
