@@ -59,21 +59,53 @@ pub fn read_frame_bytes(bytes: Bytes, max_size: usize) -> Result<Bytes, ConnectE
     Ok(bytes)
 }
 
-/// Decompress bytes based on compression encoding.
+/// Decompress bytes based on compression encoding, bounding the output size.
 ///
 /// Returns the original bytes unchanged (zero-copy) if encoding is `Identity`.
-/// Returns `InvalidArgument` error if decompression fails.
+///
+/// `max_output` caps the decompressed size to defend against decompression
+/// bombs: decoding aborts as soon as the output would exceed it, so peak memory
+/// stays bounded regardless of the compressed input's expansion ratio. Pass
+/// `usize::MAX` (e.g. via [`MessageLimits::receive_max_bytes_or_max`]) for no
+/// limit.
+///
+/// Returns `ResourceExhausted` if the decompressed payload exceeds `max_output`,
+/// or `InvalidArgument` if decompression otherwise fails.
 pub fn decompress_bytes(
     bytes: Bytes,
     encoding: CompressionEncoding,
+    max_output: usize,
 ) -> Result<Bytes, ConnectError> {
     let Some(codec) = encoding.codec() else {
-        return Ok(bytes); // identity: zero-copy passthrough
+        // Identity: no decompression, but still enforce the output cap so the
+        // documented `max_output` contract holds regardless of encoding.
+        return enforce_max_output(bytes, max_output);
     };
 
     codec
-        .decompress(&bytes)
-        .map_err(|e| ConnectError::new(Code::InvalidArgument, format!("decompression failed: {e}")))
+        .decompress_limited(&bytes, max_output)
+        .map_err(|e| match e {
+            connectrpc_axum_core::DecompressError::TooLarge { limit } => ConnectError::new(
+                Code::ResourceExhausted,
+                format!("decompressed message size exceeds maximum allowed size of {limit} bytes"),
+            ),
+            connectrpc_axum_core::DecompressError::Io(e) => {
+                ConnectError::new(Code::InvalidArgument, format!("decompression failed: {e}"))
+            }
+        })
+}
+
+/// Return `bytes` unchanged unless its length exceeds `max_output`, in which case
+/// a `ResourceExhausted` error is returned. Used for the identity/uncompressed
+/// paths so they honor the same size cap as the decompressing paths.
+fn enforce_max_output(bytes: Bytes, max_output: usize) -> Result<Bytes, ConnectError> {
+    if bytes.len() > max_output {
+        return Err(ConnectError::new(
+            Code::ResourceExhausted,
+            format!("message size exceeds maximum allowed size of {max_output} bytes"),
+        ));
+    }
+    Ok(bytes)
 }
 
 /// Decode a protobuf message from bytes.
@@ -130,10 +162,13 @@ pub mod envelope_flags {
 /// - `flags`: The envelope flags byte
 /// - `payload`: The raw payload bytes from the envelope
 /// - `encoding`: Compression encoding to use for decompression (from `Connect-Content-Encoding`)
+/// - `max_output`: Upper bound on the decompressed payload size (decompression-bomb guard).
+///   Pass `usize::MAX` for no limit.
 pub fn process_envelope_payload(
     flags: u8,
     payload: Bytes,
     encoding: CompressionEncoding,
+    max_output: usize,
 ) -> Result<Option<Bytes>, ConnectError> {
     // EndStream frame (flags = 0x02) signals end of stream
     if flags == envelope_flags::END_STREAM {
@@ -149,11 +184,12 @@ pub fn process_envelope_payload(
         ));
     }
 
-    // Decompress if needed
+    // Decompress if needed, bounding output to guard against decompression bombs.
+    // Uncompressed frames are capped too so `max_output` holds for every flag.
     let payload = if is_compressed {
-        decompress_bytes(payload, encoding)?
+        decompress_bytes(payload, encoding, max_output)?
     } else {
-        payload
+        enforce_max_output(payload, max_output)?
     };
 
     Ok(Some(payload))
@@ -296,18 +332,23 @@ impl RequestPipeline {
             .map(|e| e.request)
             .unwrap_or(CompressionEncoding::Identity);
 
-        let payload = process_envelope_payload(flags, raw_payload, encoding)
-            .map_err(|e| ContextError::new(ctx.protocol, e, ctx.limits.get_send_max_bytes()))?
-            .ok_or_else(|| {
-                ContextError::new(
-                    ctx.protocol,
-                    ConnectError::new(
-                        Code::InvalidArgument,
-                        "unexpected EndStreamResponse in request",
-                    ),
-                    ctx.limits.get_send_max_bytes(),
-                )
-            })?;
+        let payload = process_envelope_payload(
+            flags,
+            raw_payload,
+            encoding,
+            ctx.limits.receive_max_bytes_or_max(),
+        )
+        .map_err(|e| ContextError::new(ctx.protocol, e, ctx.limits.get_send_max_bytes()))?
+        .ok_or_else(|| {
+            ContextError::new(
+                ctx.protocol,
+                ConnectError::new(
+                    Code::InvalidArgument,
+                    "unexpected EndStreamResponse in request",
+                ),
+                ctx.limits.get_send_max_bytes(),
+            )
+        })?;
 
         Self::decode_message(ctx, &payload)
     }
@@ -532,10 +573,14 @@ where
         message_str.into_bytes()
     };
 
-    // 2. Decompress if compression is specified
+    // 2. Decompress if compression is specified (bounded to guard against bombs)
     let bytes = match params.compression.as_deref() {
         #[cfg(feature = "compression-gzip-stream")]
-        Some("gzip") => decompress_bytes(bytes.into(), CompressionEncoding::Gzip)?,
+        Some("gzip") => decompress_bytes(
+            bytes.into(),
+            CompressionEncoding::Gzip,
+            ctx.limits.receive_max_bytes_or_max(),
+        )?,
         Some("identity") | Some("") | None => bytes.into(),
         Some(other) => {
             // This should be caught by layer validation, but handle as fallback
@@ -640,8 +685,14 @@ where
                 // Extract payload
                 let raw_payload = buffer.split_to(5 + length).split_off(5);
 
-                // Process envelope: validate flags and decompress if needed
-                let payload = match process_envelope_payload(flags, raw_payload.freeze(), request_encoding) {
+                // Process envelope: validate flags and decompress if needed.
+                // Bound decompression output to the receive limit (bomb guard).
+                let payload = match process_envelope_payload(
+                    flags,
+                    raw_payload.freeze(),
+                    request_encoding,
+                    limits.receive_max_bytes_or_max(),
+                ) {
                     Ok(Some(payload)) => payload,
                     Ok(None) => {
                         // EndStream frame - client stream is done
@@ -689,5 +740,177 @@ where
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod max_output_tests {
+    //! The `max_output` cap must hold on the identity/uncompressed paths too,
+    //! not only when decompression runs (issue #53 follow-up).
+    use super::*;
+
+    #[test]
+    fn decompress_bytes_identity_enforces_max_output() {
+        let data = Bytes::from(vec![0u8; 100]);
+        // Within limit: returned unchanged.
+        let out = decompress_bytes(data.clone(), CompressionEncoding::Identity, 100).unwrap();
+        assert_eq!(out.len(), 100);
+        // Over limit: rejected even though no decompression happens.
+        let err = decompress_bytes(data, CompressionEncoding::Identity, 99).unwrap_err();
+        assert_eq!(err.code(), Code::ResourceExhausted);
+    }
+
+    #[test]
+    fn decompress_bytes_identity_unbounded_with_usize_max() {
+        let data = Bytes::from(vec![0u8; 4096]);
+        let out = decompress_bytes(data, CompressionEncoding::Identity, usize::MAX).unwrap();
+        assert_eq!(out.len(), 4096);
+    }
+
+    #[test]
+    fn process_envelope_payload_uncompressed_enforces_max_output() {
+        let payload = Bytes::from(vec![0u8; 100]);
+        // Uncompressed frame within limit passes.
+        let out = process_envelope_payload(
+            envelope_flags::MESSAGE,
+            payload.clone(),
+            CompressionEncoding::Identity,
+            100,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(out.len(), 100);
+        // Uncompressed frame over limit is rejected (was previously unchecked).
+        let err = process_envelope_payload(
+            envelope_flags::MESSAGE,
+            payload,
+            CompressionEncoding::Identity,
+            99,
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), Code::ResourceExhausted);
+    }
+
+    #[test]
+    fn process_envelope_payload_end_stream_ignores_max_output() {
+        // EndStream frames carry no message payload; the cap must not reject them.
+        let out = process_envelope_payload(
+            envelope_flags::END_STREAM,
+            Bytes::from_static(b"{}"),
+            CompressionEncoding::Identity,
+            0,
+        )
+        .unwrap();
+        assert!(out.is_none());
+    }
+}
+
+#[cfg(all(test, feature = "compression-gzip-stream"))]
+mod decompression_bomb_tests {
+    //! Regression tests for the streaming decompression-bomb guard (issue #53).
+    //!
+    //! A small compressed frame must not be able to expand past `receive_max_bytes`
+    //! during decompression on any streaming request path.
+    use super::*;
+    use crate::context::{CompressionContext, EnvelopeCompression, RequestProtocol};
+    use futures::StreamExt;
+
+    /// gzip-compress `decompressed_len` zero bytes (compresses to a tiny frame).
+    fn gzip_bomb(decompressed_len: usize) -> Bytes {
+        CompressionEncoding::Gzip
+            .codec()
+            .unwrap()
+            .compress(&vec![0u8; decompressed_len])
+            .unwrap()
+    }
+
+    fn compressed_frame(payload: &Bytes) -> Bytes {
+        let mut frame = Vec::with_capacity(5 + payload.len());
+        frame.push(envelope_flags::COMPRESSED);
+        frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        frame.extend_from_slice(payload);
+        Bytes::from(frame)
+    }
+
+    // process_envelope_payload is the decompression chokepoint shared by both the
+    // single-envelope and streaming-frame request paths.
+    #[test]
+    fn process_envelope_payload_rejects_bomb() {
+        let bomb = gzip_bomb(1024 * 1024); // 1 MiB -> ~KiB compressed
+        let err = process_envelope_payload(
+            envelope_flags::COMPRESSED,
+            bomb,
+            CompressionEncoding::Gzip,
+            64 * 1024,
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), Code::ResourceExhausted);
+    }
+
+    #[test]
+    fn process_envelope_payload_allows_within_limit() {
+        let payload = vec![1u8; 1000];
+        let compressed = CompressionEncoding::Gzip
+            .codec()
+            .unwrap()
+            .compress(&payload)
+            .unwrap();
+        let out = process_envelope_payload(
+            envelope_flags::COMPRESSED,
+            compressed,
+            CompressionEncoding::Gzip,
+            64 * 1024,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(&out[..], &payload[..]);
+    }
+
+    // End-to-end: the frame's *compressed* length passes the size check, but
+    // decompression must still be bounded and abort with ResourceExhausted.
+    #[tokio::test]
+    async fn create_frame_stream_bounds_decompression() {
+        let bomb = gzip_bomb(2 * 1024 * 1024); // decompresses to 2 MiB
+        let limit = 100 * 1024;
+        assert!(
+            bomb.len() < limit,
+            "compressed frame ({} bytes) must pass the compressed-size check",
+            bomb.len()
+        );
+
+        let body = Body::from(compressed_frame(&bomb));
+        let limits = MessageLimits::new().receive_max_bytes(limit);
+        let mut stream = Box::pin(create_frame_stream::<pbjson_types::Empty>(
+            body,
+            true,
+            limits,
+            CompressionEncoding::Gzip,
+        ));
+
+        let first = stream.next().await.expect("stream should yield an item");
+        assert_eq!(first.unwrap_err().code(), Code::ResourceExhausted);
+    }
+
+    // Single-envelope streaming POST path (decode_enveloped_bytes).
+    #[test]
+    fn decode_enveloped_bytes_bounds_decompression() {
+        let frame = compressed_frame(&gzip_bomb(1024 * 1024));
+        let ctx = ConnectContext {
+            protocol: RequestProtocol::ConnectStreamProto,
+            compression: CompressionContext {
+                envelope: Some(EnvelopeCompression {
+                    request: CompressionEncoding::Gzip,
+                    response: CompressionEncoding::Identity,
+                }),
+                ..Default::default()
+            },
+            limits: MessageLimits::new().receive_max_bytes(64 * 1024),
+            ..Default::default()
+        };
+
+        let err = RequestPipeline::decode_enveloped_bytes::<pbjson_types::Empty>(&ctx, frame)
+            .unwrap_err()
+            .into_connect_error();
+        assert_eq!(err.code(), Code::ResourceExhausted);
     }
 }
