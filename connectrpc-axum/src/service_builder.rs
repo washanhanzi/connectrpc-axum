@@ -343,8 +343,13 @@ where
     /// - This server timeout
     /// - The client's `Connect-Timeout-Ms` header (if present)
     ///
-    /// This ensures the smaller timeout always wins, matching Connect-Go's behavior.
-    /// On timeout, a Connect `deadline_exceeded` error is returned.
+    /// This ensures the smaller timeout always wins, matching Connect-Go's timeout
+    /// selection. On timeout, a Connect `deadline_exceeded` error is returned.
+    ///
+    /// For server-streaming and bidirectional RPCs, this timeout covers request
+    /// handling until the HTTP response is produced. It does not bound the lazy
+    /// response body stream after that response is returned. If a streaming response
+    /// must stop at a deadline, enforce that deadline in the stream handler.
     ///
     /// # Examples
     ///
