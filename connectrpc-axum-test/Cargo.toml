@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 connectrpc-axum = { path = "../connectrpc-axum", features = ["tonic", "compression-full"] }
+connectrpc-axum-client = { path = "../connectrpc-axum-client" }
 axum = { workspace = true }
 prost = { workspace = true }
 pbjson = { workspace = true }

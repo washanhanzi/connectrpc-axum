@@ -387,6 +387,7 @@ pub fn generate_connect_client(
 
                             let on_send = self.#interceptors_field.on_send.clone();
                             let procedure = #procedure_path.to_string();
+                            // Client-streaming awaits the unary response, so a post-call error slot is enough.
                             let interceptor_error: ::std::sync::Arc<::std::sync::Mutex<Option<connectrpc_axum_client::ClientError>>> =
                                 ::std::sync::Arc::new(::std::sync::Mutex::new(None));
                             let err_capture = interceptor_error.clone();
@@ -482,6 +483,9 @@ pub fn generate_connect_client(
                             let on_send = self.#interceptors_field.on_send.clone();
                             let procedure = #procedure_path.to_string();
                             let request_headers = connectrpc_axum_client::HeaderMap::new();
+                            // Bidi returns a receive stream, so send failures must wake parked receive polls.
+                            let interceptor_error = connectrpc_axum_client::SendInterceptorError::new();
+                            let err_capture = interceptor_error.clone();
 
                             // Use scan to apply interceptor; abort stream on first error
                             let wrapped = request.scan((), move |_state, mut msg| {
@@ -494,7 +498,10 @@ pub fn generate_connect_client(
                                     );
                                     match i.intercept(&ctx, &mut msg) {
                                         Ok(()) => ::std::future::ready(Some(msg)),
-                                        Err(_e) => ::std::future::ready(None), // Terminate send stream
+                                        Err(e) => {
+                                            err_capture.store(e);
+                                            ::std::future::ready(None)
+                                        }
                                     }
                                 } else {
                                     ::std::future::ready(Some(msg))
@@ -511,13 +518,16 @@ pub fn generate_connect_client(
                             // Wrap the response stream with typed interceptor
                             let on_receive = self.#interceptors_field.on_receive.clone();
                             Ok(response.map(|streaming| {
-                                connectrpc_axum_client::TypedReceiveStreaming::new(
+                                // Replace the generic receive wrapper with the generated typed wrapper.
+                                // Generated on_send errors are carried by interceptor_error below.
+                                connectrpc_axum_client::TypedReceiveStreaming::with_send_error_capture(
                                     streaming.get_inner(),
                                     on_receive,
                                     #procedure_path.to_string(),
                                     connectrpc_axum_client::StreamType::BidiStream,
                                     req_headers,
                                     response_headers,
+                                    interceptor_error,
                                 )
                             }))
                         }

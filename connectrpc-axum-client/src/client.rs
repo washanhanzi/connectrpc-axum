@@ -27,7 +27,7 @@ use crate::request::FrameEncoder;
 use crate::response::error_parser::parse_error_response;
 use crate::response::{
     ConnectResponse, FrameDecoder, InterceptingSendStream, InterceptingStreaming, Metadata,
-    Streaming,
+    SendInterceptorError, Streaming, take_send_interceptor_error,
 };
 
 /// Header name for Connect protocol version.
@@ -829,16 +829,19 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         }
 
         // 3. Wrap request stream with InterceptingSendStream for per-message interception
-        let intercepting_stream = InterceptingSendStream::new(
+        // Client-streaming awaits the unary response, so captured send errors are checked before return.
+        let send_error = SendInterceptorError::new();
+        let intercepting_stream = InterceptingSendStream::with_send_error_capture(
             request,
             self.interceptor.clone(),
             procedure.to_string(),
             StreamType::ClientStream,
             interceptor_headers.clone(),
+            send_error.clone(),
         );
 
         // 4. Wrap with FrameEncoder
-        let encoder = FrameEncoder::new(
+        let encoder: FrameEncoder<_, Req> = FrameEncoder::new(
             intercepting_stream,
             self.use_proto,
             self.request_encoding,
@@ -892,15 +895,30 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             .map_err(|e| ClientError::Protocol(format!("failed to build request: {}", e)))?;
 
         // 5. Send request (with client-side timeout if configured)
-        let response = if let Some(t) = effective_timeout {
-            timeout(t, self.transport.request(req))
-                .await
-                .map_err(|_| {
-                    ClientError::new(Code::DeadlineExceeded, "client timeout exceeded")
-                })??
+        let response_result = if let Some(t) = effective_timeout {
+            match timeout(t, self.transport.request(req)).await {
+                Ok(result) => result,
+                Err(_) => Err(ClientError::new(
+                    Code::DeadlineExceeded,
+                    "client timeout exceeded",
+                )),
+            }
         } else {
-            self.transport.request(req).await?
+            self.transport.request(req).await
         };
+        let response = match response_result {
+            Ok(response) => response,
+            Err(e) => {
+                if let Some(send_error) = take_send_interceptor_error(&send_error) {
+                    return Err(send_error);
+                }
+                return Err(e);
+            }
+        };
+
+        if let Some(send_error) = take_send_interceptor_error(&send_error) {
+            return Err(send_error);
+        }
 
         // 6. Check response status
         let status = response.status();
@@ -942,7 +960,12 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         // 9. Get the single response message
         let message = match decoder.next().await {
             Some(Ok(msg)) => msg,
-            Some(Err(e)) => return Err(e),
+            Some(Err(e)) => {
+                if let Some(send_error) = take_send_interceptor_error(&send_error) {
+                    return Err(send_error);
+                }
+                return Err(e);
+            }
             None => {
                 return Err(ClientError::Protocol(
                     "expected response message but stream ended".to_string(),
@@ -955,6 +978,9 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         if let Some(result) = decoder.next().await {
             match result {
                 Err(e) => {
+                    if let Some(send_error) = take_send_interceptor_error(&send_error) {
+                        return Err(send_error);
+                    }
                     // EndStream contained an error - propagate it
                     return Err(e);
                 }
@@ -966,6 +992,10 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                     ));
                 }
             }
+        }
+
+        if let Some(send_error) = take_send_interceptor_error(&send_error) {
+            return Err(send_error);
         }
 
         // 11. Extract metadata from response headers
@@ -1135,16 +1165,19 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         }
 
         // 3. Wrap request stream with InterceptingSendStream for per-message interception
-        let intercepting_stream = InterceptingSendStream::new(
+        // Bidi returns a receive stream, so captured send errors also wake pending receive polls.
+        let send_error = SendInterceptorError::new();
+        let intercepting_stream = InterceptingSendStream::with_send_error_capture(
             request,
             self.interceptor.clone(),
             procedure.to_string(),
             StreamType::BidiStream,
             interceptor_headers.clone(),
+            send_error.clone(),
         );
 
         // 4. Wrap with FrameEncoder
-        let encoder = FrameEncoder::new(
+        let encoder: FrameEncoder<_, Req> = FrameEncoder::new(
             intercepting_stream,
             self.use_proto,
             self.request_encoding,
@@ -1198,15 +1231,30 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             .map_err(|e| ClientError::Protocol(format!("failed to build request: {}", e)))?;
 
         // 5. Send request (with client-side timeout if configured)
-        let response = if let Some(t) = effective_timeout {
-            timeout(t, self.transport.request(req))
-                .await
-                .map_err(|_| {
-                    ClientError::new(Code::DeadlineExceeded, "client timeout exceeded")
-                })??
+        let response_result = if let Some(t) = effective_timeout {
+            match timeout(t, self.transport.request(req)).await {
+                Ok(result) => result,
+                Err(_) => Err(ClientError::new(
+                    Code::DeadlineExceeded,
+                    "client timeout exceeded",
+                )),
+            }
         } else {
-            self.transport.request(req).await?
+            self.transport.request(req).await
         };
+        let response = match response_result {
+            Ok(response) => response,
+            Err(e) => {
+                if let Some(send_error) = take_send_interceptor_error(&send_error) {
+                    return Err(send_error);
+                }
+                return Err(e);
+            }
+        };
+
+        if let Some(send_error) = take_send_interceptor_error(&send_error) {
+            return Err(send_error);
+        }
 
         // 6. Verify HTTP/2 for bidirectional streaming
         // Bidi streaming requires HTTP/2 for full-duplex operation
@@ -1263,13 +1311,14 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         let stream_body = Streaming::new(decoder);
 
         // 12. Wrap with InterceptingStreaming for per-message interception
-        let intercepting_stream = InterceptingStreaming::new(
+        let intercepting_stream = InterceptingStreaming::with_send_error_capture(
             stream_body,
             self.interceptor.clone(),
             procedure.to_string(),
             StreamType::BidiStream,
             interceptor_headers,
             response_headers.clone(),
+            send_error,
         );
 
         // 13. Extract metadata from initial response headers

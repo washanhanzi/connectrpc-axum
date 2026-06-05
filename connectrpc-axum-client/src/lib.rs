@@ -607,7 +607,7 @@ pub use request::FrameEncoder;
 // Re-export from response module
 pub use response::{
     ConnectResponse, FrameDecoder, InterceptingSendStream, InterceptingStream,
-    InterceptingStreaming, Metadata, Streaming, TypedReceiveStreaming,
+    InterceptingStreaming, Metadata, SendInterceptorError, Streaming, TypedReceiveStreaming,
 };
 
 // Re-export transport types at the top level for convenience
