@@ -1,9 +1,8 @@
 //! Tonic-compatible code generation for Connect RPC services.
 
-use convert_case::{Case, Casing};
 use quote::{format_ident, quote};
 
-use super::{MethodInfo, ServiceInfo};
+use super::{MethodInfo, ServiceInfo, naive_snake_case};
 
 /// Generate Tonic-compatible code for a service.
 ///
@@ -25,7 +24,7 @@ pub fn generate_tonic_code(
     // Tonic server trait paths (e.g., hello_world_service_server::HelloWorldService)
     let server_mod_name = format_ident!(
         "{}_server",
-        service.name.to_case(Case::Snake).trim_start_matches("r#")
+        naive_snake_case(&service.name).trim_start_matches("r#")
     );
     let tonic_trait_ident = format_ident!("{}", service.name);
     let tonic_server_type_name = format_ident!("{}Server", service.name);

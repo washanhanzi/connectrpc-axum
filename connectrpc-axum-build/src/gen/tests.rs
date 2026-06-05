@@ -122,6 +122,18 @@ fn test_no_tonic_codegen() {
 }
 
 #[test]
+fn test_service_modules_use_tonic_snake_case() {
+    for (service_name, module_name) in [
+        ("Service", "service"),
+        ("ThatHasALongName", "that_has_a_long_name"),
+        ("greeter", "greeter"),
+        ("ABCServiceX", "a_b_c_service_x"),
+    ] {
+        assert_eq!(super::naive_snake_case(service_name), module_name);
+    }
+}
+
+#[test]
 fn test_with_tonic_codegen() {
     let buf = render_service(
         "hello",
@@ -304,6 +316,43 @@ fn test_connect_codegen_enforces_exact_handler_signatures() {
 }
 
 #[test]
+fn test_nested_message_types_use_prost_modules() {
+    let schema = SchemaSet::from_file_descriptor_set(&FileDescriptorSet {
+        file: vec![FileDescriptorProto {
+            name: Some("nested.proto".to_string()),
+            package: Some("nested".to_string()),
+            message_type: vec![DescriptorProto {
+                name: Some("Outer".to_string()),
+                nested_type: vec![DescriptorProto {
+                    name: Some("Inner".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            service: vec![ServiceDescriptorProto {
+                name: Some("NestedService".to_string()),
+                method: vec![MethodDescriptorProto {
+                    name: Some("HandleInner".to_string()),
+                    input_type: Some(".nested.Outer.Inner".to_string()),
+                    output_type: Some(".nested.Outer.Inner".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+    });
+
+    let generated = AxumConnectServiceGenerator::new()
+        .with_connect_server(true)
+        .generate_service(&schema, &schema.services[0])
+        .expect("service generation should succeed");
+
+    assert!(generated.contains("super :: outer :: Inner"));
+    assert!(!generated.contains("Outer_Inner"));
+}
+
+#[test]
 fn test_keyword_method_names_generate_valid_rust_identifiers() {
     let buf = render_service(
         "keyword",
@@ -375,4 +424,45 @@ fn test_keyword_method_names_append_to_existing_output_file() {
     assert!(generated.contains("pub fn r#move"));
     assert!(generated.contains("pub async fn r#move"));
     assert!(generated.contains("pub const MOVE"));
+}
+
+#[test]
+fn test_packageless_services_append_to_underscore_output_file() {
+    let schema = SchemaSet::from_file_descriptor_set(&FileDescriptorSet {
+        file: vec![FileDescriptorProto {
+            name: Some("root.proto".to_string()),
+            message_type: vec![DescriptorProto {
+                name: Some("Empty".to_string()),
+                ..Default::default()
+            }],
+            service: vec![ServiceDescriptorProto {
+                name: Some("RootService".to_string()),
+                method: vec![method(
+                    "",
+                    "Call",
+                    "Empty",
+                    "Empty",
+                    false,
+                    false,
+                    Default::default(),
+                )],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+    });
+
+    let out_dir = tempdir().expect("temp dir");
+    let root_file = out_dir.path().join("_.rs");
+    fs::write(&root_file, "// prost root output\n").expect("write placeholder prost output");
+
+    AxumConnectServiceGenerator::new()
+        .with_connect_server(true)
+        .append_to_out_dir(&schema, out_dir.path().to_str().expect("utf-8 temp path"))
+        .expect("append generated code");
+
+    let generated = fs::read_to_string(&root_file).expect("read appended output");
+    assert!(generated.starts_with("// prost root output\n"));
+    assert!(generated.contains("// --- Connect service/client code ---"));
+    assert!(generated.contains("RootServiceBuilder"));
 }

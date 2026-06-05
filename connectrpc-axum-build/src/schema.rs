@@ -277,11 +277,11 @@ mod tests {
         }));
         assert!(mappings.contains(&TypePathMapping {
             proto_path: ".greet.v1.HelloRequest.Labels".to_string(),
-            rust_path: "HelloRequest_Labels".to_string(),
+            rust_path: "hello_request::Labels".to_string(),
         }));
         assert!(mappings.contains(&TypePathMapping {
             proto_path: ".greet.v1.HelloRequest.Kind".to_string(),
-            rust_path: "HelloRequest_Kind".to_string(),
+            rust_path: "hello_request::Kind".to_string(),
         }));
         assert!(mappings.contains(&TypePathMapping {
             proto_path: ".greet.v1.TopLevel".to_string(),
@@ -347,6 +347,10 @@ mod tests {
                     package: Some("foo.bar".to_string()),
                     message_type: vec![DescriptorProto {
                         name: Some("HelloRequest".to_string()),
+                        nested_type: vec![DescriptorProto {
+                            name: Some("Labels".to_string()),
+                            ..Default::default()
+                        }],
                         ..Default::default()
                     }],
                     ..Default::default()
@@ -374,6 +378,14 @@ mod tests {
             Some("super::HelloRequest".to_string())
         );
         assert_eq!(
+            prost.rust_type_relative(".foo.bar.HelloRequest.Labels", "foo.bar", 0),
+            Some("hello_request::Labels".to_string())
+        );
+        assert_eq!(
+            prost.rust_type_relative(".foo.bar.HelloRequest.Labels", "foo.bar", 1),
+            Some("super::hello_request::Labels".to_string())
+        );
+        assert_eq!(
             prost.rust_type_relative(".foo.common.Shared", "foo.bar", 0),
             Some("super::common::Shared".to_string())
         );
@@ -381,5 +393,15 @@ mod tests {
             prost.rust_type_relative(".foo.common.Shared", "foo.bar", 1),
             Some("super::super::common::Shared".to_string())
         );
+    }
+
+    #[test]
+    fn prost_resolver_uses_prost_naming_helpers() {
+        let schema = SchemaSet::default();
+        let prost = schema.prost();
+
+        assert_eq!(prost.rust_service_name("FOO_BAR"), "FooBar");
+        assert_eq!(prost.rust_method_name("XMLHttpRequest"), "xml_http_request");
+        assert_eq!(prost.rust_package_file_stem("foo.FOO_BAR"), "foo.foo_bar");
     }
 }
