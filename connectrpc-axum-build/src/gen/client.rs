@@ -1,10 +1,10 @@
 //! Client code generation for Connect RPC services.
 
-use convert_case::{Case, Casing};
 use quote::{format_ident, quote};
 
 use super::{
-    MethodInfo, ServiceInfo, derived_method_ident, method_const_ident, prefixed_method_ident,
+    MethodInfo, ServiceInfo, derived_method_ident, method_const_ident, naive_snake_case,
+    prefixed_method_ident,
 };
 
 /// RPC type classification
@@ -33,10 +33,10 @@ pub fn generate_connect_client(
     method_info: &[MethodInfo],
 ) -> proc_macro2::TokenStream {
     // Client module name (e.g., hello_world_service_connect_client)
-    let client_module_name = format_ident!("{}_connect_client", service.name.to_case(Case::Snake));
+    let client_module_name = format_ident!("{}_connect_client", naive_snake_case(&service.name));
 
     // Procedures module name (e.g., hello_world_service_procedures)
-    let procedures_mod_name = format_ident!("{}_procedures", service.name.to_case(Case::Snake));
+    let procedures_mod_name = format_ident!("{}_procedures", naive_snake_case(&service.name));
 
     // Generate procedure constants
     let procedure_constants: Vec<_> = method_info

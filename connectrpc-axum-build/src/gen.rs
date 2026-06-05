@@ -1,7 +1,6 @@
 mod client;
 mod tonic;
 
-use convert_case::{Case, Casing};
 use proc_macro2::{Ident, Span, TokenStream};
 use prost_types::method_options::IdempotencyLevel;
 use quote::{format_ident, quote};
@@ -62,6 +61,20 @@ pub(super) fn prefixed_method_ident(prefix: &str, method_name: &Ident) -> Ident 
     format_ident!("{}_{}", prefix, ident_base_name(method_name))
 }
 
+pub(super) fn naive_snake_case(name: &str) -> String {
+    let mut s = String::new();
+    let mut chars = name.chars().peekable();
+
+    while let Some(current) = chars.next() {
+        s.push(current.to_ascii_lowercase());
+        if chars.peek().is_some_and(|next| next.is_uppercase()) {
+            s.push('_');
+        }
+    }
+
+    s
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct ServiceInfo {
     pub name: String,
@@ -116,11 +129,7 @@ impl AxumConnectServiceGenerator {
                 continue;
             }
 
-            let file_stem = if service.package.is_empty() {
-                "_".to_string()
-            } else {
-                service.package.clone()
-            };
+            let file_stem = schema.prost().rust_package_file_stem(&service.package);
             generated_by_file
                 .entry(file_stem)
                 .or_default()
@@ -157,10 +166,7 @@ impl AxumConnectServiceGenerator {
         // Server module name (e.g., hello_world_service_connect)
         let service_module_name = format_ident!(
             "{}_connect",
-            service
-                .proto_name
-                .to_case(Case::Snake)
-                .trim_start_matches("r#")
+            naive_snake_case(&service_name).trim_start_matches("r#")
         );
 
         // Remove "Service" suffix from the logical service name to avoid duplication

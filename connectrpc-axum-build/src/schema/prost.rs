@@ -1,7 +1,7 @@
 #[cfg(any(test, feature = "tonic", feature = "tonic-client"))]
 use super::TypePathMapping;
 use super::{SchemaSet, TypeModel};
-use convert_case::{Case, Casing};
+use heck::{ToSnakeCase, ToUpperCamelCase};
 
 /// Prost-compatible naming and type-path resolution over a normalized schema.
 #[derive(Debug, Clone, Copy)]
@@ -28,11 +28,24 @@ impl<'a> ProstSchemaResolver<'a> {
     }
 
     pub(crate) fn rust_method_name(&self, proto_name: &str) -> String {
-        sanitize_identifier(&proto_name.to_case(Case::Snake))
+        to_snake(proto_name)
     }
 
     pub(crate) fn rust_service_name(&self, proto_name: &str) -> String {
-        sanitize_identifier(proto_name)
+        to_upper_camel(proto_name)
+    }
+
+    pub(crate) fn rust_package_file_stem(&self, package: &str) -> String {
+        if package.is_empty() {
+            "_".to_string()
+        } else {
+            package
+                .split('.')
+                .filter(|segment| !segment.is_empty())
+                .map(to_snake)
+                .collect::<Vec<_>>()
+                .join(".")
+        }
     }
 
     pub(crate) fn rust_type_relative(
@@ -63,22 +76,34 @@ impl<'a> ProstSchemaResolver<'a> {
         let up_count = (current_parts.len() - common_len) + nesting;
         let mut segments = Vec::with_capacity(up_count + target_parts.len() - common_len + 1);
         segments.extend(std::iter::repeat_n("super".to_string(), up_count));
-        segments.extend(
-            target_parts[common_len..]
-                .iter()
-                .map(|segment| (*segment).to_string()),
-        );
+        segments.extend(target_parts[common_len..].iter().map(to_snake));
         segments.push(type_name);
 
         Some(segments.join("::"))
     }
 
     fn rust_type_path(&self, ty: &TypeModel) -> String {
-        ty.scoped_name.join("_")
+        let (rust_type_name, parent_modules) = ty.scoped_name.split_last().expect("type has name");
+
+        parent_modules
+            .iter()
+            .map(to_snake)
+            .chain(std::iter::once(to_upper_camel(rust_type_name)))
+            .collect::<Vec<_>>()
+            .join("::")
     }
 }
 
+fn to_snake(ident: impl AsRef<str>) -> String {
+    sanitize_identifier(&ident.as_ref().to_snake_case())
+}
+
+fn to_upper_camel(ident: impl AsRef<str>) -> String {
+    sanitize_identifier(&ident.as_ref().to_upper_camel_case())
+}
+
 fn sanitize_identifier(ident: &str) -> String {
+    // Keep this table in sync with prost-build's ident::sanitize_identifier.
     match ident {
         "as" | "break" | "const" | "continue" | "else" | "enum" | "false" | "fn" | "for" | "if"
         | "impl" | "in" | "let" | "loop" | "match" | "mod" | "move" | "mut" | "pub" | "ref"
