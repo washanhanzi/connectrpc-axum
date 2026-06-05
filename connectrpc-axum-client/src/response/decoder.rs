@@ -600,7 +600,8 @@ mod tests {
     #[tokio::test]
     async fn test_decode_compressed_end_stream_decompresses_trailers() {
         let codec = CompressionEncoding::Gzip.codec().unwrap();
-        let end_payload = br#"{"error":{"code":"internal","message":"boom"},"metadata":{"x-t":["1"]}}"#;
+        let end_payload =
+            br#"{"error":{"code":"internal","message":"boom"},"metadata":{"x-t":["1"]}}"#;
         let compressed = codec.compress(end_payload).unwrap();
         let end_frame = make_frame(0x03, &compressed);
 

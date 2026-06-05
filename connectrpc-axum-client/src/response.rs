@@ -15,8 +15,10 @@ mod streaming;
 mod types;
 
 pub use decoder::FrameDecoder;
+pub(crate) use intercepting::take_send_interceptor_error;
 pub use intercepting::{
-    InterceptingSendStream, InterceptingStream, InterceptingStreaming, TypedReceiveStreaming,
+    InterceptingSendStream, InterceptingStream, InterceptingStreaming, SendInterceptorError,
+    TypedReceiveStreaming,
 };
 pub use streaming::Streaming;
 pub use types::{ConnectResponse, Metadata};

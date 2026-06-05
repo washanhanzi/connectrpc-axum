@@ -31,8 +31,8 @@ enum EncoderState {
 
 /// Stream adapter that encodes messages into Connect protocol envelope frames.
 ///
-/// Wraps a stream of messages and yields framed bytes suitable for a streaming
-/// request body.
+/// Wraps a fallible stream of messages and yields framed bytes suitable for a
+/// streaming request body.
 ///
 /// # Frame Format
 ///
@@ -52,8 +52,8 @@ enum EncoderState {
 /// use futures::stream;
 ///
 /// let messages = stream::iter(vec![
-///     MyMessage { value: "hello".into() },
-///     MyMessage { value: "world".into() },
+///     Ok(MyMessage { value: "hello".into() }),
+///     Ok(MyMessage { value: "world".into() }),
 /// ]);
 ///
 /// let encoder = FrameEncoder::new(
@@ -85,7 +85,7 @@ impl<S, T> FrameEncoder<S, T> {
     ///
     /// # Arguments
     ///
-    /// * `stream` - The underlying message stream
+    /// * `stream` - The underlying fallible message stream
     /// * `use_proto` - Whether to use protobuf (true) or JSON (false) encoding
     /// * `encoding` - Compression encoding to use for outgoing messages
     /// * `compression` - Compression configuration (min_bytes threshold and level)
@@ -174,7 +174,7 @@ impl<S, T> Unpin for FrameEncoder<S, T> where S: Unpin {}
 
 impl<S, T> Stream for FrameEncoder<S, T>
 where
-    S: Stream<Item = T> + Unpin,
+    S: Stream<Item = Result<T, ClientError>> + Unpin,
     T: Message + Serialize,
 {
     type Item = Result<Bytes, ClientError>;
@@ -187,17 +187,20 @@ where
                 EncoderState::Streaming => {
                     // Poll the underlying stream for the next message
                     match Pin::new(&mut this.stream).poll_next(cx) {
-                        Poll::Ready(Some(msg)) => {
-                            // Encode the message into a frame
-                            match this.encode_frame(&msg) {
+                        Poll::Ready(Some(result)) => match result {
+                            Ok(msg) => match this.encode_frame(&msg) {
                                 Ok(frame) => return Poll::Ready(Some(Ok(frame))),
                                 Err(e) => {
                                     // On error, mark as done and return the error
                                     this.state = EncoderState::Done;
                                     return Poll::Ready(Some(Err(e)));
                                 }
+                            },
+                            Err(e) => {
+                                this.state = EncoderState::Done;
+                                return Poll::Ready(Some(Err(e)));
                             }
-                        }
+                        },
                         Poll::Ready(None) => {
                             // Inner stream exhausted, need to send EndStream
                             this.state = EncoderState::SendEndStream;
@@ -297,9 +300,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_encode_single_json_message() {
-        let messages = stream::iter(vec![TestMessage {
+        let messages = stream::iter(vec![Ok(TestMessage {
             value: "hello".to_string(),
-        }]);
+        })]);
 
         let mut encoder = FrameEncoder::new(
             messages,
@@ -329,12 +332,12 @@ mod tests {
     #[tokio::test]
     async fn test_encode_multiple_messages() {
         let messages = stream::iter(vec![
-            TestMessage {
+            Ok(TestMessage {
                 value: "one".to_string(),
-            },
-            TestMessage {
+            }),
+            Ok(TestMessage {
                 value: "two".to_string(),
-            },
+            }),
         ]);
 
         let mut encoder = FrameEncoder::new(
@@ -368,9 +371,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_encode_proto_message() {
-        let messages = stream::iter(vec![TestMessage {
+        let messages = stream::iter(vec![Ok(TestMessage {
             value: "hello".to_string(),
-        }]);
+        })]);
 
         let mut encoder = FrameEncoder::new(
             messages,
@@ -398,7 +401,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_encode_empty_stream() {
-        let messages = stream::iter(Vec::<TestMessage>::new());
+        let messages = stream::iter(Vec::<Result<TestMessage, ClientError>>::new());
 
         let mut encoder = FrameEncoder::new(
             messages,
@@ -413,5 +416,34 @@ mod tests {
 
         // Done
         assert!(encoder.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_fallible_message_stream_error_aborts_encoding() {
+        let messages = stream::iter(vec![
+            Ok(TestMessage {
+                value: "one".to_string(),
+            }),
+            Err(ClientError::invalid_argument("send blocked")),
+            Ok(TestMessage {
+                value: "two".to_string(),
+            }),
+        ]);
+
+        let mut encoder: FrameEncoder<_, TestMessage> = FrameEncoder::new(
+            messages,
+            false,
+            CompressionEncoding::Identity,
+            CompressionConfig::disabled(),
+        );
+
+        let frame = encoder.next().await.unwrap().unwrap();
+        assert_eq!(frame[0], 0x00);
+
+        let err = encoder.next().await.unwrap().unwrap_err();
+        assert_eq!(err.message(), Some("send blocked"));
+
+        assert!(encoder.next().await.is_none());
+        assert!(encoder.is_finished());
     }
 }

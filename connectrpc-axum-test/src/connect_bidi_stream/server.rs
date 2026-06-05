@@ -1,6 +1,7 @@
 use crate::{EchoRequest, EchoResponse, echo_service_connect};
 use connectrpc_axum::prelude::*;
 use futures::{Stream, StreamExt};
+use tokio::net::{TcpListener, UnixListener};
 
 async fn echo_bidi_stream(
     ConnectRequest(streaming): ConnectRequest<Streaming<EchoRequest>>,
@@ -34,15 +35,22 @@ async fn echo_bidi_stream(
     Ok(ConnectResponse::new(StreamBody::new(response_stream)))
 }
 
-pub async fn start(listener: tokio::net::UnixListener) -> anyhow::Result<()> {
+fn app() -> axum::Router<()> {
     let router = echo_service_connect::EchoServiceBuilder::new()
         .echo_bidi_stream(echo_bidi_stream)
         .build();
 
-    let app = connectrpc_axum::MakeServiceBuilder::new()
+    connectrpc_axum::MakeServiceBuilder::new()
         .add_router(router)
-        .build();
+        .build()
+}
 
-    axum::serve(listener, app).await?;
+pub async fn start(listener: UnixListener) -> anyhow::Result<()> {
+    axum::serve(listener, app()).await?;
+    Ok(())
+}
+
+pub async fn start_tcp(listener: TcpListener) -> anyhow::Result<()> {
+    axum::serve(listener, app()).await?;
     Ok(())
 }

@@ -622,6 +622,7 @@ dependencies = [
  "bytes",
  "connectrpc-axum",
  "connectrpc-axum-build",
+ "connectrpc-axum-client",
  "flate2",
  "futures",
  "http",
