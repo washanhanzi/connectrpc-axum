@@ -1,9 +1,17 @@
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use bytes::Bytes;
+use connectrpc_axum_client::{ClientError, stream_interceptor};
+use futures::stream;
 use http::Request;
 use http_body_util::{BodyExt, Full};
 use hyper::client::conn::http1;
 use hyper_util::rt::TokioIo;
 
+use crate::EchoRequest;
+use crate::echo_service_connect_client::EchoServiceClient;
 use crate::socket::TestSocket;
 
 pub struct CaseResult {
@@ -26,6 +34,55 @@ pub async fn run_client_stream_tests(sock: &TestSocket) -> Vec<CaseResult> {
         name: "client stream aggregates messages",
         error: err,
     }]
+}
+
+pub async fn run_client_stream_interceptor_tests(addr: SocketAddr) -> Vec<CaseResult> {
+    let err = run_typed_send_interceptor_error_wins(addr)
+        .await
+        .err()
+        .map(|e| e.to_string());
+    vec![CaseResult {
+        name: "typed on_send error takes precedence over call result",
+        error: err,
+    }]
+}
+
+/// A typed on_send interceptor failure must abort the request and surface the
+/// interceptor's error to the caller, even though the aborted request body also
+/// produces a transport/server error (regression test for generated clients).
+async fn run_typed_send_interceptor_error_wins(addr: SocketAddr) -> anyhow::Result<()> {
+    let sent = Arc::new(AtomicUsize::new(0));
+    let client = EchoServiceClient::builder(format!("http://{addr}"))
+        .http2_prior_knowledge()
+        .with_on_send_echo_client_stream(stream_interceptor(move |_ctx, _msg: &mut EchoRequest| {
+            if sent.fetch_add(1, Ordering::SeqCst) == 0 {
+                Ok(())
+            } else {
+                Err(ClientError::invalid_argument("typed send blocked"))
+            }
+        }))
+        .build()?;
+
+    let messages = stream::iter(vec![
+        EchoRequest {
+            message: "first".to_string(),
+        },
+        EchoRequest {
+            message: "second".to_string(),
+        },
+        EchoRequest {
+            message: "third".to_string(),
+        },
+    ]);
+
+    match client.echo_client_stream(messages).await {
+        Err(e) if e.message() == Some("typed send blocked") => Ok(()),
+        Err(e) => anyhow::bail!("expected typed send interceptor error, got: {e}"),
+        Ok(resp) => anyhow::bail!(
+            "expected typed send interceptor error, got success: {}",
+            resp.into_inner().message
+        ),
+    }
 }
 
 async fn run_one(sock: &TestSocket) -> anyhow::Result<()> {

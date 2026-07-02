@@ -528,6 +528,8 @@ impl<S, T, I> InterceptingStreaming<S, T, I> {
     }
 
     /// Create a new intercepting streaming wrapper that can yield send interceptor errors.
+    ///
+    /// Captured send errors are yielded before buffered received messages.
     pub fn with_send_error_capture(
         inner: Streaming<S>,
         interceptor: I,
@@ -692,6 +694,104 @@ where
 // Typed Interceptor Stream Wrappers
 // ============================================================================
 
+/// A stream adapter that applies a typed `on_send` interceptor to outgoing messages.
+///
+/// This is the typed counterpart of [`InterceptingSendStream`], used by generated
+/// clients. On the first interceptor error the stream records the error in the
+/// shared [`SendInterceptorError`] slot, yields the error once, and then ends.
+/// The yielded error aborts the HTTP request body (the server sees a broken
+/// request, not a clean end-of-stream), and the recorded error takes precedence
+/// over any transport or server error observed afterwards.
+pub struct TypedSendStream<S, T> {
+    /// The underlying message stream.
+    inner: S,
+    /// The typed interceptor.
+    interceptor: Option<Arc<dyn for<'a> TypedInterceptor<StreamContext<'a>, T>>>,
+    /// The procedure name.
+    procedure: String,
+    /// The type of stream.
+    stream_type: StreamType,
+    /// Request headers (for context).
+    request_headers: HeaderMap,
+    /// Shared send interceptor error storage.
+    send_error: Option<Arc<SendInterceptorError>>,
+    /// Whether an outbound interceptor error has aborted this stream.
+    aborted: bool,
+}
+
+impl<S, T> TypedSendStream<S, T> {
+    /// Create a new typed send stream that records send interceptor errors.
+    pub fn with_send_error_capture(
+        inner: S,
+        interceptor: Option<Arc<dyn for<'a> TypedInterceptor<StreamContext<'a>, T>>>,
+        procedure: String,
+        stream_type: StreamType,
+        request_headers: HeaderMap,
+        send_error: Arc<SendInterceptorError>,
+    ) -> Self {
+        Self {
+            inner,
+            interceptor,
+            procedure,
+            stream_type,
+            request_headers,
+            send_error: Some(send_error),
+            aborted: false,
+        }
+    }
+}
+
+impl<S, T> Unpin for TypedSendStream<S, T> where S: Unpin {}
+
+impl<S, T> Stream for TypedSendStream<S, T>
+where
+    S: Stream<Item = T> + Unpin,
+    T: 'static,
+{
+    type Item = Result<T, ClientError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+
+        if this.aborted {
+            return Poll::Ready(None);
+        }
+
+        match Pin::new(&mut this.inner).poll_next(cx) {
+            Poll::Ready(Some(mut msg)) => {
+                if let Some(ref interceptor) = this.interceptor {
+                    // Create stream context (no response headers yet for outgoing)
+                    let ctx = StreamContext::new(
+                        &this.procedure,
+                        this.stream_type,
+                        &this.request_headers,
+                        None,
+                    );
+
+                    match interceptor.intercept(&ctx, &mut msg) {
+                        Ok(()) => Poll::Ready(Some(Ok(msg))),
+                        Err(e) => {
+                            this.aborted = true;
+                            if let Some(ref send_error) = this.send_error {
+                                send_error.store(e.clone());
+                            }
+                            Poll::Ready(Some(Err(e)))
+                        }
+                    }
+                } else {
+                    Poll::Ready(Some(Ok(msg)))
+                }
+            }
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
 /// Wrapper around `Streaming` with typed receive interceptor.
 ///
 /// This provides the same interface as `Streaming` (trailers, is_finished, drain)
@@ -735,6 +835,8 @@ impl<S, T> TypedReceiveStreaming<S, T> {
     }
 
     /// Create a new typed receive stream that can yield send interceptor errors.
+    ///
+    /// Captured send errors are yielded before buffered received messages.
     pub fn with_send_error_capture(
         inner: Streaming<S>,
         interceptor: Option<Arc<dyn for<'a> TypedInterceptor<StreamContext<'a>, T>>>,

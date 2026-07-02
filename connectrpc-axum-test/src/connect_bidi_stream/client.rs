@@ -4,7 +4,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
-use connectrpc_axum_client::{ClientError, ConnectClient, MessageInterceptor, StreamContext};
+use connectrpc_axum_client::{
+    ClientError, ConnectClient, MessageInterceptor, StreamContext, stream_interceptor,
+};
 use futures::StreamExt;
 use http::Request;
 use http_body_util::{BodyExt, Full};
@@ -15,6 +17,7 @@ use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 
+use crate::echo_service_connect_client::EchoServiceClient;
 use crate::socket::TestSocket;
 use crate::{EchoRequest, EchoResponse};
 
@@ -50,14 +53,24 @@ pub async fn run_bidi_stream_tests_h2(sock: &TestSocket) -> Vec<CaseResult> {
 }
 
 pub async fn run_bidi_stream_interceptor_tests(addr: SocketAddr) -> Vec<CaseResult> {
-    let err = run_send_interceptor_wakes_receive(addr)
+    let generic_err = run_send_interceptor_wakes_receive(addr)
         .await
         .err()
         .map(|e| e.to_string());
-    vec![CaseResult {
-        name: "bidi send interceptor wakes pending receive",
-        error: err,
-    }]
+    let typed_err = run_typed_send_interceptor_wakes_receive(addr)
+        .await
+        .err()
+        .map(|e| e.to_string());
+    vec![
+        CaseResult {
+            name: "bidi send interceptor wakes pending receive",
+            error: generic_err,
+        },
+        CaseResult {
+            name: "bidi typed on_send error wakes pending receive",
+            error: typed_err,
+        },
+    ]
 }
 
 #[derive(Clone, Default)]
@@ -86,7 +99,7 @@ async fn run_send_interceptor_wakes_receive(addr: SocketAddr) -> anyhow::Result<
     let (request_tx, request_rx) = mpsc::channel(2);
     let (first_seen_tx, first_seen_rx) = oneshot::channel();
 
-    let client = ConnectClient::builder(&format!("http://{addr}"))
+    let client = ConnectClient::builder(format!("http://{addr}"))
         .http2_prior_knowledge()
         .with_message_interceptor(FailSecondSend::default())
         .build()?;
@@ -115,6 +128,72 @@ async fn run_send_interceptor_wakes_receive(addr: SocketAddr) -> anyhow::Result<
             Ok(Some(Ok(msg))) => anyhow::bail!("expected send error, got message {}", msg.message),
             Ok(None) => anyhow::bail!("expected send error, got stream end"),
             Err(_) => anyhow::bail!("pending receive was not woken by send interceptor error"),
+        }
+    });
+
+    request_tx
+        .send(EchoRequest {
+            message: "first".to_string(),
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("request stream closed before first send"))?;
+
+    first_seen_rx
+        .await
+        .map_err(|_| anyhow::anyhow!("receive task ended before first response"))?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    request_tx
+        .send(EchoRequest {
+            message: "second".to_string(),
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("request stream closed before second send"))?;
+
+    receive.await?
+}
+
+/// Same as [`run_send_interceptor_wakes_receive`], but through the generated
+/// typed client's `on_send` interceptor (regression test: the typed error must
+/// win over the transport error caused by the aborted request body).
+async fn run_typed_send_interceptor_wakes_receive(addr: SocketAddr) -> anyhow::Result<()> {
+    let (request_tx, request_rx) = mpsc::channel(2);
+    let (first_seen_tx, first_seen_rx) = oneshot::channel();
+
+    let sent = Arc::new(AtomicUsize::new(0));
+    let client = EchoServiceClient::builder(format!("http://{addr}"))
+        .http2_prior_knowledge()
+        .with_on_send_echo_bidi_stream(stream_interceptor(move |_ctx, _msg: &mut EchoRequest| {
+            if sent.fetch_add(1, Ordering::SeqCst) == 0 {
+                Ok(())
+            } else {
+                Err(ClientError::invalid_argument("typed send blocked"))
+            }
+        }))
+        .build()?;
+    let receive = tokio::spawn(async move {
+        let response = client
+            .echo_bidi_stream(ReceiverStream::new(request_rx))
+            .await?;
+        let mut stream = response.into_inner();
+
+        let first = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .map_err(|_| anyhow::anyhow!("timed out waiting for first bidi response"))?
+            .ok_or_else(|| anyhow::anyhow!("expected first bidi response, got stream end"))??;
+        if !first.message.contains("Echo #1") {
+            anyhow::bail!("expected first echo response, got {}", first.message);
+        }
+
+        let _ = first_seen_tx.send(());
+
+        match tokio::time::timeout(Duration::from_secs(2), stream.next()).await {
+            Ok(Some(Err(e))) if e.message() == Some("typed send blocked") => Ok(()),
+            Ok(Some(Err(e))) => anyhow::bail!("expected typed send blocked error, got {e}"),
+            Ok(Some(Ok(msg))) => anyhow::bail!("expected send error, got message {}", msg.message),
+            Ok(None) => anyhow::bail!("expected send error, got stream end"),
+            Err(_) => {
+                anyhow::bail!("pending receive was not woken by typed send interceptor error")
+            }
         }
     });
 

@@ -24,15 +24,22 @@ async fn echo_client_stream(
     }))
 }
 
-pub async fn start(listener: tokio::net::UnixListener) -> anyhow::Result<()> {
+fn app() -> axum::Router<()> {
     let router = echo_service_connect::EchoServiceBuilder::new()
         .echo_client_stream(echo_client_stream)
         .build();
 
-    let app = connectrpc_axum::MakeServiceBuilder::new()
+    connectrpc_axum::MakeServiceBuilder::new()
         .add_router(router)
-        .build();
+        .build()
+}
 
-    axum::serve(listener, app).await?;
+pub async fn start(listener: tokio::net::UnixListener) -> anyhow::Result<()> {
+    axum::serve(listener, app()).await?;
+    Ok(())
+}
+
+pub async fn start_tcp(listener: tokio::net::TcpListener) -> anyhow::Result<()> {
+    axum::serve(listener, app()).await?;
     Ok(())
 }

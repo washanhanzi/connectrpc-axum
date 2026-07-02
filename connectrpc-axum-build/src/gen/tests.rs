@@ -380,6 +380,42 @@ fn test_keyword_method_names_generate_valid_rust_identifiers() {
 }
 
 #[test]
+fn test_generated_stream_send_interceptor_errors_abort_request_body() {
+    let buf = render_service(
+        "chat",
+        "ChatService",
+        vec![
+            method(
+                "chat",
+                "Upload",
+                "UploadRequest",
+                "UploadResponse",
+                true,
+                false,
+                Default::default(),
+            ),
+            method(
+                "chat",
+                "Chat",
+                "ChatRequest",
+                "ChatResponse",
+                true,
+                true,
+                Default::default(),
+            ),
+        ],
+        AxumConnectServiceGenerator::new().with_connect_client(true),
+    );
+
+    // Typed streaming clients must route send interceptor errors through the
+    // fallible call path (interceptor error wins over transport/server errors)
+    // using the shared TypedSendStream wrapper.
+    assert!(buf.contains("call_client_stream_fallible_with_options"));
+    assert!(buf.contains("call_bidi_stream_fallible_with_options"));
+    assert!(buf.contains("TypedSendStream"));
+}
+
+#[test]
 fn test_keyword_method_names_append_to_existing_output_file() {
     let message_types = vec![DescriptorProto {
         name: Some("Empty".to_string()),
