@@ -374,8 +374,10 @@ pub fn generate_connect_client(
                         ///
                         /// # Error Handling
                         ///
-                        /// If an `on_send` interceptor returns an error, the stream is
-                        /// aborted and the error is returned immediately.
+                        /// If an `on_send` interceptor returns an error, the request body is
+                        /// aborted mid-stream (the server sees a broken request, not a clean
+                        /// end-of-stream) and the interceptor error is returned, taking
+                        /// precedence over any transport or server error.
                         pub async fn #method_name<S>(
                             &self,
                             request: S,
@@ -383,46 +385,20 @@ pub fn generate_connect_client(
                         where
                             S: ::futures::Stream<Item = #request_type> + Send + Unpin + 'static,
                         {
-                            use ::futures::StreamExt;
-
-                            let on_send = self.#interceptors_field.on_send.clone();
-                            let procedure = #procedure_path.to_string();
-                            // Client-streaming awaits the unary response, so a post-call error slot is enough.
-                            let interceptor_error: ::std::sync::Arc<::std::sync::Mutex<Option<connectrpc_axum_client::ClientError>>> =
-                                ::std::sync::Arc::new(::std::sync::Mutex::new(None));
-                            let err_capture = interceptor_error.clone();
-                            let request_headers = connectrpc_axum_client::HeaderMap::new();
-
-                            // Use scan to apply interceptor; abort stream on first error
-                            let wrapped = request.scan((), move |_state, mut msg| {
-                                if let Some(ref i) = on_send {
-                                    let ctx = connectrpc_axum_client::StreamContext::new(
-                                        &procedure,
-                                        connectrpc_axum_client::StreamType::ClientStream,
-                                        &request_headers,
-                                        None,
-                                    );
-                                    match i.intercept(&ctx, &mut msg) {
-                                        Ok(()) => ::std::future::ready(Some(msg)),
-                                        Err(e) => {
-                                            // Store error and terminate stream
-                                            *err_capture.lock().unwrap() = Some(e);
-                                            ::std::future::ready(None)
-                                        }
-                                    }
-                                } else {
-                                    ::std::future::ready(Some(msg))
-                                }
-                            });
+                            // Apply the typed on_send interceptor; abort the stream on first error
+                            let interceptor_error = connectrpc_axum_client::SendInterceptorError::new();
+                            let wrapped = connectrpc_axum_client::TypedSendStream::with_send_error_capture(
+                                request,
+                                self.#interceptors_field.on_send.clone(),
+                                #procedure_path.to_string(),
+                                connectrpc_axum_client::StreamType::ClientStream,
+                                connectrpc_axum_client::HeaderMap::new(),
+                                interceptor_error.clone(),
+                            );
 
                             let options = connectrpc_axum_client::CallOptions::new();
                             let mut response: connectrpc_axum_client::ConnectResponse<#response_type> =
-                                self.inner.call_client_stream_with_options(#procedure_path, wrapped, options).await?;
-
-                            // Check if on_send interceptor aborted the stream
-                            if let Some(e) = interceptor_error.lock().unwrap().take() {
-                                return Err(e);
-                            }
+                                self.inner.call_client_stream_fallible_with_options(#procedure_path, wrapped, options, interceptor_error).await?;
 
                             // After interceptor
                             if let Some(ref interceptor) = self.#interceptors_field.after {
@@ -456,9 +432,11 @@ pub fn generate_connect_client(
                         ///
                         /// # Error Handling
                         ///
-                        /// If an `on_send` interceptor returns an error, the send stream is
-                        /// aborted (remaining messages are not sent). If an `on_receive`
+                        /// If an `on_send` interceptor returns an error, the request body is
+                        /// aborted mid-stream (remaining messages are not sent and the server
+                        /// sees a broken request, not a clean end-of-stream). If an `on_receive`
                         /// interceptor returns an error, it is yielded as a stream error item.
+                        /// A send interceptor error takes precedence over buffered received messages.
                         pub async fn #method_name<S>(
                             &self,
                             request: S,
@@ -477,39 +455,25 @@ pub fn generate_connect_client(
                         where
                             S: ::futures::Stream<Item = #request_type> + Send + Unpin + 'static,
                         {
-                            use ::futures::StreamExt;
-
-                            // Wrap the input stream with on_send interceptor
-                            let on_send = self.#interceptors_field.on_send.clone();
-                            let procedure = #procedure_path.to_string();
-                            let request_headers = connectrpc_axum_client::HeaderMap::new();
+                            // Apply the typed on_send interceptor; abort the stream on first error.
                             // Bidi returns a receive stream, so send failures must wake parked receive polls.
                             let interceptor_error = connectrpc_axum_client::SendInterceptorError::new();
-                            let err_capture = interceptor_error.clone();
-
-                            // Use scan to apply interceptor; abort stream on first error
-                            let wrapped = request.scan((), move |_state, mut msg| {
-                                if let Some(ref i) = on_send {
-                                    let ctx = connectrpc_axum_client::StreamContext::new(
-                                        &procedure,
-                                        connectrpc_axum_client::StreamType::BidiStream,
-                                        &request_headers,
-                                        None,
-                                    );
-                                    match i.intercept(&ctx, &mut msg) {
-                                        Ok(()) => ::std::future::ready(Some(msg)),
-                                        Err(e) => {
-                                            err_capture.store(e);
-                                            ::std::future::ready(None)
-                                        }
-                                    }
-                                } else {
-                                    ::std::future::ready(Some(msg))
-                                }
-                            });
+                            let wrapped = connectrpc_axum_client::TypedSendStream::with_send_error_capture(
+                                request,
+                                self.#interceptors_field.on_send.clone(),
+                                #procedure_path.to_string(),
+                                connectrpc_axum_client::StreamType::BidiStream,
+                                connectrpc_axum_client::HeaderMap::new(),
+                                interceptor_error.clone(),
+                            );
 
                             let options = connectrpc_axum_client::CallOptions::new();
-                            let response = self.inner.call_bidi_stream_with_options(#procedure_path, wrapped, options).await?;
+                            let response = self.inner.call_bidi_stream_fallible_with_options(
+                                #procedure_path,
+                                wrapped,
+                                options,
+                                interceptor_error.clone(),
+                            ).await?;
 
                             // Get headers for context
                             let response_headers = response.metadata().headers().clone();
@@ -518,10 +482,8 @@ pub fn generate_connect_client(
                             // Wrap the response stream with typed interceptor
                             let on_receive = self.#interceptors_field.on_receive.clone();
                             Ok(response.map(|streaming| {
-                                // Replace the generic receive wrapper with the generated typed wrapper.
-                                // Generated on_send errors are carried by interceptor_error below.
                                 connectrpc_axum_client::TypedReceiveStreaming::with_send_error_capture(
-                                    streaming.get_inner(),
+                                    streaming,
                                     on_receive,
                                     #procedure_path.to_string(),
                                     connectrpc_axum_client::StreamType::BidiStream,

@@ -205,21 +205,33 @@
 //!
 //! ## Feature Flags
 //!
-//! All features are opt-in. The default configuration enables JSON and Protobuf
-//! encoding with no compression.
+//! JSON and Protobuf encoding are always available. The default feature set
+//! enables TLS with `ring` and native root certificates, with no compression or
+//! tracing.
+//!
+//! ### TLS
+//!
+//! | Feature | Description | Dependencies |
+//! |---------|-------------|--------------|
+//! | `tls` | Default TLS setup | `tls-ring`, `tls-native-roots` |
+//! | `tls-ring` | Use the ring crypto provider | `rustls`, `hyper-rustls` |
+//! | `tls-aws-lc` | Use the AWS-LC crypto provider | `rustls`, `hyper-rustls` |
+//! | `tls-native-roots` | Use system root certificates | `rustls-native-certs` |
+//! | `tls-webpki-roots` | Use bundled Mozilla root certificates | `webpki-roots` |
 //!
 //! ### Compression
 //!
 //! | Feature | Description | Dependencies |
 //! |---------|-------------|--------------|
-//! | `compression-gzip` | Gzip compression (common) | `flate2` |
-//! | `compression-deflate` | Deflate compression | `flate2` |
-//! | `compression-br` | Brotli compression (high ratio) | `brotli` |
-//! | `compression-zstd` | Zstandard compression (fast) | `zstd` |
-//! | `compression-full` | All compression algorithms | All of above |
+//! | `compression-gzip-stream` | Gzip compression (common) | `flate2` |
+//! | `compression-deflate-stream` | Deflate compression | `flate2` |
+//! | `compression-br-stream` | Brotli compression (high ratio) | `brotli` |
+//! | `compression-zstd-stream` | Zstandard compression (fast) | `zstd` |
+//! | `compression-full-stream` | All compression algorithms | All of above |
 //!
-//! **Recommendation**: Use `compression-gzip` for best compatibility. The server
-//! and client negotiate compression automatically via `Accept-Encoding` headers.
+//! **Recommendation**: Use `compression-gzip-stream` for best compatibility. The
+//! server and client negotiate compression automatically via `Accept-Encoding`
+//! headers.
 //!
 //! ### Observability
 //!
@@ -240,13 +252,13 @@
 //! connectrpc-axum-client = "0.1"
 //!
 //! # With gzip compression
-//! connectrpc-axum-client = { version = "0.1", features = ["compression-gzip"] }
+//! connectrpc-axum-client = { version = "0.1", features = ["compression-gzip-stream"] }
 //!
 //! # Full observability setup
-//! connectrpc-axum-client = { version = "0.1", features = ["tracing", "compression-gzip"] }
+//! connectrpc-axum-client = { version = "0.1", features = ["tracing", "compression-gzip-stream"] }
 //!
 //! # Maximum compatibility
-//! connectrpc-axum-client = { version = "0.1", features = ["compression-full", "tracing"] }
+//! connectrpc-axum-client = { version = "0.1", features = ["compression-full-stream", "tracing"] }
 //! ```
 //!
 //! ## Retry Logic
@@ -432,122 +444,79 @@
 //!
 //! ## TLS Configuration
 //!
-//! The client uses [rustls](https://docs.rs/rustls) for TLS by default (via reqwest).
-//! For advanced TLS configuration, provide a pre-configured `reqwest::Client`:
+//! The client uses [rustls](https://docs.rs/rustls) for TLS by default through
+//! [`HyperTransport`]. Use [`ClientBuilder::tls_config`] for custom TLS settings,
+//! or pass a pre-configured [`HyperTransport`] with [`ClientBuilder::with_transport`].
+//! Add `rustls` as a direct dependency when constructing a custom
+//! [`TlsClientConfig`].
 //!
 //! ### Custom Root Certificates
 //!
 //! ```ignore
+//! use connectrpc_axum_client::{ConnectClient, TlsClientConfig};
 //! use std::fs;
 //!
-//! // Load a custom CA certificate
-//! let cert = fs::read("ca.pem")?;
-//! let cert = reqwest::Certificate::from_pem(&cert)?;
+//! // Load a DER-encoded custom CA certificate.
+//! let cert = rustls::pki_types::CertificateDer::from(fs::read("ca.der")?);
+//! let mut roots = rustls::RootCertStore::empty();
+//! roots.add(cert)?;
 //!
-//! let http_client = reqwest::Client::builder()
-//!     .add_root_certificate(cert)
-//!     .build()?;
+//! let tls_config = TlsClientConfig::builder()
+//!     .with_root_certificates(roots)
+//!     .with_no_client_auth();
 //!
 //! let client = ConnectClient::builder("https://internal-service:3000")
-//!     .client(http_client)
+//!     .tls_config(tls_config)
 //!     .build()?;
 //! ```
 //!
 //! ### Client Certificates (mTLS)
 //!
 //! ```ignore
-//! use std::fs;
+//! use connectrpc_axum_client::{ConnectClient, TlsClientConfig};
+//! use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 //!
-//! // Load client certificate and private key
-//! let cert = fs::read("client.pem")?;
-//! let key = fs::read("client-key.pem")?;
-//! let identity = reqwest::Identity::from_pem(&[cert, key].concat())?;
+//! let roots = rustls::RootCertStore::empty();
+//! let cert_chain: Vec<CertificateDer<'static>> = load_client_cert_chain()?;
+//! let private_key: PrivateKeyDer<'static> = load_client_private_key()?;
 //!
-//! let http_client = reqwest::Client::builder()
-//!     .identity(identity)
-//!     .build()?;
+//! let tls_config = TlsClientConfig::builder()
+//!     .with_root_certificates(roots)
+//!     .with_client_auth_cert(cert_chain, private_key)?;
 //!
 //! let client = ConnectClient::builder("https://mtls-server:3000")
-//!     .client(http_client)
+//!     .tls_config(tls_config)
 //!     .build()?;
 //! ```
 //!
 //! ### Disable Certificate Verification (Development Only)
 //!
 //! ```ignore
+//! use connectrpc_axum_client::ConnectClient;
+//!
 //! // WARNING: Only use for development/testing!
-//! let http_client = reqwest::Client::builder()
-//!     .danger_accept_invalid_certs(true)
-//!     .build()?;
-//!
 //! let client = ConnectClient::builder("https://self-signed:3000")
-//!     .client(http_client)
+//!     .danger_accept_invalid_certs()
 //!     .build()?;
 //! ```
 //!
-//! ## Proxy Configuration
+//! ## Advanced Transport Configuration
 //!
-//! Configure HTTP/HTTPS/SOCKS5 proxies via the underlying `reqwest::Client`:
-//!
-//! ### HTTP Proxy
-//!
-//! ```ignore
-//! let proxy = reqwest::Proxy::http("http://proxy.example.com:8080")?;
-//!
-//! let http_client = reqwest::Client::builder()
-//!     .proxy(proxy)
-//!     .build()?;
-//!
-//! let client = ConnectClient::builder("https://api.example.com")
-//!     .client(http_client)
-//!     .build()?;
-//! ```
-//!
-//! ### HTTPS Proxy with Authentication
+//! For full control over HTTP/2 and connection pooling, create a custom
+//! [`HyperTransport`]:
 //!
 //! ```ignore
-//! let proxy = reqwest::Proxy::https("https://proxy.example.com:8080")?
-//!     .basic_auth("username", "password");
+//! use connectrpc_axum_client::{ConnectClient, HyperTransportBuilder};
+//! use std::time::Duration;
 //!
-//! let http_client = reqwest::Client::builder()
-//!     .proxy(proxy)
+//! let transport = HyperTransportBuilder::new()
+//!     .http2_only(true)
+//!     .pool_idle_timeout(Duration::from_secs(60))
 //!     .build()?;
 //!
-//! let client = ConnectClient::builder("https://api.example.com")
-//!     .client(http_client)
-//!     .build()?;
-//! ```
-//!
-//! ### SOCKS5 Proxy
-//!
-//! Requires the `socks` feature on reqwest:
-//!
-//! ```ignore
-//! // In Cargo.toml: reqwest = { features = ["socks"] }
-//! let proxy = reqwest::Proxy::all("socks5://127.0.0.1:1080")?;
-//!
-//! let http_client = reqwest::Client::builder()
-//!     .proxy(proxy)
-//!     .build()?;
-//!
-//! let client = ConnectClient::builder("https://api.example.com")
-//!     .client(http_client)
-//!     .build()?;
-//! ```
-//!
-//! ### Environment Variables
-//!
-//! By default, reqwest respects the following environment variables:
-//! - `HTTP_PROXY` / `http_proxy`: Proxy for HTTP requests
-//! - `HTTPS_PROXY` / `https_proxy`: Proxy for HTTPS requests
-//! - `ALL_PROXY` / `all_proxy`: Proxy for all requests
-//! - `NO_PROXY` / `no_proxy`: Comma-separated list of hosts to bypass proxy
-//!
-//! To disable environment variable detection:
-//!
-//! ```ignore
-//! let http_client = reqwest::Client::builder()
-//!     .no_proxy()
+//! let client = ConnectClient::builder("http://localhost:3000")
+//!     .with_transport(transport)
+//!     .use_proto()
 //!     .build()?;
 //! ```
 //!
@@ -557,15 +526,16 @@
 //!
 //! ### Current Limitations
 //!
-//! The client relies on reqwest features that are not available in WASM:
+//! The client relies on Hyper/Tokio features that are not available in WASM:
 //!
-//! 1. **Streaming bodies**: The `Body::wrap_stream` API used for client/bidi
-//!    streaming is not available in WASM's `fetch`-based implementation.
+//! 1. **Streaming request bodies**: Client and bidirectional streaming use
+//!    Hyper request bodies backed by Rust streams, not browser `fetch` bodies.
 //!
-//! 2. **HTTP/2 prior knowledge**: The `http2_prior_knowledge()` option is not
-//!    available in browser environments (browsers handle protocol negotiation).
+//! 2. **HTTP/2 prior knowledge**: Browser environments handle protocol
+//!    negotiation and do not expose h2c prior knowledge.
 //!
-//! 3. **TCP keep-alive**: Low-level TCP options are not exposed in browser APIs.
+//! 3. **Connection pooling and keep-alive**: Low-level socket options are not
+//!    exposed in browser APIs.
 //!
 //! ### Unary Calls in WASM
 //!
@@ -589,7 +559,7 @@ pub mod response;
 pub mod transport;
 
 pub use builder::{ClientBuildError, ClientBuilder};
-pub use client::ConnectClient;
+pub use client::{ConnectClient, RawStreamingResponse};
 pub use error::ClientError;
 
 // Re-export from config module
@@ -608,6 +578,7 @@ pub use request::FrameEncoder;
 pub use response::{
     ConnectResponse, FrameDecoder, InterceptingSendStream, InterceptingStream,
     InterceptingStreaming, Metadata, SendInterceptorError, Streaming, TypedReceiveStreaming,
+    TypedSendStream,
 };
 
 // Re-export transport types at the top level for convenience
