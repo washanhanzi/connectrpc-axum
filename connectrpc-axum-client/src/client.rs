@@ -996,10 +996,14 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         let response_headers = response.headers().clone();
 
         if !status.is_success() {
-            let body_bytes = response
-                .into_body()
-                .collect()
-                .await
+            let body_result = response.into_body().collect().await;
+            // The transport may still be polling the request body while the
+            // error body is collected, so a send interceptor error can be
+            // recorded after the check above.
+            if let Some(send_error) = take_send_interceptor_error(&send_error) {
+                return Err(send_error);
+            }
+            let body_bytes = body_result
                 .map_err(|e| ClientError::Transport(format!("failed to read error body: {}", e)))?
                 .to_bytes();
             return Err(decompress_and_parse_error(
@@ -1421,10 +1425,14 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         let response_headers = response.headers().clone();
 
         if !status.is_success() {
-            let body_bytes = response
-                .into_body()
-                .collect()
-                .await
+            let body_result = response.into_body().collect().await;
+            // The transport may still be polling the request body while the
+            // error body is collected, so a send interceptor error can be
+            // recorded after the check above.
+            if let Some(send_error) = take_send_interceptor_error(&send_error) {
+                return Err(send_error);
+            }
+            let body_bytes = body_result
                 .map_err(|e| ClientError::Transport(format!("failed to read error body: {}", e)))?
                 .to_bytes();
             return Err(decompress_and_parse_error(
