@@ -41,19 +41,17 @@ fn render_service(
 fn message_types_for_methods(methods: &[MethodDescriptorProto]) -> Vec<DescriptorProto> {
     let mut names = BTreeSet::new();
     for method in methods {
-        if let Some(input_type) = method.input_type.as_deref() {
-            if let Some(name) = input_type.rsplit('.').next()
-                && !name.is_empty()
-            {
-                names.insert(name.to_string());
-            }
+        if let Some(input_type) = method.input_type.as_deref()
+            && let Some(name) = input_type.rsplit('.').next()
+            && !name.is_empty()
+        {
+            names.insert(name.to_string());
         }
-        if let Some(output_type) = method.output_type.as_deref() {
-            if let Some(name) = output_type.rsplit('.').next()
-                && !name.is_empty()
-            {
-                names.insert(name.to_string());
-            }
+        if let Some(output_type) = method.output_type.as_deref()
+            && let Some(name) = output_type.rsplit('.').next()
+            && !name.is_empty()
+        {
+            names.insert(name.to_string());
         }
     }
 
@@ -460,6 +458,96 @@ fn test_keyword_method_names_append_to_existing_output_file() {
     assert!(generated.contains("pub fn r#move"));
     assert!(generated.contains("pub async fn r#move"));
     assert!(generated.contains("pub const MOVE"));
+}
+
+#[test]
+fn test_service_only_packages_create_output_file() {
+    // A package whose proto declares only a service produces no prost output
+    // file; the generator must create it so service code is not dropped.
+    let schema = SchemaSet::from_file_descriptor_set(&FileDescriptorSet {
+        file: vec![
+            FileDescriptorProto {
+                name: Some("types.proto".to_string()),
+                package: Some("types".to_string()),
+                message_type: vec![DescriptorProto {
+                    name: Some("Empty".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            FileDescriptorProto {
+                name: Some("svc.proto".to_string()),
+                package: Some("svc".to_string()),
+                service: vec![ServiceDescriptorProto {
+                    name: Some("OnlyService".to_string()),
+                    method: vec![MethodDescriptorProto {
+                        name: Some("Call".to_string()),
+                        input_type: Some(".types.Empty".to_string()),
+                        output_type: Some(".types.Empty".to_string()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ],
+    });
+
+    let out_dir = tempdir().expect("temp dir");
+    fs::write(out_dir.path().join("types.rs"), "// prost output\n").expect("write prost output");
+
+    AxumConnectServiceGenerator::new()
+        .with_connect_server(true)
+        .append_to_out_dir(&schema, out_dir.path().to_str().expect("utf-8 temp path"))
+        .expect("append generated code");
+
+    let generated =
+        fs::read_to_string(out_dir.path().join("svc.rs")).expect("service-only file created");
+    assert!(generated.contains("// --- Connect service/client code ---"));
+    assert!(generated.contains("OnlyServiceBuilder"));
+}
+
+#[test]
+fn test_service_base_name_collision_fails_generation() {
+    let make_service = |name: &str| ServiceDescriptorProto {
+        name: Some(name.to_string()),
+        method: vec![method(
+            "hello",
+            "SayHello",
+            "HelloRequest",
+            "HelloRequest",
+            false,
+            false,
+            Default::default(),
+        )],
+        ..Default::default()
+    };
+
+    let schema = SchemaSet::from_file_descriptor_set(&FileDescriptorSet {
+        file: vec![FileDescriptorProto {
+            name: Some("hello.proto".to_string()),
+            package: Some("hello".to_string()),
+            message_type: vec![DescriptorProto {
+                name: Some("HelloRequest".to_string()),
+                ..Default::default()
+            }],
+            service: vec![make_service("Greeter"), make_service("GreeterService")],
+            ..Default::default()
+        }],
+    });
+
+    let out_dir = tempdir().expect("temp dir");
+    let err = AxumConnectServiceGenerator::new()
+        .with_connect_server(true)
+        .append_to_out_dir(&schema, out_dir.path().to_str().expect("utf-8 temp path"))
+        .expect_err("colliding builder names must fail generation");
+
+    let message = err.to_string();
+    assert!(message.contains("Greeter"), "unexpected error: {message}");
+    assert!(
+        message.contains("GreeterServiceBuilder"),
+        "unexpected error: {message}"
+    );
 }
 
 #[test]

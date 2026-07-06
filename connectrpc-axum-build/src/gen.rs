@@ -94,33 +94,35 @@ pub(super) struct MethodInfo {
 }
 
 #[derive(Default)]
-pub struct AxumConnectServiceGenerator {
+pub(crate) struct AxumConnectServiceGenerator {
     include_connect_server: bool,
     include_tonic: bool,
     include_connect_client: bool,
 }
 
 impl AxumConnectServiceGenerator {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    pub fn with_connect_server(mut self, include: bool) -> Self {
+    pub(crate) fn with_connect_server(mut self, include: bool) -> Self {
         self.include_connect_server = include;
         self
     }
 
-    pub fn with_tonic(mut self, include: bool) -> Self {
+    pub(crate) fn with_tonic(mut self, include: bool) -> Self {
         self.include_tonic = include;
         self
     }
 
-    pub fn with_connect_client(mut self, include: bool) -> Self {
+    pub(crate) fn with_connect_client(mut self, include: bool) -> Self {
         self.include_connect_client = include;
         self
     }
 
-    pub fn append_to_out_dir(&self, schema: &SchemaSet, out_dir: &str) -> Result<()> {
+    pub(crate) fn append_to_out_dir(&self, schema: &SchemaSet, out_dir: &str) -> Result<()> {
+        self.check_service_name_collisions(schema)?;
+
         let mut generated_by_file = BTreeMap::<String, String>::new();
 
         for service in &schema.services {
@@ -137,20 +139,46 @@ impl AxumConnectServiceGenerator {
         }
 
         for (file_stem, generated) in generated_by_file {
-            let path = format!("{out_dir}/{file_stem}.rs");
-            if !std::path::Path::new(&path).exists() {
-                println!(
-                    "cargo:warning=Skipping generated Connect code for '{}': no matching prost output file.",
-                    file_stem
-                );
-                continue;
-            }
-
+            // Creates the file if prost emitted none (service-only packages)
             append_generated_section(
-                std::path::Path::new(&path),
+                std::path::Path::new(&format!("{out_dir}/{file_stem}.rs")),
                 "// --- Connect service/client code ---",
                 &generated,
             )?;
+        }
+
+        Ok(())
+    }
+
+    /// The Connect builder type names drop a trailing `Service` from the
+    /// service name, so `Foo` and `FooService` in the same package would
+    /// generate colliding items. Fail generation with a clear error instead of
+    /// emitting non-compiling code.
+    fn check_service_name_collisions(&self, schema: &SchemaSet) -> Result<()> {
+        if !self.include_connect_server && !self.include_tonic {
+            return Ok(());
+        }
+
+        let mut seen = BTreeMap::<(String, String), &str>::new();
+        for service in &schema.services {
+            let service_name = schema.prost().rust_service_name(&service.proto_name);
+            let base_name = ident_base_str(
+                service_name
+                    .strip_suffix("Service")
+                    .unwrap_or(&service_name),
+            )
+            .to_string();
+
+            if let Some(other) = seen.insert(
+                (service.package.clone(), base_name.clone()),
+                service.proto_name.as_str(),
+            ) {
+                return Err(std::io::Error::other(format!(
+                    "services '{}' and '{}' in package '{}' both generate builder types named \
+                     '{}ServiceBuilder'; rename one of the services",
+                    other, service.proto_name, service.package, base_name
+                )));
+            }
         }
 
         Ok(())
@@ -164,10 +192,7 @@ impl AxumConnectServiceGenerator {
         };
 
         // Server module name (e.g., hello_world_service_connect)
-        let service_module_name = format_ident!(
-            "{}_connect",
-            naive_snake_case(&service_name).trim_start_matches("r#")
-        );
+        let service_module_name = format_ident!("{}_connect", naive_snake_case(&service_name));
 
         // Remove "Service" suffix from the logical service name to avoid duplication
         let service_base_name = ident_base_str(

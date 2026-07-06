@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::Result;
+use std::io::{Result, Write};
 use std::path::Path;
 
 pub(crate) fn append_generated_section(
@@ -7,12 +7,11 @@ pub(crate) fn append_generated_section(
     banner: &str,
     generated: &str,
 ) -> Result<()> {
-    let mut content = fs::read_to_string(target_file)?;
-    content.push('\n');
-    content.push_str(banner);
-    content.push('\n');
-    content.push_str(generated);
-    fs::write(target_file, content)?;
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(target_file)?;
+    write!(file, "\n{banner}\n{generated}")?;
     Ok(())
 }
 

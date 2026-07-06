@@ -3,6 +3,7 @@ use prost_types::{
     DescriptorProto, EnumDescriptorProto, FileDescriptorProto, FileDescriptorSet,
     MethodDescriptorProto, ServiceDescriptorProto,
 };
+use std::collections::{BTreeSet, HashMap};
 use std::io::Result;
 
 mod prost;
@@ -18,17 +19,21 @@ pub(crate) use prost::ProstSchemaResolver;
 pub(crate) struct SchemaSet {
     pub(crate) types: TypeIndex,
     pub(crate) services: Vec<ServiceModel>,
+    /// All proto packages seen in the descriptor set (including imports),
+    /// in sorted order.
+    pub(crate) packages: BTreeSet<String>,
 }
 
+/// Message and enum types keyed by fully-qualified proto name (e.g.
+/// `.greet.v1.HelloRequest`).
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TypeIndex {
-    types: Vec<TypeModel>,
+    types: HashMap<String, TypeModel>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct TypeModel {
     package: String,
-    proto_fqn: String,
     scoped_name: Vec<String>,
 }
 
@@ -67,9 +72,11 @@ impl SchemaSet {
     pub(crate) fn from_file_descriptor_set(fds: &FileDescriptorSet) -> Self {
         let mut types = TypeIndex::default();
         let mut services = Vec::new();
+        let mut packages = BTreeSet::new();
 
         for file in &fds.file {
             let package = file.package.clone().unwrap_or_default();
+            packages.insert(package.clone());
 
             for msg in &file.message_type {
                 register_message(&mut types, &package, &[], msg);
@@ -86,7 +93,11 @@ impl SchemaSet {
             );
         }
 
-        Self { types, services }
+        Self {
+            types,
+            services,
+            packages,
+        }
     }
 
     pub(crate) fn find_type(&self, proto_fqn: &str) -> Option<&TypeModel> {
@@ -100,7 +111,12 @@ impl SchemaSet {
 
 impl TypeIndex {
     fn find(&self, proto_fqn: &str) -> Option<&TypeModel> {
-        self.types.iter().find(|ty| ty.proto_fqn == proto_fqn)
+        self.types.get(proto_fqn)
+    }
+
+    #[cfg(any(test, feature = "tonic", feature = "tonic-client"))]
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, &TypeModel)> {
+        self.types.iter().map(|(fqn, ty)| (fqn.as_str(), ty))
     }
 }
 
@@ -162,11 +178,13 @@ fn register_message(
     let mut scoped_name = parents.to_vec();
     scoped_name.push(name.to_string());
 
-    types.types.push(TypeModel {
-        package: package.to_string(),
-        proto_fqn: qualified_proto_name(package, &scoped_name),
-        scoped_name: scoped_name.clone(),
-    });
+    types.types.insert(
+        qualified_proto_name(package, &scoped_name),
+        TypeModel {
+            package: package.to_string(),
+            scoped_name: scoped_name.clone(),
+        },
+    );
 
     for nested in &msg.nested_type {
         register_message(types, package, &scoped_name, nested);
@@ -190,11 +208,13 @@ fn register_enum(
     let mut scoped_name = parents.to_vec();
     scoped_name.push(name.to_string());
 
-    types.types.push(TypeModel {
-        package: package.to_string(),
-        proto_fqn: qualified_proto_name(package, &scoped_name),
-        scoped_name,
-    });
+    types.types.insert(
+        qualified_proto_name(package, &scoped_name),
+        TypeModel {
+            package: package.to_string(),
+            scoped_name,
+        },
+    );
 }
 
 fn qualified_proto_name(package: &str, scoped_name: &[String]) -> String {
@@ -269,7 +289,7 @@ mod tests {
         };
 
         let schema = SchemaSet::from_file_descriptor_set(&fds);
-        let mappings = schema.prost().type_path_mappings();
+        let mappings = schema.prost().type_path_mappings("greet.v1");
 
         assert!(mappings.contains(&TypePathMapping {
             proto_path: ".greet.v1.HelloRequest".to_string(),
@@ -326,7 +346,7 @@ mod tests {
         };
 
         let schema = SchemaSet::from_file_descriptor_set(&fds);
-        let mappings = schema.prost().type_path_mappings();
+        let mappings = schema.prost().type_path_mappings("");
 
         assert!(mappings.contains(&TypePathMapping {
             proto_path: ".RootMessage".to_string(),
@@ -392,6 +412,111 @@ mod tests {
         assert_eq!(
             prost.rust_type_relative(".foo.common.Shared", "foo.bar", 1),
             Some("super::super::common::Shared".to_string())
+        );
+    }
+
+    #[test]
+    fn prost_resolver_maps_well_known_types_to_prost_defaults() {
+        let schema = SchemaSet::default();
+        let prost = schema.prost();
+
+        assert_eq!(
+            prost.rust_type_relative(".google.protobuf.Empty", "greet.v1", 1),
+            Some("()".to_string())
+        );
+        assert_eq!(
+            prost.rust_type_relative(".google.protobuf.Timestamp", "greet.v1", 0),
+            Some("::prost_types::Timestamp".to_string())
+        );
+        assert_eq!(
+            prost.rust_type_relative(".google.protobuf.Field.Kind", "", 0),
+            Some("::prost_types::field::Kind".to_string())
+        );
+        assert_eq!(
+            prost.rust_type_relative(".google.protobuf.StringValue", "greet.v1", 2),
+            Some("::prost::alloc::string::String".to_string())
+        );
+        assert_eq!(
+            prost.rust_type_relative(".google.protobuf.BytesValue", "greet.v1", 0),
+            Some("::prost::alloc::vec::Vec<u8>".to_string())
+        );
+        assert_eq!(
+            prost.rust_type_relative(".google.protobufish.Thing", "greet.v1", 0),
+            None
+        );
+    }
+
+    #[test]
+    fn type_path_mappings_are_package_relative_and_skip_well_known_types() {
+        let schema = SchemaSet::from_file_descriptor_set(&FileDescriptorSet {
+            file: vec![
+                FileDescriptorProto {
+                    name: Some("bar.proto".to_string()),
+                    package: Some("foo.bar".to_string()),
+                    message_type: vec![DescriptorProto {
+                        name: Some("Local".to_string()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                FileDescriptorProto {
+                    name: Some("common.proto".to_string()),
+                    package: Some("foo.common".to_string()),
+                    message_type: vec![DescriptorProto {
+                        name: Some("Shared".to_string()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                FileDescriptorProto {
+                    name: Some("google/protobuf/empty.proto".to_string()),
+                    package: Some("google.protobuf".to_string()),
+                    message_type: vec![DescriptorProto {
+                        name: Some("Empty".to_string()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ],
+        });
+
+        let mappings = schema.prost().type_path_mappings("foo.bar");
+
+        assert!(mappings.contains(&TypePathMapping {
+            proto_path: ".foo.bar.Local".to_string(),
+            rust_path: "Local".to_string(),
+        }));
+        assert!(mappings.contains(&TypePathMapping {
+            proto_path: ".foo.common.Shared".to_string(),
+            rust_path: "super::common::Shared".to_string(),
+        }));
+        // Prost's default extern mappings already cover well-known types
+        assert!(
+            !mappings
+                .iter()
+                .any(|mapping| mapping.proto_path.starts_with(".google.protobuf"))
+        );
+    }
+
+    #[test]
+    fn collects_packages_from_all_files() {
+        let schema = SchemaSet::from_file_descriptor_set(&FileDescriptorSet {
+            file: vec![
+                FileDescriptorProto {
+                    name: Some("bar.proto".to_string()),
+                    package: Some("foo.bar".to_string()),
+                    ..Default::default()
+                },
+                FileDescriptorProto {
+                    name: Some("root.proto".to_string()),
+                    ..Default::default()
+                },
+            ],
+        });
+
+        assert_eq!(
+            schema.packages.iter().cloned().collect::<Vec<_>>(),
+            vec!["".to_string(), "foo.bar".to_string()]
         );
     }
 

@@ -347,7 +347,7 @@ pub fn generate_connect_client(
                             let on_receive = self.#interceptors_field.on_receive.clone();
                             Ok(response.map(|streaming| {
                                 connectrpc_axum_client::TypedReceiveStreaming::new(
-                                    streaming.get_inner(),
+                                    streaming.into_inner(),
                                     on_receive,
                                     #procedure_path.to_string(),
                                     connectrpc_axum_client::StreamType::ServerStream,
