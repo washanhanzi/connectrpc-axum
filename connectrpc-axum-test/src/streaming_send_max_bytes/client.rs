@@ -136,10 +136,10 @@ async fn run_one(
         }
 
         // If there is an EndStream frame, check it has no error
-        if let Some(end_stream) = &end_stream_error {
-            if end_stream.get("error").is_some() {
-                anyhow::bail!("expected no error in EndStream, got: {end_stream}");
-            }
+        if let Some(end_stream) = &end_stream_error
+            && end_stream.get("error").is_some()
+        {
+            anyhow::bail!("expected no error in EndStream, got: {end_stream}");
         }
     } else {
         // Should have a resource_exhausted error. The Rust server now always sends

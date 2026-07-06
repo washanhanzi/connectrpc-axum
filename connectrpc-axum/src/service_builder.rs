@@ -61,7 +61,7 @@ use tower_http::compression::CompressionLayer;
     feature = "compression-br-unary",
     feature = "compression-zstd-unary"
 ))]
-use tower_http::compression::predicate::SizeAbove;
+use tower_http::compression::predicate::Predicate;
 #[cfg(any(
     feature = "compression-gzip-unary",
     feature = "compression-deflate-unary",
@@ -91,7 +91,7 @@ pub struct ConnectOnly;
 struct BuilderConfig {
     limits: Option<MessageLimits>,
     require_protocol_header: bool,
-    compression: Option<CompressionConfig>,
+    compression: CompressionConfig,
     timeout: Option<Duration>,
 }
 
@@ -106,7 +106,7 @@ struct BuiltLayers {
         feature = "compression-br-unary",
         feature = "compression-zstd-unary"
     ))]
-    compression_layer: Option<CompressionLayer<SizeAbove>>,
+    compression_layer: Option<CompressionLayer<CompressWhenSize>>,
     #[cfg(any(
         feature = "compression-gzip-unary",
         feature = "compression-deflate-unary",
@@ -114,6 +114,48 @@ struct BuiltLayers {
         feature = "compression-zstd-unary"
     ))]
     decompression_layer: Option<RequestDecompressionLayer>,
+}
+
+/// Compression predicate that only compresses responses of at least
+/// `min_bytes`.
+///
+/// Equivalent to tower-http's `SizeAbove`, but with a `usize` threshold so
+/// configured thresholds above `u16::MAX` are honored instead of being
+/// silently lowered.
+#[cfg(any(
+    feature = "compression-gzip-unary",
+    feature = "compression-deflate-unary",
+    feature = "compression-br-unary",
+    feature = "compression-zstd-unary"
+))]
+#[derive(Clone, Copy, Debug)]
+struct CompressWhenSize(usize);
+
+#[cfg(any(
+    feature = "compression-gzip-unary",
+    feature = "compression-deflate-unary",
+    feature = "compression-br-unary",
+    feature = "compression-zstd-unary"
+))]
+impl Predicate for CompressWhenSize {
+    fn should_compress<B>(&self, response: &http::Response<B>) -> bool
+    where
+        B: http_body::Body,
+    {
+        let content_size = response.body().size_hint().exact().or_else(|| {
+            response
+                .headers()
+                .get(http::header::CONTENT_LENGTH)
+                .and_then(|h| h.to_str().ok())
+                .and_then(|val| val.parse().ok())
+        });
+
+        match content_size {
+            Some(size) => size >= self.0 as u64,
+            // Unknown size: compress (same as tower-http's SizeAbove)
+            _ => true,
+        }
+    }
 }
 
 /// Marker type indicating Tonic-compatible mode (gRPC services added).
@@ -211,10 +253,7 @@ where
             grpc_state: ConnectOnly,
             #[cfg(not(feature = "tonic"))]
             _grpc_state: PhantomData,
-            config: BuilderConfig {
-                compression: Some(CompressionConfig::default()),
-                ..Default::default()
-            },
+            config: BuilderConfig::default(),
         }
     }
 }
@@ -333,7 +372,7 @@ where
     ///     .build();
     /// ```
     pub fn compression(mut self, compression: CompressionConfig) -> Self {
-        self.config.compression = Some(compression);
+        self.config.compression = compression;
         self
     }
 
@@ -535,15 +574,11 @@ where
     }
 
     fn build_connect_layer(&self) -> ConnectLayer {
-        let compression = self
-            .config
-            .compression
-            .unwrap_or(CompressionConfig::disabled());
         let limits = self.config.limits.unwrap_or_default();
         let mut layer = ConnectLayer::new()
             .limits(limits)
             .require_protocol_header(self.config.require_protocol_header)
-            .compression(compression);
+            .compression(self.config.compression);
 
         if let Some(timeout) = self.config.timeout {
             layer = layer.timeout(timeout);
@@ -564,9 +599,7 @@ where
     fn build_compression_layer(
         &self,
         compression: &CompressionConfig,
-    ) -> CompressionLayer<SizeAbove> {
-        let min_bytes = compression.min_bytes.min(u16::MAX as usize) as u16;
-
+    ) -> CompressionLayer<CompressWhenSize> {
         let layer = CompressionLayer::new().quality(to_tower_compression_level(compression.level));
 
         #[cfg(feature = "compression-gzip-unary")]
@@ -579,7 +612,7 @@ where
         let layer = layer.zstd(true);
 
         // compress_when must be called last as it changes the type
-        layer.compress_when(SizeAbove::new(min_bytes))
+        layer.compress_when(CompressWhenSize(compression.min_bytes))
     }
 
     /// Builds a request decompression layer with feature-gated compression algorithms.
@@ -616,17 +649,12 @@ where
     fn build_layers(&self) -> BuiltLayers {
         let connect_layer = self.build_connect_layer();
 
-        let compression_layer = self
-            .config
-            .compression
-            .as_ref()
-            .map(|c| self.build_compression_layer(c));
+        // Skip response compression entirely when disabled; requests with
+        // Content-Encoding are still decompressed.
+        let compression_layer = (!self.config.compression.is_disabled())
+            .then(|| self.build_compression_layer(&self.config.compression));
 
-        let decompression_layer = self
-            .config
-            .compression
-            .as_ref()
-            .map(|_| self.build_request_decompression_layer());
+        let decompression_layer = Some(self.build_request_decompression_layer());
 
         BuiltLayers {
             connect_layer,
@@ -719,8 +747,13 @@ where
         feature = "compression-br-unary",
         feature = "compression-zstd-unary"
     ))]
-    if let (Some(comp), Some(decomp)) = (&layers.compression_layer, &layers.decompression_layer) {
-        router = router.layer(comp.clone()).layer(decomp.clone());
+    {
+        if let Some(comp) = &layers.compression_layer {
+            router = router.layer(comp.clone());
+        }
+        if let Some(decomp) = &layers.decompression_layer {
+            router = router.layer(decomp.clone());
+        }
     }
 
     // Always apply bridge layer for Connect protocol
@@ -1093,6 +1126,61 @@ mod tests {
     #[test]
     fn test_default() {
         let _builder: MakeServiceBuilder = MakeServiceBuilder::default();
+    }
+
+    #[cfg(any(
+        feature = "compression-gzip-unary",
+        feature = "compression-deflate-unary",
+        feature = "compression-br-unary",
+        feature = "compression-zstd-unary"
+    ))]
+    #[test]
+    fn test_disabled_compression_skips_compression_layer() {
+        let builder: MakeServiceBuilder =
+            MakeServiceBuilder::new().compression(CompressionConfig::disabled());
+        let layers = builder.build_layers();
+        assert!(layers.compression_layer.is_none());
+        // Request decompression is unaffected by disabling response compression
+        assert!(layers.decompression_layer.is_some());
+    }
+
+    #[cfg(any(
+        feature = "compression-gzip-unary",
+        feature = "compression-deflate-unary",
+        feature = "compression-br-unary",
+        feature = "compression-zstd-unary"
+    ))]
+    #[test]
+    fn test_default_compression_builds_compression_layer() {
+        let builder: MakeServiceBuilder = MakeServiceBuilder::new();
+        let layers = builder.build_layers();
+        assert!(layers.compression_layer.is_some());
+        assert!(layers.decompression_layer.is_some());
+    }
+
+    #[cfg(any(
+        feature = "compression-gzip-unary",
+        feature = "compression-deflate-unary",
+        feature = "compression-br-unary",
+        feature = "compression-zstd-unary"
+    ))]
+    #[test]
+    fn test_compress_when_size_honors_large_thresholds() {
+        use tower_http::compression::predicate::Predicate;
+
+        // Thresholds above u16::MAX must not be silently lowered.
+        let threshold = (u16::MAX as usize) * 4;
+        let predicate = CompressWhenSize(threshold);
+
+        let small = http::Response::builder()
+            .body(axum::body::Body::from(vec![0u8; threshold - 1]))
+            .unwrap();
+        assert!(!predicate.should_compress(&small));
+
+        let large = http::Response::builder()
+            .body(axum::body::Body::from(vec![0u8; threshold]))
+            .unwrap();
+        assert!(predicate.should_compress(&large));
     }
 
     #[test]

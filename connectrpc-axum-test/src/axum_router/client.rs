@@ -105,10 +105,10 @@ async fn run_get(sock: &TestSocket, path: &str, expected_body: Option<&str>) -> 
         anyhow::bail!("expected non-empty body");
     }
 
-    if let Some(expected) = expected_body {
-        if body_str.as_ref() != expected {
-            anyhow::bail!("expected body {:?}, got {:?}", expected, body_str);
-        }
+    if let Some(expected) = expected_body
+        && body_str.as_ref() != expected
+    {
+        anyhow::bail!("expected body {:?}, got {:?}", expected, body_str);
     }
 
     Ok(())

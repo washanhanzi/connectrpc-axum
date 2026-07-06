@@ -14,7 +14,7 @@ use std::{future::Future, marker::PhantomData, pin::Pin};
 
 use crate::{
     context::ConnectContext,
-    handler::{handle_extractor_rejection, validate_streaming_protocol},
+    handler::{handle_extractor_rejection, validate_streaming_protocol, validate_unary_protocol},
     message::error::ConnectError,
     message::{ConnectRequest, ConnectResponse, StreamBody, Streaming},
 };
@@ -249,7 +249,7 @@ where
     St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
     S: Clone + Send + Sync + 'static,
     Req: Send + Sync + 'static,
-    Resp: Send + Sync + 'static,
+    Resp: Send + 'static,
 {
     fn into_stream_factory(self) -> Box<dyn Fn(&S) -> BoxedStreamCall<Req, Resp> + Send + Sync> {
         let f = self.0;
@@ -282,7 +282,7 @@ where
     Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
     S: Clone + Send + Sync + 'static,
     Req: Send + Sync + 'static,
-    Resp: Send + Sync + 'static,
+    Resp: Send + 'static,
 {
     fn into_client_stream_factory(
         self,
@@ -312,7 +312,7 @@ where
     St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
     S: Clone + Send + Sync + 'static,
     Req: Send + Sync + 'static,
-    Resp: Send + Sync + 'static,
+    Resp: Send + 'static,
 {
     fn into_bidi_stream_factory(
         self,
@@ -406,7 +406,7 @@ macro_rules! impl_into_stream_factory_with_extractors {
             St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
             S: Clone + Send + Sync + 'static,
             Req: Send + Sync + 'static,
-            Resp: Send + Sync + 'static,
+            Resp: Send + 'static,
             $( $A: FromRequestParts<S> + Send + 'static,
                <$A as FromRequestParts<S>>::Rejection: Into<ConnectError>, )+
         {
@@ -454,7 +454,7 @@ macro_rules! impl_into_client_stream_factory_with_extractors {
             Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
             S: Clone + Send + Sync + 'static,
             Req: Send + Sync + 'static,
-            Resp: Send + Sync + 'static,
+            Resp: Send + 'static,
             $( $A: FromRequestParts<S> + Send + 'static,
                <$A as FromRequestParts<S>>::Rejection: Into<ConnectError>, )+
         {
@@ -498,7 +498,7 @@ macro_rules! impl_into_bidi_stream_factory_with_extractors {
             St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
             S: Clone + Send + Sync + 'static,
             Req: Send + Sync + 'static,
-            Resp: Send + Sync + 'static,
+            Resp: Send + 'static,
             $( $A: FromRequestParts<S> + Send + 'static,
                <$A as FromRequestParts<S>>::Rejection: Into<ConnectError>, )+
         {
@@ -548,8 +548,8 @@ impl<F, Fut, Req, Resp> Handler<(ConnectRequest<Req>,), ()> for TonicHandlerWrap
 where
     F: Fn(ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
-    ConnectRequest<Req>: FromRequest<()>,
-    Resp: prost::Message + serde::Serialize + Send + Sync + 'static,
+    ConnectRequest<Req>: FromRequest<(), Rejection = ConnectError>,
+    Resp: prost::Message + serde::Serialize + Send + 'static,
 {
     type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -561,9 +561,14 @@ where
                 .cloned()
                 .unwrap_or_default();
 
+            // Validate: unary handlers only accept unary content-types
+            if let Some(err_response) = validate_unary_protocol(&ctx) {
+                return err_response;
+            }
+
             let connect_req = match ConnectRequest::<Req>::from_request(req, &state).await {
                 Ok(value) => value,
-                Err(err) => return err.into_response(),
+                Err(err) => return err.into_response_with_context(&ctx),
             };
 
             let result = (self.0)(connect_req).await;
@@ -589,14 +594,20 @@ macro_rules! impl_handler_for_unary_with_extractors {
             S: Clone + Send + Sync + 'static,
             $( $A: FromRequestParts<S> + Send + 'static,
                <$A as FromRequestParts<S>>::Rejection: IntoResponse + 'static, )+
-            ConnectRequest<Req>: FromRequest<S>,
-            Resp: prost::Message + serde::Serialize + Send + Sync + 'static,
+            ConnectRequest<Req>: FromRequest<S, Rejection = ConnectError>,
+            Resp: prost::Message + serde::Serialize + Send + 'static,
         {
             type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
             fn call(self, req: Request, state: S) -> Self::Future {
                 Box::pin(async move {
                     let ctx = req.extensions().get::<ConnectContext>().cloned().unwrap_or_default();
+
+                    // Validate: unary handlers only accept unary content-types
+                    if let Some(err_response) = validate_unary_protocol(&ctx) {
+                        return err_response;
+                    }
+
                     let (mut parts, body) = req.into_parts();
 
                     // Extract each FromRequestParts
@@ -612,7 +623,7 @@ macro_rules! impl_handler_for_unary_with_extractors {
                     let req = Request::from_parts(parts, body);
                     let connect_req = match ConnectRequest::<Req>::from_request(req, &state).await {
                         Ok(v) => v,
-                        Err(e) => return e.into_response(),
+                        Err(e) => return e.into_response_with_context(&ctx),
                     };
 
                     match (self.0)($($A,)+ connect_req).await {
@@ -637,9 +648,9 @@ where
     F: Fn(ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
     St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
-    ConnectRequest<Req>: FromRequest<()>,
+    ConnectRequest<Req>: FromRequest<(), Rejection = ConnectError>,
     Req: Send + Sync + 'static,
-    Resp: prost::Message + serde::Serialize + Send + Sync + 'static,
+    Resp: prost::Message + serde::Serialize + Send + 'static,
 {
     type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -651,9 +662,14 @@ where
                 .cloned()
                 .unwrap_or_default();
 
+            // Validate: streaming handlers only accept streaming content-types
+            if let Some(err_response) = validate_streaming_protocol(&ctx) {
+                return err_response;
+            }
+
             let connect_req = match ConnectRequest::<Req>::from_request(req, &()).await {
                 Ok(value) => value,
-                Err(err) => return err.into_response(),
+                Err(err) => return err.into_response_with_context(&ctx),
             };
 
             let result = (self.0)(connect_req).await;
@@ -679,15 +695,21 @@ macro_rules! impl_handler_for_server_stream_with_extractors {
             S: Clone + Send + Sync + 'static,
             $( $A: FromRequestParts<S> + Send + 'static,
                <$A as FromRequestParts<S>>::Rejection: IntoResponse + 'static, )+
-            ConnectRequest<Req>: FromRequest<S>,
+            ConnectRequest<Req>: FromRequest<S, Rejection = ConnectError>,
             Req: Send + Sync + 'static,
-            Resp: prost::Message + serde::Serialize + Send + Sync + 'static,
+            Resp: prost::Message + serde::Serialize + Send + 'static,
         {
             type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
             fn call(self, req: Request, state: S) -> Self::Future {
                 Box::pin(async move {
                     let ctx = req.extensions().get::<ConnectContext>().cloned().unwrap_or_default();
+
+                    // Validate: streaming handlers only accept streaming content-types
+                    if let Some(err_response) = validate_streaming_protocol(&ctx) {
+                        return err_response;
+                    }
+
                     let (mut parts, body) = req.into_parts();
 
                     // Extract each FromRequestParts
@@ -703,7 +725,7 @@ macro_rules! impl_handler_for_server_stream_with_extractors {
                     let req = Request::from_parts(parts, body);
                     let connect_req = match ConnectRequest::<Req>::from_request(req, &state).await {
                         Ok(v) => v,
-                        Err(e) => return e.into_response(),
+                        Err(e) => return e.into_response_with_context(&ctx),
                     };
 
                     match (self.0)($($A,)+ connect_req).await {
@@ -728,7 +750,7 @@ where
     F: Fn(ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
     Req: Message + DeserializeOwned + Default + Send + 'static,
-    Resp: Message + serde::Serialize + Send + Clone + Sync + 'static,
+    Resp: Message + serde::Serialize + Send + 'static,
 {
     type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -748,7 +770,7 @@ where
             let streaming_req = match ConnectRequest::<Streaming<Req>>::from_request(req, &()).await
             {
                 Ok(value) => value,
-                Err(err) => return err.into_response(),
+                Err(err) => return err.into_response_with_context(&ctx),
             };
 
             let result = (self.0)(streaming_req).await;
@@ -774,7 +796,7 @@ macro_rules! impl_handler_for_client_stream_with_extractors {
             $( $A: FromRequestParts<S> + Send + 'static,
                <$A as FromRequestParts<S>>::Rejection: IntoResponse + 'static, )+
             Req: Message + DeserializeOwned + Default + Send + 'static,
-            Resp: Message + serde::Serialize + Send + Clone + Sync + 'static,
+            Resp: Message + serde::Serialize + Send + 'static,
         {
             type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -802,7 +824,7 @@ macro_rules! impl_handler_for_client_stream_with_extractors {
                     let req = Request::from_parts(parts, body);
                     let streaming_req = match ConnectRequest::<Streaming<Req>>::from_request(req, &state).await {
                         Ok(v) => v,
-                        Err(e) => return e.into_response(),
+                        Err(e) => return e.into_response_with_context(&ctx),
                     };
 
                     match (self.0)($($A,)+ streaming_req).await {
@@ -828,7 +850,7 @@ where
     Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
     St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
     Req: Message + DeserializeOwned + Default + Send + 'static,
-    Resp: Message + serde::Serialize + Send + Sync + 'static,
+    Resp: Message + serde::Serialize + Send + 'static,
 {
     type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -848,7 +870,7 @@ where
             let streaming_req = match ConnectRequest::<Streaming<Req>>::from_request(req, &()).await
             {
                 Ok(value) => value,
-                Err(err) => return err.into_response(),
+                Err(err) => return err.into_response_with_context(&ctx),
             };
 
             let result = (self.0)(streaming_req).await;
@@ -875,7 +897,7 @@ macro_rules! impl_handler_for_bidi_stream_with_extractors {
             $( $A: FromRequestParts<S> + Send + 'static,
                <$A as FromRequestParts<S>>::Rejection: IntoResponse + 'static, )+
             Req: Message + DeserializeOwned + Default + Send + 'static,
-            Resp: Message + serde::Serialize + Send + Sync + 'static,
+            Resp: Message + serde::Serialize + Send + 'static,
         {
             type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -903,7 +925,7 @@ macro_rules! impl_handler_for_bidi_stream_with_extractors {
                     let req = Request::from_parts(parts, body);
                     let streaming_req = match ConnectRequest::<Streaming<Req>>::from_request(req, &state).await {
                         Ok(v) => v,
-                        Err(e) => return e.into_response(),
+                        Err(e) => return e.into_response_with_context(&ctx),
                     };
 
                     match (self.0)($($A,)+ streaming_req).await {
@@ -970,7 +992,7 @@ where
 pub fn unimplemented_boxed_call<Req, Resp>() -> BoxedCall<Req, Resp>
 where
     Req: Send + Sync + 'static,
-    Resp: Send + Sync + 'static,
+    Resp: Send + 'static,
 {
     Box::new(|_ctx: Option<RequestContext>, _req: ConnectRequest<Req>| {
         Box::pin(async move { Err(ConnectError::new_unimplemented()) })
@@ -981,7 +1003,7 @@ where
 pub fn unimplemented_boxed_stream_call<Req, Resp>() -> BoxedStreamCall<Req, Resp>
 where
     Req: Send + Sync + 'static,
-    Resp: Send + Sync + 'static,
+    Resp: Send + 'static,
 {
     Box::new(|_ctx: Option<RequestContext>, _req: ConnectRequest<Req>| {
         Box::pin(async move { Err(ConnectError::new_unimplemented()) })
@@ -992,7 +1014,7 @@ where
 pub fn unimplemented_boxed_client_stream_call<Req, Resp>() -> BoxedClientStreamCall<Req, Resp>
 where
     Req: Send + Sync + 'static,
-    Resp: Send + Sync + 'static,
+    Resp: Send + 'static,
 {
     Box::new(
         |_ctx: Option<RequestContext>, _req: ConnectRequest<Streaming<Req>>| {
@@ -1005,7 +1027,7 @@ where
 pub fn unimplemented_boxed_bidi_stream_call<Req, Resp>() -> BoxedBidiStreamCall<Req, Resp>
 where
     Req: Send + Sync + 'static,
-    Resp: Send + Sync + 'static,
+    Resp: Send + 'static,
 {
     Box::new(
         |_ctx: Option<RequestContext>, _req: ConnectRequest<Streaming<Req>>| {

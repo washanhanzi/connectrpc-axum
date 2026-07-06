@@ -351,7 +351,7 @@ async fn test_unary_compression(
 
 fn extract_message(body_bytes: &[u8]) -> anyhow::Result<String> {
     if body_bytes.len() >= 5 && (body_bytes[0] == 0x00 || body_bytes[0] == 0x01) {
-        let mut cursor = &body_bytes[..];
+        let mut cursor = body_bytes;
         while cursor.len() >= 5 {
             let flags = cursor[0];
             let len = u32::from_be_bytes([cursor[1], cursor[2], cursor[3], cursor[4]]) as usize;

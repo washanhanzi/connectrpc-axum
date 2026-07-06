@@ -11,7 +11,7 @@ use std::{
     pin::Pin,
     task::{Context, Poll},
 };
-use tower::{Layer, Service};
+use tower::{Layer, Service, ServiceExt};
 
 use crate::context::MessageLimits;
 use crate::context::protocol::detect_protocol;
@@ -38,22 +38,13 @@ use crate::message::error::{Code, ConnectError};
 ///     .layer(CompressionLayer::new())
 ///     .layer(BridgeLayer::new());
 /// ```
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct BridgeLayer {
     /// Maximum request body size in bytes (compressed size).
     /// `None` means unlimited.
     receive_max_bytes: Option<usize>,
     /// Maximum size for streaming error control frames.
     send_max_bytes: Option<usize>,
-}
-
-impl Default for BridgeLayer {
-    fn default() -> Self {
-        Self {
-            receive_max_bytes: None,
-            send_max_bytes: None,
-        }
-    }
 }
 
 impl BridgeLayer {
@@ -121,24 +112,23 @@ where
 
     fn call(&mut self, mut req: Request<Body>) -> Self::Future {
         // Check Content-Length against receive_max_bytes limit
-        if let Some(max_size) = self.receive_max_bytes {
-            if let Some(content_length) = get_content_length(&req) {
-                if content_length > max_size {
-                    // Detect protocol to return proper error format
-                    let protocol = detect_protocol(&req);
-                    let err = ConnectError::new(
-                        Code::ResourceExhausted,
-                        format!(
-                            "request body size {} exceeds maximum allowed size of {} bytes",
-                            content_length, max_size
-                        ),
-                    );
-                    let send_max_bytes = self.send_max_bytes;
-                    return Box::pin(async move {
-                        Ok(err.into_response_with_send_limit(protocol, send_max_bytes))
-                    });
-                }
-            }
+        if let Some(max_size) = self.receive_max_bytes
+            && let Some(content_length) = get_content_length(&req)
+            && content_length > max_size
+        {
+            // Detect protocol to return proper error format
+            let protocol = detect_protocol(&req);
+            let err = ConnectError::new(
+                Code::ResourceExhausted,
+                format!(
+                    "request body size {} exceeds maximum allowed size of {} bytes",
+                    content_length, max_size
+                ),
+            );
+            let send_max_bytes = self.send_max_bytes;
+            return Box::pin(async move {
+                Ok(err.into_response_with_send_limit(protocol, send_max_bytes))
+            });
         }
 
         if is_connect_streaming(&req) {
@@ -179,9 +169,6 @@ fn is_connect_streaming<B>(req: &Request<B>) -> bool {
         .map(|ct| ct.starts_with("application/connect+"))
         .unwrap_or(false)
 }
-
-// Import ServiceExt for oneshot
-use tower::ServiceExt;
 
 #[cfg(test)]
 mod tests {

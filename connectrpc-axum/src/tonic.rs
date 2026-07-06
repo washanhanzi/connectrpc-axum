@@ -27,7 +27,7 @@ use bytes::Bytes;
 use futures::future::BoxFuture;
 use http_body::Body as HttpBody;
 use hyper::http::header::CONTENT_TYPE;
-use hyper::http::{Request, Response, StatusCode};
+use hyper::http::{Request, Response};
 
 /// Returns true if the request looks like a gRPC (Tonic) call based on `content-type`.
 ///
@@ -51,12 +51,6 @@ where
     B::Error: Into<Box<dyn std::error::Error + Send + Sync>> + 'static,
 {
     AxumBody::new(body)
-}
-
-fn internal_error<E: std::fmt::Display>(err: E) -> AxumResponse {
-    let mut r = AxumResponse::new(AxumBody::from(format!("internal error: {err}")));
-    *r.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-    r
 }
 
 /// A dispatcher that forwards gRPC requests to a Tonic service and others to an Axum router.
@@ -110,21 +104,19 @@ where
 
         Box::pin(async move {
             if is_grpc_req {
-                match tower::ServiceExt::oneshot(grpc, req).await {
-                    Ok(res) => {
-                        let (parts, body) = res.into_parts();
-                        Ok(Response::from_parts(parts, to_axum_body(body)))
-                    }
-                    Err(e) => Ok(internal_error(e)),
-                }
+                let res = match tower::ServiceExt::oneshot(grpc, req).await {
+                    Ok(res) => res,
+                    Err(e) => match e {},
+                };
+                let (parts, body) = res.into_parts();
+                Ok(Response::from_parts(parts, to_axum_body(body)))
             } else {
-                match tower::ServiceExt::oneshot(http, req).await {
-                    Ok(res) => {
-                        let (parts, body) = res.into_parts();
-                        Ok(Response::from_parts(parts, to_axum_body(body)))
-                    }
-                    Err(e) => Ok(internal_error(e)),
-                }
+                let res = match tower::ServiceExt::oneshot(http, req).await {
+                    Ok(res) => res,
+                    Err(e) => match e {},
+                };
+                let (parts, body) = res.into_parts();
+                Ok(Response::from_parts(parts, to_axum_body(body)))
             }
         })
     }

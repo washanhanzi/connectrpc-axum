@@ -49,7 +49,7 @@ where
 ///
 /// Unary handlers only accept unary content-types (`application/json`, `application/proto`).
 /// Streaming content-types are rejected with `Code::Unknown`.
-fn validate_unary_protocol(ctx: &ConnectContext) -> Option<Response> {
+pub(crate) fn validate_unary_protocol(ctx: &ConnectContext) -> Option<Response> {
     validate_unary_content_type(ctx.protocol).map(|err| err.into_response_with_context(ctx))
 }
 
@@ -113,9 +113,9 @@ impl<F, Fut, Req, Resp> Handler<(ConnectRequest<Req>,), ()> for ConnectHandlerWr
 where
     F: Fn(ConnectRequest<Req>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
-    ConnectRequest<Req>: FromRequest<()>,
+    ConnectRequest<Req>: FromRequest<(), Rejection = ConnectError>,
     Req: Send + Sync + 'static,
-    Resp: prost::Message + serde::Serialize + Send + Clone + Sync + 'static,
+    Resp: prost::Message + serde::Serialize + Send + 'static,
 {
     type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -136,7 +136,7 @@ where
             // Extract the ConnectRequest (body only)
             let connect_req = match ConnectRequest::<Req>::from_request(req, &()).await {
                 Ok(value) => value,
-                Err(err) => return err.into_response(),
+                Err(err) => return err.into_response_with_context(&ctx),
             };
 
             // Call the handler function
@@ -167,12 +167,12 @@ macro_rules! impl_handler_for_connect_handler_wrapper {
             // Constraints on extractors (rejection must be 'static for Any)
             $( $A: FromRequestParts<S> + Send + Sync + 'static,
                <$A as FromRequestParts<S>>::Rejection: 'static, )*
-            ConnectRequest<Req>: FromRequest<S>,
+            ConnectRequest<Req>: FromRequest<S, Rejection = ConnectError>,
             Req: Send + Sync + 'static,
             S: Send + Sync + 'static,
 
             // Response constraints
-            Resp: prost::Message + serde::Serialize + Send + Clone + Sync + 'static,
+            Resp: prost::Message + serde::Serialize + Send + 'static,
         {
             type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -208,7 +208,7 @@ macro_rules! impl_handler_for_connect_handler_wrapper {
                     // Extract the ConnectRequest (body)
                     let connect_req = match ConnectRequest::<Req>::from_request(req, &state).await {
                         Ok(value) => value,
-                        Err(err) => return err.into_response(),
+                        Err(err) => return err.into_response_with_context(&ctx),
                     };
 
                     // Call the handler function
@@ -254,7 +254,7 @@ macro_rules! impl_server_stream_handler_for_connect_handler_wrapper {
             S: Send + Sync + 'static,
 
             // Response constraints
-            Resp: Message + serde::Serialize + Send + Sync + 'static,
+            Resp: Message + serde::Serialize + Send + 'static,
         {
             type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -284,7 +284,7 @@ macro_rules! impl_server_stream_handler_for_connect_handler_wrapper {
 
                     let connect_req = match ConnectRequest::<Req>::from_request(req, &state).await {
                         Ok(value) => value,
-                        Err(err) => return err.into_response(),
+                        Err(err) => return err.into_response_with_context(&ctx),
                     };
 
                     let result = (self.0)($($A,)* connect_req).await;
@@ -324,7 +324,7 @@ macro_rules! impl_client_stream_handler_for_connect_handler_wrapper {
             S: Send + Sync + 'static,
 
             // Response constraints
-            Resp: Message + serde::Serialize + Send + Clone + Sync + 'static,
+            Resp: Message + serde::Serialize + Send + 'static,
         {
             type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -355,7 +355,7 @@ macro_rules! impl_client_stream_handler_for_connect_handler_wrapper {
                     let streaming_req =
                         match ConnectRequest::<Streaming<Req>>::from_request(req, &state).await {
                             Ok(value) => value,
-                            Err(err) => return err.into_response(),
+                            Err(err) => return err.into_response_with_context(&ctx),
                         };
 
                     let result = (self.0)($($A,)* streaming_req).await;
@@ -396,7 +396,7 @@ macro_rules! impl_bidi_stream_handler_for_connect_handler_wrapper {
             S: Send + Sync + 'static,
 
             // Response constraints
-            Resp: Message + serde::Serialize + Send + Sync + 'static,
+            Resp: Message + serde::Serialize + Send + 'static,
         {
             type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -427,7 +427,7 @@ macro_rules! impl_bidi_stream_handler_for_connect_handler_wrapper {
                     let streaming_req =
                         match ConnectRequest::<Streaming<Req>>::from_request(req, &state).await {
                             Ok(value) => value,
-                            Err(err) => return err.into_response(),
+                            Err(err) => return err.into_response_with_context(&ctx),
                         };
 
                     let result = (self.0)($($A,)* streaming_req).await;
@@ -461,7 +461,7 @@ where
     St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
     // Req must be a Message (not Streaming<T>) to distinguish from bidi streaming
     Req: Message + DeserializeOwned + Default + Send + Sync + 'static,
-    Resp: Message + serde::Serialize + Send + Sync + 'static,
+    Resp: Message + serde::Serialize + Send + 'static,
 {
     type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -480,7 +480,7 @@ where
 
             let connect_req = match ConnectRequest::<Req>::from_request(req, &()).await {
                 Ok(value) => value,
-                Err(err) => return err.into_response(),
+                Err(err) => return err.into_response_with_context(&ctx),
             };
 
             let result = (self.0)(connect_req).await;
@@ -504,7 +504,7 @@ where
     F: Fn(ConnectRequest<Streaming<Req>>) -> Fut + Clone + Send + Sync + 'static,
     Fut: Future<Output = Result<ConnectResponse<Resp>, ConnectError>> + Send + 'static,
     Req: Message + DeserializeOwned + Default + Send + 'static,
-    Resp: Message + serde::Serialize + Send + Clone + Sync + 'static,
+    Resp: Message + serde::Serialize + Send + 'static,
 {
     type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -524,7 +524,7 @@ where
             let streaming_req = match ConnectRequest::<Streaming<Req>>::from_request(req, &()).await
             {
                 Ok(value) => value,
-                Err(err) => return err.into_response(),
+                Err(err) => return err.into_response_with_context(&ctx),
             };
 
             let result = (self.0)(streaming_req).await;
@@ -551,7 +551,7 @@ where
     Fut: Future<Output = Result<ConnectResponse<StreamBody<St>>, ConnectError>> + Send + 'static,
     St: Stream<Item = Result<Resp, ConnectError>> + Send + 'static,
     Req: Message + DeserializeOwned + Default + Send + 'static,
-    Resp: Message + serde::Serialize + Send + Sync + 'static,
+    Resp: Message + serde::Serialize + Send + 'static,
 {
     type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
 
@@ -571,7 +571,7 @@ where
             let streaming_req = match ConnectRequest::<Streaming<Req>>::from_request(req, &()).await
             {
                 Ok(value) => value,
-                Err(err) => return err.into_response(),
+                Err(err) => return err.into_response_with_context(&ctx),
             };
 
             let result = (self.0)(streaming_req).await;
