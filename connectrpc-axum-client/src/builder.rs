@@ -49,6 +49,8 @@ pub struct ClientBuilder<I = ()> {
     accept_encoding: Option<CompressionEncoding>,
     /// Default timeout for RPC calls.
     default_timeout: Option<Duration>,
+    /// Maximum size in bytes of a received (decompressed) message.
+    receive_max_bytes: Option<usize>,
     /// Unified interceptor chain (compile-time composed).
     interceptor: I,
 }
@@ -63,6 +65,7 @@ impl<I> std::fmt::Debug for ClientBuilder<I> {
             .field("request_encoding", &self.request_encoding)
             .field("accept_encoding", &self.accept_encoding)
             .field("default_timeout", &self.default_timeout)
+            .field("receive_max_bytes", &self.receive_max_bytes)
             .finish_non_exhaustive()
     }
 }
@@ -88,6 +91,7 @@ impl ClientBuilder<()> {
             request_encoding: CompressionEncoding::Identity,
             accept_encoding: None,
             default_timeout: None,
+            receive_max_bytes: None,
             interceptor: (),
         }
     }
@@ -222,6 +226,30 @@ impl<I: InterceptorInternal> ClientBuilder<I> {
         self
     }
 
+    /// Limit the size in bytes of messages received from the server.
+    ///
+    /// The limit applies to each message after decompression: unary response
+    /// bodies as well as individual messages in streaming responses. When a
+    /// message exceeds the limit, the call fails with a
+    /// [`Code::ResourceExhausted`](connectrpc_axum_core::Code::ResourceExhausted)
+    /// error. Streaming frames whose declared envelope length already exceeds
+    /// the limit are rejected before any payload is buffered.
+    ///
+    /// By default there is no limit. This mirrors connect-go's
+    /// `WithReadMaxBytes` option.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let client = ClientBuilder::new("http://localhost:3000")
+    ///     .receive_max_bytes(4 * 1024 * 1024) // 4 MiB
+    ///     .build()?;
+    /// ```
+    pub fn receive_max_bytes(mut self, limit: usize) -> Self {
+        self.receive_max_bytes = Some(limit);
+        self
+    }
+
     /// Add a header-level interceptor to the client.
     ///
     /// Header interceptors can inspect and modify request/response headers
@@ -265,6 +293,7 @@ impl<I: InterceptorInternal> ClientBuilder<I> {
             request_encoding: self.request_encoding,
             accept_encoding: self.accept_encoding,
             default_timeout: self.default_timeout,
+            receive_max_bytes: self.receive_max_bytes,
             interceptor: Chain(self.interceptor, HeaderWrapper(interceptor)),
         }
     }
@@ -326,6 +355,7 @@ impl<I: InterceptorInternal> ClientBuilder<I> {
             request_encoding: self.request_encoding,
             accept_encoding: self.accept_encoding,
             default_timeout: self.default_timeout,
+            receive_max_bytes: self.receive_max_bytes,
             interceptor: Chain(self.interceptor, MessageWrapper(interceptor)),
         }
     }
@@ -470,6 +500,7 @@ impl<I: InterceptorInternal> ClientBuilder<I> {
             self.request_encoding,
             self.accept_encoding,
             self.default_timeout,
+            self.receive_max_bytes,
             self.interceptor,
         ))
     }
@@ -553,6 +584,18 @@ mod tests {
     fn test_builder_timeout_default_none() {
         let builder = ClientBuilder::new("http://localhost:3000");
         assert!(builder.default_timeout.is_none());
+    }
+
+    #[test]
+    fn test_builder_receive_max_bytes() {
+        let builder = ClientBuilder::new("http://localhost:3000").receive_max_bytes(4096);
+        assert_eq!(builder.receive_max_bytes, Some(4096));
+    }
+
+    #[test]
+    fn test_builder_receive_max_bytes_default_none() {
+        let builder = ClientBuilder::new("http://localhost:3000");
+        assert!(builder.receive_max_bytes.is_none());
     }
 
     #[test]

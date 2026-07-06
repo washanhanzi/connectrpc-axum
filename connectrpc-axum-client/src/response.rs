@@ -5,7 +5,7 @@
 //! - [`Metadata`]: HTTP headers wrapper
 //! - [`Streaming`]: Streaming response wrapper
 //! - [`FrameDecoder`]: Decodes Connect protocol envelope frames
-//! - [`InterceptingStream`]: Stream wrapper for message-level interception
+//! - [`InterceptingStreaming`]: Streaming wrapper for message-level interception
 //! - [`InterceptingSendStream`]: Stream wrapper for outgoing message interception
 
 mod decoder;
@@ -15,10 +15,12 @@ mod streaming;
 mod types;
 
 pub use decoder::FrameDecoder;
+#[allow(deprecated)]
+pub use intercepting::InterceptingStream;
 pub(crate) use intercepting::take_send_interceptor_error;
 pub use intercepting::{
-    InterceptingSendStream, InterceptingStream, InterceptingStreaming, SendInterceptorError,
-    TypedReceiveStreaming, TypedSendStream,
+    InterceptingSendStream, InterceptingStreaming, SendInterceptorError, TypedReceiveStreaming,
+    TypedSendStream,
 };
 pub use streaming::Streaming;
 pub use types::{ConnectResponse, Metadata};

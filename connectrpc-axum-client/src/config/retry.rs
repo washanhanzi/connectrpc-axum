@@ -399,19 +399,6 @@ where
     }
 }
 
-/// Extension trait for adding retry capabilities to clients.
-///
-/// This trait is not yet implemented but reserved for future use
-/// where the client itself could have built-in retry methods.
-#[allow(dead_code)]
-pub trait RetryExt {
-    /// Retry an operation with the default policy.
-    fn with_retry<F, Fut, T>(&self, f: F) -> impl Future<Output = Result<T, ClientError>>
-    where
-        F: Fn() -> Fut,
-        Fut: Future<Output = Result<T, ClientError>>;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

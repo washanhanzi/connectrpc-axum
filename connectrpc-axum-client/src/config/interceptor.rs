@@ -214,6 +214,11 @@ pub trait Interceptor: Send + Sync + Clone + 'static {
 /// ```
 pub trait MessageInterceptor: Send + Sync + Clone + 'static {
     /// Called before a unary request is sent.
+    ///
+    /// Also called with the single request message of a server-streaming
+    /// call; for client- and bidirectional-streaming calls it is called with
+    /// a unit placeholder (per-message interception uses
+    /// [`on_stream_send`](Self::on_stream_send)).
     fn on_request<Req>(
         &self,
         ctx: &mut RequestContext,
@@ -227,6 +232,10 @@ pub trait MessageInterceptor: Send + Sync + Clone + 'static {
     }
 
     /// Called after a unary response is received.
+    ///
+    /// Also called with the single response message of a client-streaming
+    /// call; server- and bidirectional-streaming responses go through
+    /// [`on_stream_receive`](Self::on_stream_receive) per message.
     fn on_response<Res>(&self, ctx: &ResponseContext, response: &mut Res) -> Result<(), ClientError>
     where
         Res: Message + DeserializeOwned + Default + 'static,

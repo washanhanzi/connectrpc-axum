@@ -113,7 +113,7 @@ impl CallOptions {
 
     /// Try to add a custom header for this call.
     ///
-    /// Returns `None` if the header name or value is invalid.
+    /// Returns an error if the header name or value is invalid.
     ///
     /// Headers beginning with "Connect-" and "Grpc-" are reserved for use by
     /// the Connect and gRPC protocols. Applications may read them but should
@@ -128,15 +128,19 @@ impl CallOptions {
     ///     .try_header("authorization", "Bearer token123")?
     ///     .try_header("x-request-id", "abc-123")?;
     /// ```
-    pub fn try_header<K, V>(mut self, name: K, value: V) -> Option<Self>
+    pub fn try_header<K, V>(mut self, name: K, value: V) -> Result<Self, crate::ClientError>
     where
         K: TryInto<HeaderName>,
         V: TryInto<HeaderValue>,
     {
-        let name = name.try_into().ok()?;
-        let value = value.try_into().ok()?;
+        let name = name
+            .try_into()
+            .map_err(|_| crate::ClientError::invalid_argument("invalid header name"))?;
+        let value = value
+            .try_into()
+            .map_err(|_| crate::ClientError::invalid_argument("invalid header value"))?;
         self.headers.insert(name, value);
-        Some(self)
+        Ok(self)
     }
 
     /// Set all custom headers for this call, replacing any existing headers.
@@ -247,7 +251,7 @@ mod tests {
     fn test_call_options_try_header_invalid() {
         // Invalid header name (contains invalid characters)
         let result = CallOptions::new().try_header("invalid\0name", "value");
-        assert!(result.is_none());
+        assert!(result.is_err());
     }
 
     #[test]
