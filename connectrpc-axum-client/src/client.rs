@@ -316,10 +316,19 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             headers.insert(CONNECT_TIMEOUT_HEADER, timeout_ms.parse().unwrap());
         }
 
-        // Add custom headers from options (skip reserved protocol headers)
-        for (name, value) in options.headers.iter() {
-            if !is_reserved_header(name) {
-                headers.insert(name.clone(), value.clone());
+        // Add custom headers from options (skip reserved protocol headers).
+        // Insert the first value for each name (overriding any default) and
+        // append the rest so multi-valued headers are preserved.
+        for name in options.headers.keys() {
+            if is_reserved_header(name) {
+                continue;
+            }
+            let mut values = options.headers.get_all(name).iter();
+            if let Some(first) = values.next() {
+                headers.insert(name.clone(), first.clone());
+            }
+            for value in values {
+                headers.append(name.clone(), value.clone());
             }
         }
 
@@ -434,10 +443,19 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                 );
             }
 
-            // Add custom headers from options (skip reserved protocol headers)
-            for (name, value) in options.headers.iter() {
-                if !is_reserved_header(name) {
-                    headers.insert(name.clone(), value.clone());
+            // Add custom headers from options (skip reserved protocol headers).
+            // Insert the first value for each name (overriding any default) and
+            // append the rest so multi-valued headers are preserved.
+            for name in options.headers.keys() {
+                if is_reserved_header(name) {
+                    continue;
+                }
+                let mut values = options.headers.get_all(name).iter();
+                if let Some(first) = values.next() {
+                    headers.insert(name.clone(), first.clone());
+                }
+                for value in values {
+                    headers.append(name.clone(), value.clone());
                 }
             }
 
@@ -474,25 +492,24 @@ impl<I: InterceptorInternal> ConnectClient<I> {
 
             // Send the request and read the response body. The client-side
             // timeout covers the entire call: connection, request, and
-            // response body.
+            // response body. Reading stops early if the body exceeds the
+            // receive limit so an oversized response cannot exhaust memory.
             let call = async {
                 let response = self.transport.request(req).await?;
 
                 let status = response.status();
                 let response_headers = response.headers().clone();
 
-                let body_bytes = response
-                    .into_body()
-                    .collect()
-                    .await
-                    .map_err(|e| {
-                        ClientError::Transport(format!("failed to read response body: {}", e))
-                    })?
-                    .to_bytes();
+                let body = collect_body_limited(
+                    response.into_body(),
+                    self.receive_max_bytes,
+                    "response body",
+                )
+                .await?;
 
-                Ok::<_, ClientError>((status, response_headers, body_bytes))
+                Ok::<_, ClientError>((status, response_headers, body))
             };
-            let (status, response_headers, body_bytes) = match effective_timeout {
+            let (status, response_headers, body) = match effective_timeout {
                 Some(t) => timeout(t, call).await.map_err(|_| {
                     ClientError::new(Code::DeadlineExceeded, "client timeout exceeded")
                 })??,
@@ -501,12 +518,27 @@ impl<I: InterceptorInternal> ConnectClient<I> {
 
             // Check response status
             if !status.is_success() {
-                return Err(decompress_and_parse_error(
-                    status,
-                    &response_headers,
-                    body_bytes,
-                ));
+                return Err(match body {
+                    LimitedBody::Complete(body_bytes) => decompress_and_parse_error(
+                        status,
+                        &response_headers,
+                        body_bytes,
+                        self.receive_max_bytes,
+                    ),
+                    LimitedBody::TooLarge => error_body_exceeds_limit(status),
+                });
             }
+
+            let body_bytes = match body {
+                LimitedBody::Complete(body_bytes) => body_bytes,
+                LimitedBody::TooLarge => {
+                    let limit = self.receive_max_bytes.unwrap_or(usize::MAX);
+                    return Err(ClientError::new(
+                        Code::ResourceExhausted,
+                        format!("message size exceeds maximum allowed size of {limit} bytes"),
+                    ));
+                }
+            };
 
             // Handle response decompression
             let content_encoding = response_headers
@@ -521,19 +553,8 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                     ))
                 })?;
 
-            // Enforce the receive limit on the wire size, then decompress
-            // (bounded, so a decompression bomb cannot exhaust memory)
-            if let Some(limit) = self.receive_max_bytes
-                && body_bytes.len() > limit
-            {
-                return Err(ClientError::new(
-                    Code::ResourceExhausted,
-                    format!(
-                        "message size {} exceeds maximum allowed size of {limit} bytes",
-                        body_bytes.len()
-                    ),
-                ));
-            }
+            // Decompress bounded by the receive limit, so a decompression
+            // bomb cannot exhaust memory
             let body_bytes = if let Some(codec) = response_encoding.codec() {
                 codec
                     .decompress_limited(&body_bytes, self.receive_max_bytes.unwrap_or(usize::MAX))
@@ -542,9 +563,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                             Code::ResourceExhausted,
                             format!("message size exceeds maximum allowed size of {limit} bytes"),
                         ),
-                        DecompressError::Io(e) => {
-                            ClientError::Decode(format!("decompression failed: {}", e))
-                        }
+                        e => ClientError::Decode(format!("decompression failed: {}", e)),
                     })?
             } else {
                 body_bytes
@@ -745,19 +764,21 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             let response_headers = response.headers().clone();
 
             if !status.is_success() {
-                let body_bytes = response
-                    .into_body()
-                    .collect()
-                    .await
-                    .map_err(|e| {
-                        ClientError::Transport(format!("failed to read error body: {}", e))
-                    })?
-                    .to_bytes();
-                return Err(decompress_and_parse_error(
-                    status,
-                    &response_headers,
-                    body_bytes,
-                ));
+                let body = collect_body_limited(
+                    response.into_body(),
+                    self.receive_max_bytes,
+                    "error body",
+                )
+                .await?;
+                return Err(match body {
+                    LimitedBody::Complete(body_bytes) => decompress_and_parse_error(
+                        status,
+                        &response_headers,
+                        body_bytes,
+                        self.receive_max_bytes,
+                    ),
+                    LimitedBody::TooLarge => error_body_exceeds_limit(status),
+                });
             }
 
             // Get compression encoding from Connect-Content-Encoding header
@@ -1021,23 +1042,27 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             let response_headers = response.headers().clone();
 
             if !status.is_success() {
-                let body_result = response.into_body().collect().await;
+                let body_result = collect_body_limited(
+                    response.into_body(),
+                    self.receive_max_bytes,
+                    "error body",
+                )
+                .await;
                 // The transport may still be polling the request body while the
                 // error body is collected, so a send interceptor error can be
                 // recorded after the check above.
                 if let Some(send_error) = take_send_interceptor_error(&send_error) {
                     return Err(send_error);
                 }
-                let body_bytes = body_result
-                    .map_err(|e| {
-                        ClientError::Transport(format!("failed to read error body: {}", e))
-                    })?
-                    .to_bytes();
-                return Err(decompress_and_parse_error(
-                    status,
-                    &response_headers,
-                    body_bytes,
-                ));
+                return Err(match body_result? {
+                    LimitedBody::Complete(body_bytes) => decompress_and_parse_error(
+                        status,
+                        &response_headers,
+                        body_bytes,
+                        self.receive_max_bytes,
+                    ),
+                    LimitedBody::TooLarge => error_body_exceeds_limit(status),
+                });
             }
 
             let content_encoding = response_headers
@@ -1087,6 +1112,9 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                         return Err(e);
                     }
                     Ok(_) => {
+                        if let Some(send_error) = take_send_interceptor_error(&send_error) {
+                            return Err(send_error);
+                        }
                         // Protocol violation: got another message after the response
                         return Err(ClientError::new(
                             Code::Unimplemented,
@@ -1437,21 +1465,24 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         let response_headers = response.headers().clone();
 
         if !status.is_success() {
-            let body_result = response.into_body().collect().await;
+            let body_result =
+                collect_body_limited(response.into_body(), self.receive_max_bytes, "error body")
+                    .await;
             // The transport may still be polling the request body while the
             // error body is collected, so a send interceptor error can be
             // recorded after the check above.
             if let Some(send_error) = take_send_interceptor_error(&send_error) {
                 return Err(send_error);
             }
-            let body_bytes = body_result
-                .map_err(|e| ClientError::Transport(format!("failed to read error body: {}", e)))?
-                .to_bytes();
-            return Err(decompress_and_parse_error(
-                status,
-                &response_headers,
-                body_bytes,
-            ));
+            return Err(match body_result? {
+                LimitedBody::Complete(body_bytes) => decompress_and_parse_error(
+                    status,
+                    &response_headers,
+                    body_bytes,
+                    self.receive_max_bytes,
+                ),
+                LimitedBody::TooLarge => error_body_exceeds_limit(status),
+            });
         }
 
         // Bidi streaming requires HTTP/2 for full-duplex operation. Checked
@@ -1494,6 +1525,49 @@ impl<I: InterceptorInternal> ConnectClient<I> {
     }
 }
 
+/// Outcome of reading a response body under the client's receive limit.
+enum LimitedBody {
+    Complete(Bytes),
+    /// The body exceeded `receive_max_bytes`; reading stopped early.
+    TooLarge,
+}
+
+/// Collect a response body, stopping as soon as more than `limit` bytes have
+/// been buffered so an oversized (or unbounded) body cannot exhaust memory.
+/// `context` names the body in transport error messages.
+async fn collect_body_limited(
+    body: hyper::body::Incoming,
+    limit: Option<usize>,
+    context: &str,
+) -> Result<LimitedBody, ClientError> {
+    let limit = limit.unwrap_or(usize::MAX);
+    let mut buf = bytes::BytesMut::new();
+    let mut body = std::pin::pin!(body);
+    while let Some(frame) = body.frame().await {
+        let frame =
+            frame.map_err(|e| ClientError::Transport(format!("failed to read {context}: {e}")))?;
+        if let Ok(data) = frame.into_data() {
+            if buf.len().saturating_add(data.len()) > limit {
+                return Ok(LimitedBody::TooLarge);
+            }
+            buf.extend_from_slice(&data);
+        }
+    }
+    Ok(LimitedBody::Complete(buf.freeze()))
+}
+
+/// Error for a non-2xx response whose body could not be processed within
+/// `receive_max_bytes`: the error details are dropped, but the code derived
+/// from the HTTP status is still delivered to the caller (graceful
+/// degradation, mirroring the strategy adopted for oversized EndStream
+/// frames on the server side).
+fn error_body_exceeds_limit(status: http::StatusCode) -> ClientError {
+    ClientError::new(
+        crate::response::error_parser::http_status_to_code(status),
+        format!("HTTP {status}: error body exceeds receive_max_bytes; error details omitted"),
+    )
+}
+
 /// Helper to decompress and parse error response body.
 ///
 /// This handles the case where error responses may be compressed.
@@ -1504,10 +1578,15 @@ impl<I: InterceptorInternal> ConnectClient<I> {
 /// - If Content-Encoding is set but unknown, return CodeInternal error
 /// - If Content-Encoding is not set, use raw bytes
 /// - If decompression fails, fall back to creating error from HTTP status
+///
+/// Decompression is bounded by `receive_max_bytes`; an error body expanding
+/// past the limit degrades to an HTTP-status-derived error instead of
+/// buffering unbounded output.
 fn decompress_and_parse_error(
     status: http::StatusCode,
     headers: &http::HeaderMap,
     body_bytes: Bytes,
+    receive_max_bytes: Option<usize>,
 ) -> ClientError {
     // Check Content-Encoding header for potential compression
     let content_encoding = headers
@@ -1545,9 +1624,10 @@ fn decompress_and_parse_error(
         );
     };
 
-    // Decompress and parse
-    match codec.decompress(&body_bytes) {
+    // Decompress (bounded by the receive limit) and parse
+    match codec.decompress_limited(&body_bytes, receive_max_bytes.unwrap_or(usize::MAX)) {
         Ok(decompressed) => parse_error_response(status, &decompressed),
+        Err(DecompressError::TooLarge { .. }) => error_body_exceeds_limit(status),
         Err(_) => {
             // Decompression failed - fall back to error from HTTP status
             // (consistent with connect-go behavior when unmarshaling fails)
@@ -2080,6 +2160,161 @@ mod tests {
             let mut stream = response.into_inner();
             let err = stream.next().await.unwrap().unwrap_err();
             assert_eq!(err.code(), Code::ResourceExhausted);
+        }
+
+        /// An oversized error body degrades gracefully: the details are
+        /// dropped but the code derived from the HTTP status is delivered.
+        #[tokio::test]
+        async fn test_unary_error_body_receive_max_bytes() {
+            let app = Router::new().route(
+                "/test.Service/Unary",
+                post(|| async {
+                    let body = format!(
+                        r#"{{"code":"unauthenticated","message":"{}"}}"#,
+                        "a".repeat(64 * 1024)
+                    );
+                    http::Response::builder()
+                        .status(401)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(axum::body::Body::from(body))
+                        .unwrap()
+                }),
+            );
+            let base_url = spawn_server(app).await;
+
+            let client = ConnectClient::builder(&base_url)
+                .receive_max_bytes(1024)
+                .build()
+                .unwrap();
+
+            let err = client
+                .call_unary::<TestMessage, TestMessage>(
+                    "test.Service/Unary",
+                    &TestMessage::default(),
+                )
+                .await
+                .unwrap_err();
+            // 401 maps to Unauthenticated per connect-go's httpToCode
+            assert_eq!(err.code(), Code::Unauthenticated);
+        }
+
+        /// An error body within the limit still parses fully.
+        #[tokio::test]
+        async fn test_unary_error_body_within_receive_max_bytes() {
+            let app = Router::new().route(
+                "/test.Service/Unary",
+                post(|| async {
+                    http::Response::builder()
+                        .status(401)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(axum::body::Body::from(
+                            r#"{"code":"unauthenticated","message":"nope"}"#,
+                        ))
+                        .unwrap()
+                }),
+            );
+            let base_url = spawn_server(app).await;
+
+            let client = ConnectClient::builder(&base_url)
+                .receive_max_bytes(1024)
+                .build()
+                .unwrap();
+
+            let err = client
+                .call_unary::<TestMessage, TestMessage>(
+                    "test.Service/Unary",
+                    &TestMessage::default(),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(err.code(), Code::Unauthenticated);
+            assert_eq!(err.message(), Some("nope"));
+        }
+
+        /// An oversized error body on a streaming call also degrades to the
+        /// HTTP-status-derived code.
+        #[tokio::test]
+        async fn test_server_stream_error_body_receive_max_bytes() {
+            let app = Router::new().route(
+                "/test.Service/ServerStream",
+                post(|| async {
+                    let body = format!(
+                        r#"{{"code":"unauthenticated","message":"{}"}}"#,
+                        "a".repeat(64 * 1024)
+                    );
+                    http::Response::builder()
+                        .status(401)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(axum::body::Body::from(body))
+                        .unwrap()
+                }),
+            );
+            let base_url = spawn_server(app).await;
+
+            let client = ConnectClient::builder(&base_url)
+                .receive_max_bytes(1024)
+                .build()
+                .unwrap();
+
+            let err = match client
+                .call_server_stream::<TestMessage, TestMessage>(
+                    "test.Service/ServerStream",
+                    &TestMessage::default(),
+                )
+                .await
+            {
+                Err(err) => err,
+                Ok(_) => panic!("expected error"),
+            };
+            assert_eq!(err.code(), Code::Unauthenticated);
+        }
+
+        /// Multi-valued custom headers reach the server intact on streaming
+        /// calls (insert-then-append semantics).
+        #[tokio::test]
+        async fn test_streaming_multi_value_headers_preserved() {
+            let received = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
+            let received_clone = received.clone();
+            let app = Router::new().route(
+                "/test.Service/ServerStream",
+                post(move |req: http::Request<axum::body::Body>| {
+                    let received = received_clone.clone();
+                    async move {
+                        let values: Vec<String> = req
+                            .headers()
+                            .get_all("x-tag")
+                            .iter()
+                            .map(|v| v.to_str().unwrap().to_string())
+                            .collect();
+                        *received.lock().unwrap() = values;
+                        http::Response::builder()
+                            .status(200)
+                            .header(header::CONTENT_TYPE, "application/connect+json")
+                            .body(axum::body::Body::from(streaming_response_body(
+                                br#"{"value":"ok"}"#,
+                            )))
+                            .unwrap()
+                    }
+                }),
+            );
+            let base_url = spawn_server(app).await;
+
+            let client = ConnectClient::builder(&base_url).build().unwrap();
+
+            let mut options = crate::config::CallOptions::new();
+            options.headers_mut().append("x-tag", "a".parse().unwrap());
+            options.headers_mut().append("x-tag", "b".parse().unwrap());
+
+            client
+                .call_server_stream_with_options::<TestMessage, TestMessage>(
+                    "test.Service/ServerStream",
+                    &TestMessage::default(),
+                    options,
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(*received.lock().unwrap(), vec!["a", "b"]);
         }
 
         /// A bidi call over HTTP/1.1 reports the server's error rather than
