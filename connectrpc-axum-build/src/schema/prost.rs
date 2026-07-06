@@ -14,15 +14,20 @@ impl<'a> ProstSchemaResolver<'a> {
         Self { schema }
     }
 
+    /// Compute `extern_path` mappings for the tonic pass generating services in
+    /// `package`. Rust paths are relative to that package's module, so tonic's
+    /// `super::` prefix (applied inside the `{service}_server` module) resolves
+    /// them correctly. Well-known types are skipped: prost's default extern
+    /// mappings already cover them.
     #[cfg(any(test, feature = "tonic", feature = "tonic-client"))]
-    pub(crate) fn type_path_mappings(&self) -> Vec<TypePathMapping> {
+    pub(crate) fn type_path_mappings(&self, package: &str) -> Vec<TypePathMapping> {
         self.schema
             .types
-            .types
             .iter()
-            .map(|ty| TypePathMapping {
-                proto_path: ty.proto_fqn.clone(),
-                rust_path: self.rust_type_path(ty),
+            .filter(|(proto_fqn, _)| wkt_rust_type(proto_fqn).is_none())
+            .map(|(proto_fqn, ty)| TypePathMapping {
+                proto_path: proto_fqn.to_string(),
+                rust_path: self.relative_type_path(ty, package, 0),
             })
             .collect()
     }
@@ -54,7 +59,15 @@ impl<'a> ProstSchemaResolver<'a> {
         current_package: &str,
         nesting: usize,
     ) -> Option<String> {
+        if let Some(wkt) = wkt_rust_type(proto_fqn) {
+            return Some(wkt);
+        }
+
         let ty = self.schema.find_type(proto_fqn)?;
+        Some(self.relative_type_path(ty, current_package, nesting))
+    }
+
+    fn relative_type_path(&self, ty: &TypeModel, current_package: &str, nesting: usize) -> String {
         let type_name = self.rust_type_path(ty);
         let target_parts: Vec<&str> = if ty.package.is_empty() {
             Vec::new()
@@ -79,7 +92,7 @@ impl<'a> ProstSchemaResolver<'a> {
         segments.extend(target_parts[common_len..].iter().map(to_snake));
         segments.push(type_name);
 
-        Some(segments.join("::"))
+        segments.join("::")
     }
 
     fn rust_type_path(&self, ty: &TypeModel) -> String {
@@ -92,6 +105,45 @@ impl<'a> ProstSchemaResolver<'a> {
             .collect::<Vec<_>>()
             .join("::")
     }
+}
+
+/// Resolve a `.google.protobuf.*` well-known type to the Rust type prost-build
+/// maps it to by default (prost never generates code for these packages).
+///
+/// Keep this table in sync with prost-build's `ExternPaths::new` defaults:
+/// wrapper types map to Rust primitives, `Empty` maps to `()`, and everything
+/// else under `.google.protobuf` maps into `::prost_types`.
+fn wkt_rust_type(proto_fqn: &str) -> Option<String> {
+    let name = proto_fqn
+        .strip_prefix(".google.protobuf.")
+        .filter(|name| !name.is_empty())?;
+
+    let mapped = match name {
+        "BoolValue" => "bool",
+        "BytesValue" => "::prost::alloc::vec::Vec<u8>",
+        "DoubleValue" => "f64",
+        "Empty" => "()",
+        "FloatValue" => "f32",
+        "Int32Value" => "i32",
+        "Int64Value" => "i64",
+        "StringValue" => "::prost::alloc::string::String",
+        "UInt32Value" => "u32",
+        "UInt64Value" => "u64",
+        _ => {
+            let segments: Vec<&str> = name.split('.').collect();
+            let (rust_type_name, parent_modules) = segments.split_last()?;
+
+            return Some(
+                std::iter::once("::prost_types".to_string())
+                    .chain(parent_modules.iter().map(to_snake))
+                    .chain(std::iter::once(to_upper_camel(rust_type_name)))
+                    .collect::<Vec<_>>()
+                    .join("::"),
+            );
+        }
+    };
+
+    Some(mapped.to_string())
 }
 
 fn to_snake(ident: impl AsRef<str>) -> String {

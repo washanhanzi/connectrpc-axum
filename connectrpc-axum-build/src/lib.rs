@@ -191,9 +191,12 @@ impl<S, T, TC, CC> CompileBuilder<S, Enabled, T, TC, CC> {
     ///
     /// When called, only message types and serde implementations are generated.
     /// No Connect service builders (e.g., `HelloWorldServiceBuilder`) will be created.
+    /// Generators that were already enabled (tonic, tonic client, Connect client)
+    /// remain enabled.
     ///
     /// **Note:** After calling this, `with_tonic()` is no longer available since
-    /// tonic server stubs depend on the Connect service module.
+    /// tonic server stubs depend on the Connect service module. Call it before
+    /// `no_connect_server()` if you need tonic server stubs.
     ///
     /// Use this when you only need:
     /// - Protobuf message types with JSON serialization
@@ -211,7 +214,7 @@ impl<S, T, TC, CC> CompileBuilder<S, Enabled, T, TC, CC> {
     ///     Ok(())
     /// }
     /// ```
-    pub fn no_connect_server(self) -> CompileBuilder<S, Disabled, Disabled, TC, Disabled> {
+    pub fn no_connect_server(self) -> CompileBuilder<S, Disabled, T, TC, CC> {
         CompileBuilder {
             source: self.source,
             out_dir: self.out_dir,
@@ -223,7 +226,7 @@ impl<S, T, TC, CC> CompileBuilder<S, Enabled, T, TC, CC> {
             prost_config: self.prost_config,
             pbjson_config: self.pbjson_config,
             #[cfg(feature = "tonic")]
-            tonic_config: None,
+            tonic_config: self.tonic_config,
             #[cfg(feature = "tonic-client")]
             tonic_client_config: self.tonic_client_config,
             _marker: PhantomData,
@@ -637,9 +640,9 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
     /// Execute code generation for the proto source.
     ///
     /// When `include_file` is set, a module tree file is generated after
-    /// compilation by scanning the output directory.
+    /// compilation from the packages compiled in this run.
     pub fn compile(&self) -> Result<()> {
-        self.compile_source(&self.source.0)?;
+        let schema = self.compile_source(&self.source.0)?;
 
         if let Some(ref include_path) = self.include_file {
             let out_dir = match &self.out_dir {
@@ -656,18 +659,24 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
                         format!("Invalid include file path: {}", include_path.display()),
                     )
                 })?;
+            let file_stems: std::collections::BTreeSet<String> = schema
+                .packages
+                .iter()
+                .map(|package| schema.prost().rust_package_file_stem(package))
+                .collect();
             include_file::generate(
                 file_name,
                 &out_dir,
                 &self.extern_reexports,
                 self.out_dir.is_none(),
+                &file_stems,
             )?;
         }
 
         Ok(())
     }
 
-    fn compile_source(&self, source: &ProtoSource) -> Result<()> {
+    fn compile_source(&self, source: &ProtoSource) -> Result<SchemaSet> {
         use std::fs;
 
         let generate_handlers = C::VALUE;
@@ -698,10 +707,18 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
             config_fn(&mut config);
         }
 
-        // Set protoc executable if fetched (internal config takes precedence)
+        // Set protoc executable if fetched (internal config takes precedence).
+        // tonic-prost-build has no per-builder protoc setter, so also export
+        // PROTOC for the tonic passes, which resolve protoc from the
+        // environment.
         #[cfg(feature = "fetch-protoc")]
         if let Some(ref protoc) = self.protoc_path {
             config.protoc_executable(protoc);
+            // SAFETY: build scripts run single-threaded at this point; no other
+            // thread is reading or writing the environment concurrently.
+            unsafe {
+                std::env::set_var("PROTOC", protoc);
+            }
         }
 
         // Always generate descriptor set for pbjson-build (internal config takes precedence)
@@ -723,7 +740,7 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
         connect_generator.append_to_out_dir(&schema, &out_dir)?;
 
         // -------- Pass 1.5: pbjson serde implementations (always) --------
-        Self::generate_pbjson(&out_dir, &descriptor_bytes, self.pbjson_config.as_ref())?;
+        Self::generate_pbjson(&out_dir, &descriptor_bytes, self.pbjson_config.as_deref())?;
 
         // -------- Pass 2: tonic server-only (feature + user requested) --------
         #[cfg(feature = "tonic")]
@@ -733,7 +750,7 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
                 &schema,
                 &proto_files,
                 &includes,
-                self.tonic_config.as_ref(),
+                self.tonic_config.as_deref(),
             )?;
         }
 
@@ -745,14 +762,14 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
                 &schema,
                 &proto_files,
                 &includes,
-                self.tonic_client_config.as_ref(),
+                self.tonic_client_config.as_deref(),
             )?;
         }
 
         // Clean up descriptor file after all passes complete
         let _ = fs::remove_file(&descriptor_path);
 
-        Ok(())
+        Ok(schema)
     }
 
     fn resolve_source(source: &ProtoSource) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
@@ -783,9 +800,26 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
     fn generate_pbjson(
         out_dir: &str,
         descriptor_bytes: &[u8],
-        pbjson_config: Option<&Box<dyn Fn(&mut pbjson_build::Builder)>>,
+        pbjson_config: Option<&dyn Fn(&mut pbjson_build::Builder)>,
     ) -> Result<()> {
+        use ::prost::Message;
         use std::fs;
+
+        // pbjson-build panics on FileDescriptorProtos without a package, so
+        // filter them out of the registered descriptors.
+        let mut fds = prost_types::FileDescriptorSet::decode(descriptor_bytes)
+            .map_err(|e| std::io::Error::other(format!("decode descriptor: {e}")))?;
+        fds.file.retain(|file| {
+            let has_package = file.package.as_deref().is_some_and(|p| !p.is_empty());
+            if !has_package {
+                println!(
+                    "cargo:warning=Skipping pbjson serde implementations for '{}': proto file has no package.",
+                    file.name.as_deref().unwrap_or("<unknown>")
+                );
+            }
+            has_package
+        });
+        let filtered_descriptor_bytes = fds.encode_to_vec();
 
         let mut pbjson_builder = pbjson_build::Builder::new();
         pbjson_builder.out_dir(out_dir);
@@ -793,7 +827,7 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
             config_fn(&mut pbjson_builder);
         }
         pbjson_builder
-            .register_descriptors(&descriptor_bytes)
+            .register_descriptors(&filtered_descriptor_bytes)
             .map_err(|e| std::io::Error::other(format!("register descriptors: {e}")))?
             .build(&["."]) // Generate for all packages
             .map_err(|e| std::io::Error::other(format!("pbjson build: {e}")))?;
@@ -816,10 +850,12 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
                         "// --- pbjson serde implementations ---",
                         &path,
                     )?;
-
-                    // Remove the separate .serde.rs file
-                    let _ = fs::remove_file(&path);
                 }
+
+                // Remove the separate .serde.rs file. Files without a matching
+                // main file (e.g. imported packages) are orphans and would
+                // otherwise linger in the output directory.
+                let _ = fs::remove_file(&path);
             }
         }
 
@@ -832,70 +868,20 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
         schema: &SchemaSet,
         proto_files: &[PathBuf],
         includes: &[PathBuf],
-        tonic_config: Option<
-            &Box<dyn Fn(tonic_prost_build::Builder) -> tonic_prost_build::Builder>,
-        >,
+        tonic_config: Option<&dyn Fn(tonic_prost_build::Builder) -> tonic_prost_build::Builder>,
     ) -> Result<()> {
-        use std::fs;
-        let type_refs = schema.prost().type_path_mappings();
-
-        // Generate tonic server stubs referencing existing types
-        let temp_out_dir = format!("{}/tonic_server", out_dir);
-        fs::create_dir_all(&temp_out_dir)?;
-        let mut builder = tonic_prost_build::configure();
-
-        // Apply user's tonic configuration
-        if let Some(config_fn) = tonic_config {
-            builder = config_fn(builder);
-        }
-
-        // Apply internal config (takes precedence)
-        builder = builder
-            .build_client(false)
-            .build_server(true)
-            .compile_well_known_types(false)
-            .out_dir(&temp_out_dir);
-
-        // Add extern_path mappings for generated types
-        for tr in &type_refs {
-            builder = builder.extern_path(&tr.proto_path, &tr.rust_path);
-        }
-        let proto_paths: Vec<&str> = proto_files.iter().map(|p| p.to_str().unwrap()).collect();
-        let include_strs: Vec<&str> = includes.iter().map(|p| p.to_str().unwrap()).collect();
-        builder.compile_protos(&proto_paths, &include_strs)?;
-
-        // Append server code to first-pass files
-        for entry in fs::read_dir(&temp_out_dir)? {
-            let entry = entry?;
-            let tonic_file = entry.path();
-
-            // Only process .rs files
-            if tonic_file.extension().and_then(|s| s.to_str()) == Some("rs") {
-                let filename = tonic_file.file_name().unwrap().to_str().unwrap();
-                let first_pass_file = format!("{}/{}", out_dir, filename);
-
-                // Skip if no matching first-pass file (warn instead of error)
-                if !std::path::Path::new(&first_pass_file).exists() {
-                    println!(
-                        "cargo:warning=Skipping tonic server file '{}': no matching first-pass file. \
-                         This may indicate mismatched package declarations between prost-build and tonic-build.",
-                        filename
-                    );
-                    continue;
-                }
-
-                append_generated_file(
-                    std::path::Path::new(&first_pass_file),
-                    "// --- Tonic gRPC server stubs (extern_path reused messages) ---",
-                    &tonic_file,
-                )?;
-            }
-        }
-
-        // Clean up temporary tonic artifacts
-        let _ = fs::remove_dir_all(&temp_out_dir);
-
-        Ok(())
+        Self::generate_tonic_pass(
+            out_dir,
+            schema,
+            proto_files,
+            includes,
+            tonic_config,
+            TonicPass {
+                build_client: false,
+                temp_dir_name: "tonic_server",
+                banner: "// --- Tonic gRPC server stubs (extern_path reused messages) ---",
+            },
+        )
     }
 
     #[cfg(feature = "tonic-client")]
@@ -905,70 +891,99 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
         proto_files: &[PathBuf],
         includes: &[PathBuf],
         tonic_client_config: Option<
-            &Box<dyn Fn(tonic_prost_build::Builder) -> tonic_prost_build::Builder>,
+            &dyn Fn(tonic_prost_build::Builder) -> tonic_prost_build::Builder,
         >,
     ) -> Result<()> {
+        Self::generate_tonic_pass(
+            out_dir,
+            schema,
+            proto_files,
+            includes,
+            tonic_client_config,
+            TonicPass {
+                build_client: true,
+                temp_dir_name: "tonic_client",
+                banner: "// --- Tonic gRPC client stubs (extern_path reused messages) ---",
+            },
+        )
+    }
+
+    /// Run tonic-prost-build once per proto package that declares a service.
+    ///
+    /// Each run receives `extern_path` mappings whose Rust paths are relative
+    /// to that package's module, so the `super::` prefix tonic applies inside
+    /// the generated service module resolves types in any compiled package.
+    /// Only the output file for the pass's package is kept; the other
+    /// packages' files are produced by their own pass.
+    #[cfg(any(feature = "tonic", feature = "tonic-client"))]
+    fn generate_tonic_pass(
+        out_dir: &str,
+        schema: &SchemaSet,
+        proto_files: &[PathBuf],
+        includes: &[PathBuf],
+        tonic_config: Option<&dyn Fn(tonic_prost_build::Builder) -> tonic_prost_build::Builder>,
+        pass: TonicPass,
+    ) -> Result<()> {
+        use std::collections::BTreeSet;
         use std::fs;
-        let type_refs = schema.prost().type_path_mappings();
 
-        // Generate tonic client stubs referencing existing types
-        let temp_out_dir = format!("{}/tonic_client", out_dir);
-        fs::create_dir_all(&temp_out_dir)?;
-        let mut builder = tonic_prost_build::configure();
+        let service_packages: BTreeSet<&str> = schema
+            .services
+            .iter()
+            .map(|service| service.package.as_str())
+            .collect();
 
-        // Apply user's tonic client configuration
-        if let Some(config_fn) = tonic_client_config {
-            builder = config_fn(builder);
-        }
+        let temp_out_dir = format!("{}/{}", out_dir, pass.temp_dir_name);
 
-        // Apply internal config (takes precedence)
-        builder = builder
-            .build_client(true)
-            .build_server(false)
-            .compile_well_known_types(false)
-            .out_dir(&temp_out_dir);
+        for package in service_packages {
+            let file_stem = schema.prost().rust_package_file_stem(package);
+            fs::create_dir_all(&temp_out_dir)?;
 
-        // Add extern_path mappings for generated types
-        for tr in &type_refs {
-            builder = builder.extern_path(&tr.proto_path, &tr.rust_path);
-        }
-        let proto_paths: Vec<&str> = proto_files.iter().map(|p| p.to_str().unwrap()).collect();
-        let include_strs: Vec<&str> = includes.iter().map(|p| p.to_str().unwrap()).collect();
-        builder.compile_protos(&proto_paths, &include_strs)?;
+            let mut builder = tonic_prost_build::configure();
 
-        // Append client code to first-pass files
-        for entry in fs::read_dir(&temp_out_dir)? {
-            let entry = entry?;
-            let tonic_file = entry.path();
+            // Apply user's tonic configuration
+            if let Some(config_fn) = tonic_config {
+                builder = config_fn(builder);
+            }
 
-            // Only process .rs files
-            if tonic_file.extension().and_then(|s| s.to_str()) == Some("rs") {
-                let filename = tonic_file.file_name().unwrap().to_str().unwrap();
-                let first_pass_file = format!("{}/{}", out_dir, filename);
+            // Apply internal config (takes precedence)
+            builder = builder
+                .build_client(pass.build_client)
+                .build_server(!pass.build_client)
+                .compile_well_known_types(false)
+                .out_dir(&temp_out_dir);
 
-                // Skip if no matching first-pass file (warn instead of error)
-                if !std::path::Path::new(&first_pass_file).exists() {
-                    println!(
-                        "cargo:warning=Skipping tonic client file '{}': no matching first-pass file. \
-                         This may indicate mismatched package declarations between prost-build and tonic-build.",
-                        filename
-                    );
-                    continue;
-                }
+            // Add extern_path mappings for the types generated in pass 1
+            for tr in schema.prost().type_path_mappings(package) {
+                builder = builder.extern_path(tr.proto_path, tr.rust_path);
+            }
+            builder.compile_protos(proto_files, includes)?;
 
+            // Append this package's stubs to its first-pass file (creating it
+            // for service-only packages where prost emitted no file).
+            let tonic_file = format!("{}/{}.rs", temp_out_dir, file_stem);
+            if std::path::Path::new(&tonic_file).exists() {
                 append_generated_file(
-                    std::path::Path::new(&first_pass_file),
-                    "// --- Tonic gRPC client stubs (extern_path reused messages) ---",
-                    &tonic_file,
+                    std::path::Path::new(&format!("{}/{}.rs", out_dir, file_stem)),
+                    pass.banner,
+                    std::path::Path::new(&tonic_file),
                 )?;
             }
-        }
 
-        // Clean up temporary tonic client artifacts
-        let _ = fs::remove_dir_all(&temp_out_dir);
+            // Clean up temporary tonic artifacts
+            let _ = fs::remove_dir_all(&temp_out_dir);
+        }
 
         Ok(())
     }
+}
+
+/// Static configuration distinguishing the tonic server and client passes.
+#[cfg(any(feature = "tonic", feature = "tonic-client"))]
+struct TonicPass {
+    build_client: bool,
+    temp_dir_name: &'static str,
+    banner: &'static str,
 }
 
 /// Create a builder without a proto source.
@@ -1102,12 +1117,14 @@ fn discover_proto_files(dir: &Path, proto_files: &mut Vec<std::path::PathBuf>) -
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
+        let file_type = entry.file_type()?;
 
-        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("proto") {
-            proto_files.push(path);
-        } else if path.is_dir() {
-            // Recursively search subdirectories
+        if file_type.is_dir() {
+            // Recursively search subdirectories (but not symlinked ones, which
+            // could introduce cycles)
             discover_proto_files(&path, proto_files)?;
+        } else if path.extension().and_then(|s| s.to_str()) == Some("proto") && path.is_file() {
+            proto_files.push(path);
         }
     }
 

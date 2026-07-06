@@ -9,7 +9,7 @@ use super::{MethodInfo, ServiceInfo, naive_snake_case};
 /// Returns a tuple of (module_bits, out_of_module) token streams:
 /// - `module_bits`: Code to be placed inside the service module (builders, type aliases)
 /// - `out_of_module`: Code to be placed outside the module (tonic service struct and trait impl)
-pub fn generate_tonic_code(
+pub(super) fn generate_tonic_code(
     service: &ServiceInfo,
     method_info: &[MethodInfo],
     root_method_info: &[MethodInfo],
@@ -22,10 +22,7 @@ pub fn generate_tonic_code(
     let tonic_service_name = format_ident!("{}TonicService", service_base_name);
 
     // Tonic server trait paths (e.g., hello_world_service_server::HelloWorldService)
-    let server_mod_name = format_ident!(
-        "{}_server",
-        naive_snake_case(&service.name).trim_start_matches("r#")
-    );
+    let server_mod_name = format_ident!("{}_server", naive_snake_case(&service.name));
     let tonic_trait_ident = format_ident!("{}", service.name);
     let tonic_server_type_name = format_ident!("{}Server", service.name);
 
