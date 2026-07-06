@@ -32,5 +32,8 @@ flate2 = { workspace = true }
 brotli = { workspace = true }
 zstd = { workspace = true }
 
+[dev-dependencies]
+trybuild = { workspace = true }
+
 [build-dependencies]
 connectrpc-axum-build = { path = "../connectrpc-axum-build", features = ["tonic"] }
