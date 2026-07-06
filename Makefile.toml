@@ -12,6 +12,12 @@ category = "Testing"
 command = "cargo"
 args = ["run", "-p", "connectrpc-axum-test"]
 
+[tasks.test-unit]
+description = "Run cargo tests (unit, doc, and trybuild UI tests)"
+category = "Testing"
+command = "cargo"
+args = ["test", "--workspace"]
+
 # ============================================================================
 # CI Tasks
 # ============================================================================
@@ -19,7 +25,7 @@ args = ["run", "-p", "connectrpc-axum-test"]
 [tasks.ci]
 description = "Run all CI checks (fmt, clippy, test)"
 category = "CI"
-dependencies = ["fmt-check", "clippy", "test"]
+dependencies = ["fmt-check", "clippy", "test-unit", "test"]
 
 [tasks.ci-quick]
 description = "Run quick CI checks (fmt, clippy only)"

@@ -10,8 +10,11 @@ Run the cross-implementation protocol test suite (`connectrpc-axum-test`).
 ## Quick Start
 
 ```bash
-cargo make test
+cargo make test        # cross-implementation integration tests (orchestrator binary)
+cargo make test-unit   # cargo test --workspace: unit, doc, and trybuild UI tests
 ```
+
+The trybuild UI tests (`connectrpc-axum-test/tests/ui/`) pin compile-time enforcement of handler signatures — they only run via `test-unit`, not `test`.
 
 ## How It Works
 
@@ -47,6 +50,9 @@ connectrpc-axum-test/
 │   └── server_timeout/
 │       ├── server/server.go             # Go server
 │       └── client/client.go             # Go client
+├── tests/
+│   ├── semantic_handler_signatures.rs   # trybuild harness (runs via cargo make test-unit)
+│   └── ui/                              # compile-pass / compile-fail cases + pinned .stderr
 ├── proto/
 │   ├── hello.proto                      # HelloWorldService
 │   └── echo.proto                       # EchoService

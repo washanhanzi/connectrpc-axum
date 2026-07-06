@@ -11,13 +11,13 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 repository = "https://github.com/washanhanzi/connectrpc-axum"
 
 [workspace.dependencies]
 # Keep this semver requirement aligned with connectrpc-axum-core/Cargo.toml.
-connectrpc-axum-core = { version = "0.1.0", path = "./connectrpc-axum-core" }
+connectrpc-axum-core = { version = "0.2.0", path = "./connectrpc-axum-core" }
 anyhow = "1.0"
 async-stream = "0.3"
 axum = "0.8"
@@ -55,7 +55,7 @@ tonic-web = "0.14"
 tonic-prost = "0.14"
 tonic-prost-build = "0.14"
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", default-features = false }
+tower-http = { version = "0.7.0", default-features = false }
 tower-service = "0.3"
 tracing = "0.1"
 tracing-subscriber = "0.3"
