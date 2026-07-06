@@ -260,7 +260,7 @@ async fn main() -> anyhow::Result<()> {
         );
 
         // Consume all messages
-        while let Some(_) = stream.next().await {}
+        while stream.next().await.is_some() {}
 
         // After consuming, should be finished
         assert!(

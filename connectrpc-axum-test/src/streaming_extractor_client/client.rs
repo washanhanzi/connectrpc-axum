@@ -94,10 +94,10 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
                 )
             })?;
             let code = json.get("code").and_then(|v| v.as_str()).unwrap_or("");
-            if let Some(expected) = tc.expected_error_code {
-                if code != expected {
-                    anyhow::bail!("expected error code '{expected}', got '{code}'");
-                }
+            if let Some(expected) = tc.expected_error_code
+                && code != expected
+            {
+                anyhow::bail!("expected error code '{expected}', got '{code}'");
             }
             return Ok(());
         }
@@ -117,10 +117,10 @@ async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {
                 let json: serde_json::Value = serde_json::from_slice(payload)?;
                 if let Some(error_obj) = json.get("error") {
                     let code = error_obj.get("code").and_then(|v| v.as_str()).unwrap_or("");
-                    if let Some(expected) = tc.expected_error_code {
-                        if code != expected {
-                            anyhow::bail!("expected error code '{expected}', got '{code}'");
-                        }
+                    if let Some(expected) = tc.expected_error_code
+                        && code != expected
+                    {
+                        anyhow::bail!("expected error code '{expected}', got '{code}'");
                     }
                     return Ok(());
                 }
