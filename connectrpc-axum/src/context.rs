@@ -143,7 +143,8 @@ impl ConnectContext {
             CompressionContext::default()
         };
 
-        let client_timeout = parse_timeout(req);
+        let client_timeout = parse_timeout(req)
+            .map_err(|err| ContextError::new(protocol, err, config.limits.get_send_max_bytes()))?;
         let timeout = compute_effective_timeout(config.server_timeout, client_timeout);
 
         Ok(Self {

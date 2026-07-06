@@ -13,6 +13,11 @@ use serde::{Serialize, Serializer};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Code {
+    /// The operation completed successfully.
+    ///
+    /// Per the Connect spec, `Ok` must never appear in an error body: error
+    /// responses always carry a non-`Ok` code, and successful responses carry
+    /// no code at all.
     Ok = 0,
     Canceled = 1,
     Unknown = 2,
@@ -205,6 +210,10 @@ pub enum EnvelopeError {
     #[error("invalid frame flags: 0x{0:02x}")]
     InvalidFlags(u8),
 
+    /// A frame had the COMPRESSED bit set, but no compression was negotiated.
+    #[error("protocol error: sent compressed message without compression support")]
+    MissingCompression,
+
     /// Decompression failed.
     #[error("decompression failed: {0}")]
     Decompression(String),
@@ -212,6 +221,17 @@ pub enum EnvelopeError {
     /// Compression failed.
     #[error("compression failed: {0}")]
     Compression(String),
+
+    /// The (decompressed) message payload exceeded the configured size limit.
+    ///
+    /// Maps to `ResourceExhausted` semantics, distinguishing an oversized
+    /// message from malformed input.
+    #[error("message size exceeds maximum allowed size of {limit} bytes")]
+    MessageTooLarge { limit: usize },
+
+    /// The payload is too large to fit in the envelope's 4-byte length prefix.
+    #[error("payload size {size} out of bounds for envelope")]
+    PayloadTooLarge { size: usize },
 }
 
 /// JSON body structure for error responses.
@@ -408,10 +428,19 @@ impl Serialize for Status {
     where
         S: Serializer,
     {
-        ErrorResponseBody {
+        #[derive(Serialize)]
+        struct BorrowedErrorResponseBody<'a> {
+            code: Code,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            message: Option<&'a str>,
+            #[serde(skip_serializing_if = "<[ErrorDetail]>::is_empty")]
+            details: &'a [ErrorDetail],
+        }
+
+        BorrowedErrorResponseBody {
             code: self.code,
-            message: self.message.clone(),
-            details: self.details.clone(),
+            message: self.message.as_deref(),
+            details: &self.details,
         }
         .serialize(serializer)
     }

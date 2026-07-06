@@ -247,10 +247,15 @@ impl ConnectError {
             HeaderValue::from_static(protocol.error_content_type()),
         );
 
-        // Add metadata as headers
+        // Add metadata as headers, filtering protocol headers like the
+        // streaming path does (connect-go's mergeNonProtocolHeaders)
         if let Some(meta) = &self.meta {
             let headers = response.headers_mut();
-            headers.extend(meta.iter().map(|(k, v)| (k.clone(), v.clone())));
+            headers.extend(
+                meta.iter()
+                    .filter(|(k, _)| !is_protocol_header(k.as_str()))
+                    .map(|(k, v)| (k.clone(), v.clone())),
+            );
         }
 
         response
@@ -375,20 +380,17 @@ impl From<(StatusCode, String)> for ConnectError {
 
 /// Convert an HTTP status code to a Connect error code.
 ///
-/// This is used when translating HTTP errors to Connect errors.
+/// This is used when translating HTTP errors to Connect errors, following
+/// connect-go's `httpToCode` mapping (which follows the gRPC HTTP-to-status
+/// mapping). Note that this is NOT the inverse of the Connect-to-HTTP mapping.
 pub fn code_from_status(status: StatusCode) -> Code {
-    match status {
-        StatusCode::OK => Code::Ok,
-        StatusCode::BAD_REQUEST => Code::InvalidArgument,
-        StatusCode::UNAUTHORIZED => Code::Unauthenticated,
-        StatusCode::FORBIDDEN => Code::PermissionDenied,
-        StatusCode::NOT_FOUND => Code::NotFound,
-        StatusCode::CONFLICT => Code::AlreadyExists,
-        StatusCode::REQUEST_TIMEOUT => Code::DeadlineExceeded,
-        StatusCode::TOO_MANY_REQUESTS => Code::ResourceExhausted,
-        StatusCode::NOT_IMPLEMENTED => Code::Unimplemented,
-        StatusCode::SERVICE_UNAVAILABLE => Code::Unavailable,
-        StatusCode::INTERNAL_SERVER_ERROR => Code::Internal,
+    match status.as_u16() {
+        400 => Code::Internal,
+        401 => Code::Unauthenticated,
+        403 => Code::PermissionDenied,
+        404 => Code::Unimplemented,
+        429 => Code::Unavailable,
+        502..=504 => Code::Unavailable,
         _ => Code::Unknown,
     }
 }
@@ -490,19 +492,21 @@ impl From<ConnectError> for ::tonic::Status {
 /// Protocol headers are internal to HTTP/Connect/gRPC and should not be included
 /// in the metadata field of EndStream messages.
 fn is_protocol_header(key: &str) -> bool {
-    let k = key.to_ascii_lowercase();
-    matches!(
-        k.as_str(),
-        "content-type"
-            | "content-length"
-            | "content-encoding"
-            | "host"
-            | "user-agent"
-            | "trailer"
-            | "date"
-    ) || k.starts_with("connect-")
-        || k.starts_with("grpc-")
-        || k.starts_with("trailer-")
+    const EXACT: &[&str] = &[
+        "content-type",
+        "content-length",
+        "content-encoding",
+        "host",
+        "user-agent",
+        "trailer",
+        "date",
+    ];
+    const PREFIXES: &[&str] = &["connect-", "grpc-", "trailer-"];
+
+    EXACT.iter().any(|h| key.eq_ignore_ascii_case(h))
+        || PREFIXES.iter().any(|p| {
+            key.len() >= p.len() && key.as_bytes()[..p.len()].eq_ignore_ascii_case(p.as_bytes())
+        })
 }
 
 /// Metadata wrapper for EndStream messages.
@@ -578,11 +582,7 @@ impl Serialize for Metadata {
 // EndStream Frame Building
 // ============================================================================
 
-/// Connect streaming envelope flags.
-mod envelope_flags {
-    /// End of stream.
-    pub const END_STREAM: u8 = 0x02;
-}
+use connectrpc_axum_core::envelope_flags;
 
 /// Build an EndStream frame for streaming responses.
 ///
@@ -630,7 +630,7 @@ fn wrap_end_stream_payload(payload: &[u8]) -> Vec<u8> {
     let mut frame = Vec::with_capacity(5 + payload.len());
     frame.push(envelope_flags::END_STREAM);
     frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    frame.extend_from_slice(&payload);
+    frame.extend_from_slice(payload);
     frame
 }
 
@@ -694,11 +694,7 @@ pub(crate) fn internal_error_end_stream_frame() -> Vec<u8> {
     const ERROR_PAYLOAD: &[u8] =
         br#"{"error":{"code":"internal","message":"Internal serialization error"}}"#;
 
-    let mut frame = Vec::with_capacity(5 + ERROR_PAYLOAD.len());
-    frame.push(0b0000_0010); // EndStream flag
-    frame.extend_from_slice(&(ERROR_PAYLOAD.len() as u32).to_be_bytes());
-    frame.extend_from_slice(ERROR_PAYLOAD);
-    frame
+    wrap_end_stream_payload(ERROR_PAYLOAD)
 }
 
 /// Create a safe streaming response with an internal error EndStream frame.
@@ -798,6 +794,59 @@ mod tests {
     }
 
     #[test]
+    fn test_code_from_status_matches_connect_go() {
+        // connect-go httpToCode (protocol.go)
+        assert_eq!(code_from_status(StatusCode::BAD_REQUEST), Code::Internal);
+        assert_eq!(
+            code_from_status(StatusCode::UNAUTHORIZED),
+            Code::Unauthenticated
+        );
+        assert_eq!(
+            code_from_status(StatusCode::FORBIDDEN),
+            Code::PermissionDenied
+        );
+        assert_eq!(code_from_status(StatusCode::NOT_FOUND), Code::Unimplemented);
+        assert_eq!(
+            code_from_status(StatusCode::TOO_MANY_REQUESTS),
+            Code::Unavailable
+        );
+        assert_eq!(code_from_status(StatusCode::BAD_GATEWAY), Code::Unavailable);
+        assert_eq!(
+            code_from_status(StatusCode::SERVICE_UNAVAILABLE),
+            Code::Unavailable
+        );
+        assert_eq!(
+            code_from_status(StatusCode::GATEWAY_TIMEOUT),
+            Code::Unavailable
+        );
+        // Everything else, including 200 and 500, is Unknown
+        assert_eq!(code_from_status(StatusCode::OK), Code::Unknown);
+        assert_eq!(
+            code_from_status(StatusCode::INTERNAL_SERVER_ERROR),
+            Code::Unknown
+        );
+        assert_eq!(code_from_status(StatusCode::REQUEST_TIMEOUT), Code::Unknown);
+    }
+
+    #[test]
+    fn test_unary_error_response_filters_protocol_meta() {
+        use crate::context::RequestProtocol;
+
+        let err = ConnectError::new(Code::Internal, "boom")
+            .with_meta("x-request-id", "req-123")
+            .with_meta("grpc-status", "13")
+            .with_meta("connect-timeout-ms", "1000")
+            .with_meta("trailer-x-foo", "bar");
+
+        let response = err.into_response_with_protocol(RequestProtocol::ConnectUnaryJson);
+        let headers = response.headers();
+        assert_eq!(headers.get("x-request-id").unwrap(), "req-123");
+        assert!(headers.get("grpc-status").is_none());
+        assert!(headers.get("connect-timeout-ms").is_none());
+        assert!(headers.get("trailer-x-foo").is_none());
+    }
+
+    #[test]
     fn test_metadata_from_headers() {
         let mut headers = HeaderMap::new();
         headers.insert("content-type", HeaderValue::from_static("application/json"));
@@ -875,7 +924,7 @@ mod tests {
         let frame = internal_error_end_stream_frame();
 
         assert!(frame.len() > 5);
-        assert_eq!(frame[0], 0b0000_0010);
+        assert_eq!(frame[0], envelope_flags::END_STREAM);
 
         let payload = &frame[5..];
         let parsed: serde_json::Value = serde_json::from_slice(payload).unwrap();

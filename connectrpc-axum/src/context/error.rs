@@ -51,6 +51,11 @@ impl ContextError {
         &self.1
     }
 
+    /// Get the streaming send limit, if any.
+    pub fn send_max_bytes(&self) -> Option<usize> {
+        self.2
+    }
+
     /// Convert to HTTP response with proper encoding.
     pub fn into_response(self) -> Response {
         self.1.into_response_with_send_limit(self.0, self.2)

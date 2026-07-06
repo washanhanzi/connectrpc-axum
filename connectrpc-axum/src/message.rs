@@ -26,6 +26,7 @@ pub mod response;
 pub use error::{Code, ConnectError, ErrorDetail, Metadata, build_end_stream_frame};
 pub use request::{
     ConnectRequest,
+    EnvelopePayload,
     RequestPipeline,
     Streaming,
     // Primitive functions

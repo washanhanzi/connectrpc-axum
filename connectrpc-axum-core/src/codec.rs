@@ -2,10 +2,10 @@
 //!
 //! This module provides the [`Codec`] trait for per-message compression
 //! and implementations for common algorithms:
-//! - [`GzipCodec`]: Gzip compression (requires `compression-gzip` feature)
-//! - [`DeflateCodec`]: Deflate compression (requires `compression-deflate` feature)
-//! - [`BrotliCodec`]: Brotli compression (requires `compression-br` feature)
-//! - [`ZstdCodec`]: Zstd compression (requires `compression-zstd` feature)
+//! - [`GzipCodec`]: Gzip compression (requires `compression-gzip-stream` feature)
+//! - [`DeflateCodec`]: Deflate compression (requires `compression-deflate-stream` feature)
+//! - [`BrotliCodec`]: Brotli compression (requires `compression-br-stream` feature)
+//! - [`ZstdCodec`]: Zstd compression (requires `compression-zstd-stream` feature)
 
 use bytes::Bytes;
 use std::io;
@@ -199,12 +199,12 @@ impl std::fmt::Debug for BoxedCodec {
 
 /// Gzip codec using flate2.
 ///
-/// Requires the `compression-gzip` feature.
+/// Requires the `compression-gzip-stream` feature.
 #[cfg(feature = "compression-gzip-stream")]
 #[derive(Debug, Clone, Copy)]
 pub struct GzipCodec {
     /// Compression level (0-9). Default is 6.
-    pub level: u32,
+    level: u32,
 }
 
 #[cfg(feature = "compression-gzip-stream")]
@@ -223,6 +223,11 @@ impl GzipCodec {
         Self {
             level: level.min(9),
         }
+    }
+
+    /// Get the compression level.
+    pub fn level(&self) -> u32 {
+        self.level
     }
 }
 
@@ -275,12 +280,12 @@ impl Codec for IdentityCodec {
 /// Note: HTTP "deflate" Content-Encoding uses zlib format (RFC 1950),
 /// not raw DEFLATE (RFC 1951).
 ///
-/// Requires the `compression-deflate` feature.
+/// Requires the `compression-deflate-stream` feature.
 #[cfg(feature = "compression-deflate-stream")]
 #[derive(Debug, Clone, Copy)]
 pub struct DeflateCodec {
     /// Compression level (0-9). Default is 6.
-    pub level: u32,
+    level: u32,
 }
 
 #[cfg(feature = "compression-deflate-stream")]
@@ -299,6 +304,11 @@ impl DeflateCodec {
         Self {
             level: level.min(9),
         }
+    }
+
+    /// Get the compression level.
+    pub fn level(&self) -> u32 {
+        self.level
     }
 }
 
@@ -330,12 +340,12 @@ impl Codec for DeflateCodec {
 
 /// Brotli codec.
 ///
-/// Requires the `compression-br` feature.
+/// Requires the `compression-br-stream` feature.
 #[cfg(feature = "compression-br-stream")]
 #[derive(Debug, Clone, Copy)]
 pub struct BrotliCodec {
     /// Compression quality (0-11). Default is 4.
-    pub quality: u32,
+    quality: u32,
 }
 
 #[cfg(feature = "compression-br-stream")]
@@ -354,6 +364,11 @@ impl BrotliCodec {
         Self {
             quality: quality.min(11),
         }
+    }
+
+    /// Get the compression quality.
+    pub fn quality(&self) -> u32 {
+        self.quality
     }
 }
 
@@ -390,12 +405,12 @@ impl Codec for BrotliCodec {
 
 /// Zstd codec.
 ///
-/// Requires the `compression-zstd` feature.
+/// Requires the `compression-zstd-stream` feature.
 #[cfg(feature = "compression-zstd-stream")]
 #[derive(Debug, Clone, Copy)]
 pub struct ZstdCodec {
     /// Compression level (1-22). Default is 3.
-    pub level: i32,
+    level: i32,
 }
 
 #[cfg(feature = "compression-zstd-stream")]
@@ -415,6 +430,11 @@ impl ZstdCodec {
             level: level.clamp(1, 22),
         }
     }
+
+    /// Get the compression level.
+    pub fn level(&self) -> i32 {
+        self.level
+    }
 }
 
 #[cfg(feature = "compression-zstd-stream")]
@@ -424,8 +444,7 @@ impl Codec for ZstdCodec {
     }
 
     fn compress(&self, data: &[u8]) -> io::Result<Bytes> {
-        let compressed = zstd::bulk::compress(data, self.level)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let compressed = zstd::bulk::compress(data, self.level).map_err(io::Error::other)?;
         Ok(Bytes::from(compressed))
     }
 
@@ -484,7 +503,7 @@ mod tests {
     #[test]
     fn test_gzip_codec_with_level() {
         let codec = GzipCodec::with_level(9);
-        assert_eq!(codec.level, 9);
+        assert_eq!(codec.level(), 9);
 
         let original = b"Hello, World! This is a test message.";
         let compressed = codec.compress(original).unwrap();
@@ -688,7 +707,7 @@ mod tests {
     #[test]
     fn test_brotli_codec_with_quality() {
         let codec = BrotliCodec::with_quality(11);
-        assert_eq!(codec.quality, 11);
+        assert_eq!(codec.quality(), 11);
 
         let original = b"Hello, World! This is a test message.";
         let compressed = codec.compress(original).unwrap();
@@ -714,7 +733,7 @@ mod tests {
     #[test]
     fn test_zstd_codec_with_level() {
         let codec = ZstdCodec::with_level(19);
-        assert_eq!(codec.level, 19);
+        assert_eq!(codec.level(), 19);
 
         let original = b"Hello, World! This is a test message.";
         let compressed = codec.compress(original).unwrap();
