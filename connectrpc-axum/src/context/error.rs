@@ -89,6 +89,7 @@ impl std::error::Error for ContextError {}
 /// This is used before protocol detection completes, when the request cannot
 /// be handled by any supported protocol variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProtocolNegotiationError {
     /// Content-Type or encoding is not supported.
     UnsupportedMediaType,

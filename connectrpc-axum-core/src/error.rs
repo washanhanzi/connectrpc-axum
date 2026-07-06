@@ -201,6 +201,7 @@ impl Serialize for ErrorDetail {
 /// This error type is used for errors that occur during envelope parsing
 /// and decompression in the Connect streaming protocol.
 #[derive(Clone, Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum EnvelopeError {
     /// Incomplete envelope header.
     #[error("incomplete envelope header: expected {expected} bytes, got {actual}")]

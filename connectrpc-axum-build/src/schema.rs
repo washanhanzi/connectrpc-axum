@@ -22,6 +22,11 @@ pub(crate) struct SchemaSet {
     /// All proto packages seen in the descriptor set (including imports),
     /// in sorted order.
     pub(crate) packages: BTreeSet<String>,
+    /// User-declared extern modules (`extern_module`): dotted proto package
+    /// prefixes mapped to Rust paths of external crates. Types under these
+    /// prefixes resolve to the external crate instead of generated modules
+    /// or prost's default well-known-type mappings.
+    pub(crate) extern_overrides: Vec<(String, String)>,
 }
 
 /// Message and enum types keyed by fully-qualified proto name (e.g.
@@ -97,11 +102,39 @@ impl SchemaSet {
             types,
             services,
             packages,
+            extern_overrides: Vec::new(),
         }
     }
 
     pub(crate) fn find_type(&self, proto_fqn: &str) -> Option<&TypeModel> {
         self.types.find(proto_fqn)
+    }
+
+    pub(crate) fn with_extern_overrides(mut self, overrides: &[(String, String)]) -> Self {
+        self.extern_overrides = overrides.to_vec();
+        self
+    }
+
+    /// Resolve `proto_fqn` (e.g. `.google.protobuf.Timestamp`) through the
+    /// user's extern overrides. The longest matching package prefix wins.
+    pub(crate) fn extern_override_type(&self, proto_fqn: &str) -> Option<String> {
+        let fqn = proto_fqn.strip_prefix('.')?;
+        self.extern_overrides
+            .iter()
+            .filter_map(|(proto_path, rust_path)| {
+                let rest = fqn.strip_prefix(proto_path.as_str())?.strip_prefix('.')?;
+                Some((proto_path.len(), rust_path, rest))
+            })
+            .max_by_key(|(prefix_len, ..)| *prefix_len)
+            .map(|(_, rust_path, rest)| {
+                let segments: Vec<&str> = rest.split('.').collect();
+                let (type_name, parents) = segments.split_last().expect("type has name");
+                std::iter::once(rust_path.clone())
+                    .chain(parents.iter().map(|s| prost::to_snake(s)))
+                    .chain(std::iter::once(prost::to_upper_camel(type_name)))
+                    .collect::<Vec<_>>()
+                    .join("::")
+            })
     }
 
     pub(crate) fn prost(&self) -> ProstSchemaResolver<'_> {
@@ -443,6 +476,77 @@ mod tests {
         assert_eq!(
             prost.rust_type_relative(".google.protobufish.Thing", "greet.v1", 0),
             None
+        );
+    }
+
+    #[test]
+    fn extern_overrides_take_precedence_over_wkt_defaults() {
+        let schema = SchemaSet::default().with_extern_overrides(&[(
+            "google.protobuf".to_string(),
+            "::pbjson_types".to_string(),
+        )]);
+        let prost = schema.prost();
+
+        assert_eq!(
+            prost.rust_type_relative(".google.protobuf.Timestamp", "greet.v1", 0),
+            Some("::pbjson_types::Timestamp".to_string())
+        );
+        assert_eq!(
+            prost.rust_type_relative(".google.protobuf.Empty", "greet.v1", 1),
+            Some("::pbjson_types::Empty".to_string())
+        );
+        assert_eq!(
+            prost.rust_type_relative(".google.protobuf.Field.Kind", "", 0),
+            Some("::pbjson_types::field::Kind".to_string())
+        );
+        // Packages outside the override still use prost defaults
+        let plain = SchemaSet::default()
+            .with_extern_overrides(&[("acme.types".to_string(), "::acme_types".to_string())]);
+        assert_eq!(
+            plain
+                .prost()
+                .rust_type_relative(".google.protobuf.Timestamp", "greet.v1", 0),
+            Some("::prost_types::Timestamp".to_string())
+        );
+    }
+
+    #[test]
+    fn type_path_mappings_skip_extern_overridden_types() {
+        let schema = SchemaSet::from_file_descriptor_set(&FileDescriptorSet {
+            file: vec![
+                FileDescriptorProto {
+                    name: Some("bar.proto".to_string()),
+                    package: Some("foo.bar".to_string()),
+                    message_type: vec![DescriptorProto {
+                        name: Some("Local".to_string()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                FileDescriptorProto {
+                    name: Some("google/protobuf/timestamp.proto".to_string()),
+                    package: Some("google.protobuf".to_string()),
+                    message_type: vec![DescriptorProto {
+                        name: Some("Timestamp".to_string()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ],
+        })
+        .with_extern_overrides(&[("google.protobuf".to_string(), "::pbjson_types".to_string())]);
+
+        let mappings = schema.prost().type_path_mappings("foo.bar");
+
+        assert!(mappings.contains(&TypePathMapping {
+            proto_path: ".foo.bar.Local".to_string(),
+            rust_path: "Local".to_string(),
+        }));
+        // Overridden types get their extern_path from the override itself
+        assert!(
+            !mappings
+                .iter()
+                .any(|mapping| mapping.proto_path.starts_with(".google.protobuf"))
         );
     }
 

@@ -9,6 +9,7 @@ use connectrpc_axum_core::{Code, EnvelopeError, ErrorDetail, Status};
 /// This enum represents the different types of errors that can occur
 /// during client-side RPC communication.
 #[derive(Clone, Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ClientError {
     /// RPC status error from the server.
     ///
@@ -216,6 +217,9 @@ impl From<EnvelopeError> for ClientError {
             EnvelopeError::PayloadTooLarge { size } => {
                 ClientError::Encode(format!("payload size {size} out of bounds for envelope"))
             }
+            // EnvelopeError is #[non_exhaustive]; treat future variants as
+            // wire protocol violations.
+            err => ClientError::Protocol(err.to_string()),
         }
     }
 }

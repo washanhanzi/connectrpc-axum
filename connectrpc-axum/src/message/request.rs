@@ -99,9 +99,7 @@ pub fn decompress_bytes(
                 Code::ResourceExhausted,
                 format!("decompressed message size exceeds maximum allowed size of {limit} bytes"),
             ),
-            connectrpc_axum_core::DecompressError::Io(e) => {
-                ConnectError::new(Code::InvalidArgument, format!("decompression failed: {e}"))
-            }
+            e => ConnectError::new(Code::InvalidArgument, format!("decompression failed: {e}")),
         })
 }
 
@@ -165,6 +163,9 @@ fn envelope_error_to_connect(err: connectrpc_axum_core::EnvelopeError) -> Connec
         EnvelopeError::IncompleteHeader { .. }
         | EnvelopeError::InvalidFlags(_)
         | EnvelopeError::Decompression(_) => Code::InvalidArgument,
+        // EnvelopeError is #[non_exhaustive]; future variants are protocol
+        // errors, which connect-go reports as Internal.
+        _ => Code::Internal,
     };
     ConnectError::new(code, err.to_string())
 }

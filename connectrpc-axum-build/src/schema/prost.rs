@@ -17,14 +17,19 @@ impl<'a> ProstSchemaResolver<'a> {
     /// Compute `extern_path` mappings for the tonic pass generating services in
     /// `package`. Rust paths are relative to that package's module, so tonic's
     /// `super::` prefix (applied inside the `{service}_server` module) resolves
-    /// them correctly. Well-known types are skipped: prost's default extern
-    /// mappings already cover them.
+    /// them correctly. Types covered by user extern overrides are skipped —
+    /// the tonic pass registers the overrides themselves as package-level
+    /// `extern_path` entries. Other well-known types are skipped because
+    /// prost's default extern mappings already cover them.
     #[cfg(any(test, feature = "tonic", feature = "tonic-client"))]
     pub(crate) fn type_path_mappings(&self, package: &str) -> Vec<TypePathMapping> {
         self.schema
             .types
             .iter()
-            .filter(|(proto_fqn, _)| wkt_rust_type(proto_fqn).is_none())
+            .filter(|(proto_fqn, _)| {
+                self.schema.extern_override_type(proto_fqn).is_none()
+                    && wkt_rust_type(proto_fqn).is_none()
+            })
             .map(|(proto_fqn, ty)| TypePathMapping {
                 proto_path: proto_fqn.to_string(),
                 rust_path: self.relative_type_path(ty, package, 0),
@@ -59,6 +64,11 @@ impl<'a> ProstSchemaResolver<'a> {
         current_package: &str,
         nesting: usize,
     ) -> Option<String> {
+        // User extern overrides (extern_module) take precedence over prost's
+        // default well-known-type mappings.
+        if let Some(external) = self.schema.extern_override_type(proto_fqn) {
+            return Some(external);
+        }
         if let Some(wkt) = wkt_rust_type(proto_fqn) {
             return Some(wkt);
         }
@@ -146,11 +156,11 @@ fn wkt_rust_type(proto_fqn: &str) -> Option<String> {
     Some(mapped.to_string())
 }
 
-fn to_snake(ident: impl AsRef<str>) -> String {
+pub(super) fn to_snake(ident: impl AsRef<str>) -> String {
     sanitize_identifier(&ident.as_ref().to_snake_case())
 }
 
-fn to_upper_camel(ident: impl AsRef<str>) -> String {
+pub(super) fn to_upper_camel(ident: impl AsRef<str>) -> String {
     sanitize_identifier(&ident.as_ref().to_upper_camel_case())
 }
 

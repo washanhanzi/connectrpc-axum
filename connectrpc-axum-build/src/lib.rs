@@ -730,7 +730,8 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
         let descriptor_bytes = fs::read(&descriptor_path)
             .map_err(|e| std::io::Error::other(format!("read descriptor: {e}")))?;
 
-        let schema = SchemaSet::from_descriptor_bytes(&descriptor_bytes)?;
+        let schema = SchemaSet::from_descriptor_bytes(&descriptor_bytes)?
+            .with_extern_overrides(&self.extern_reexports);
 
         let connect_generator = AxumConnectServiceGenerator::new()
             .with_connect_server(generate_handlers)
@@ -946,14 +947,26 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
                 builder = config_fn(builder);
             }
 
-            // Apply internal config (takes precedence)
+            // Apply internal config (takes precedence). When a user extern
+            // override covers the well-known types, prost's default
+            // `::prost_types` externs must be disabled (they would collide
+            // with the override) by compiling WKTs, and the override supplies
+            // the extern mapping instead.
+            let overrides_cover_wkt = schema
+                .extern_overrides
+                .iter()
+                .any(|(proto_path, _)| covers_package(proto_path, "google.protobuf"));
             builder = builder
                 .build_client(pass.build_client)
                 .build_server(!pass.build_client)
-                .compile_well_known_types(false)
+                .compile_well_known_types(overrides_cover_wkt)
                 .out_dir(&temp_out_dir);
 
-            // Add extern_path mappings for the types generated in pass 1
+            // Register user extern overrides (absolute external paths), then
+            // extern_path mappings for the types generated in pass 1
+            for (proto_path, rust_path) in &schema.extern_overrides {
+                builder = builder.extern_path(format!(".{proto_path}"), rust_path.clone());
+            }
             for tr in schema.prost().type_path_mappings(package) {
                 builder = builder.extern_path(tr.proto_path, tr.rust_path);
             }
@@ -984,6 +997,19 @@ struct TonicPass {
     build_client: bool,
     temp_dir_name: &'static str,
     banner: &'static str,
+}
+
+/// Whether the dotted proto package prefix `prefix` covers `package` (equal
+/// to it or an ancestor of it).
+#[cfg(any(feature = "tonic", feature = "tonic-client"))]
+fn covers_package(prefix: &str, package: &str) -> bool {
+    package == prefix
+        || package
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('.'))
+        || prefix
+            .strip_prefix(package)
+            .is_some_and(|rest| rest.starts_with('.'))
 }
 
 /// Create a builder without a proto source.

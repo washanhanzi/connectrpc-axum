@@ -508,6 +508,7 @@ impl<I: InterceptorInternal> ClientBuilder<I> {
 
 /// Error type for client building failures.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ClientBuildError {
     /// Failed to create HTTP transport.
     #[error("failed to create HTTP transport: {0}")]

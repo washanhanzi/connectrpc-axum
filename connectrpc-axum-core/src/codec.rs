@@ -33,6 +33,7 @@ use flate2::write::GzEncoder;
 /// ([`DecompressError::TooLarge`]), so callers can map the latter to a
 /// `ResourceExhausted` status rather than treating it as malformed input.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum DecompressError {
     /// The underlying decompressor failed (corrupt/invalid input).
     Io(io::Error),
