@@ -149,22 +149,26 @@ pub enum RequestProtocol {
 impl RequestProtocol {
     /// Detect protocol from Content-Type header value.
     ///
+    /// The base media type is compared exactly (parameters like `charset` are
+    /// ignored), so e.g. `application/jsonp` or `application/connect+jsonx` are
+    /// rejected rather than matched by prefix.
+    ///
     /// Note: gRPC (`application/grpc*`) is handled by `ContentTypeSwitch` before
     /// reaching this code, so we don't need to detect it here.
     ///
     /// Returns `Unknown` for unrecognized content-types.
     pub fn from_content_type(content_type: &str) -> Self {
-        if content_type.starts_with("application/connect+proto") {
-            Self::ConnectStreamProto
-        } else if content_type.starts_with("application/connect+json") {
-            Self::ConnectStreamJson
-        } else if content_type.starts_with("application/proto") {
-            Self::ConnectUnaryProto
-        } else if content_type.starts_with("application/json") {
-            Self::ConnectUnaryJson
-        } else {
+        // Strip media type parameters (e.g. "; charset=utf-8") and compare
+        // the base media type exactly, matching connect-go's exact lookup.
+        let base = content_type.split(';').next().unwrap_or("").trim();
+
+        match base {
+            "application/connect+proto" => Self::ConnectStreamProto,
+            "application/connect+json" => Self::ConnectStreamJson,
+            "application/proto" => Self::ConnectUnaryProto,
+            "application/json" => Self::ConnectUnaryJson,
             // Unknown content-type - should be rejected
-            Self::Unknown
+            _ => Self::Unknown,
         }
     }
 
@@ -354,11 +358,11 @@ pub fn can_handle_get_encoding<B>(req: &Request<B>) -> bool {
     let query = req.uri().query().unwrap_or("");
 
     for pair in query.split('&') {
-        if let Some((key, value)) = pair.split_once('=') {
-            if key == "encoding" {
-                // Encoding must be "json" or "proto"
-                return value == "json" || value == "proto";
-            }
+        if let Some((key, value)) = pair.split_once('=')
+            && key == "encoding"
+        {
+            // Encoding must be "json" or "proto"
+            return value == "json" || value == "proto";
         }
     }
 
@@ -448,9 +452,10 @@ pub fn validate_get_query_params<B>(
         }
     }
 
-    // Validate connect=v1 parameter (matching connect-go: connectCheckProtocolVersion)
+    // Validate connect=v1 parameter (matching connect-go: connectCheckProtocolVersion).
+    // An empty value is treated the same as a missing parameter.
     match connect {
-        None if require_connect => {
+        None | Some("") if require_connect => {
             return Some(ConnectError::new(
                 Code::InvalidArgument,
                 "missing required query parameter: set connect to \"v1\"",
@@ -497,10 +502,9 @@ pub fn validate_get_query_params<B>(
     if let Some(comp) = compression
         && !comp.is_empty()
         && comp != "identity"
+        && let Err(err) = resolve_codec(comp)
     {
-        if let Err(err) = resolve_codec(comp) {
-            return Some(err);
-        }
+        return Some(err);
     }
 
     None
@@ -557,6 +561,44 @@ mod tests {
         assert_eq!(
             RequestProtocol::from_content_type("invalid"),
             RequestProtocol::Unknown
+        );
+    }
+
+    #[test]
+    fn test_from_content_type_rejects_prefix_lookalikes() {
+        // Base media types must match exactly, not by prefix.
+        assert_eq!(
+            RequestProtocol::from_content_type("application/jsonp"),
+            RequestProtocol::Unknown
+        );
+        assert_eq!(
+            RequestProtocol::from_content_type("application/protobuf"),
+            RequestProtocol::Unknown
+        );
+        assert_eq!(
+            RequestProtocol::from_content_type("application/connect+jsonx"),
+            RequestProtocol::Unknown
+        );
+        assert_eq!(
+            RequestProtocol::from_content_type("application/connect+protobuf"),
+            RequestProtocol::Unknown
+        );
+    }
+
+    #[test]
+    fn test_from_content_type_accepts_parameters() {
+        // Media type parameters like charset are ignored.
+        assert_eq!(
+            RequestProtocol::from_content_type("application/json; charset=utf-8"),
+            RequestProtocol::ConnectUnaryJson
+        );
+        assert_eq!(
+            RequestProtocol::from_content_type("application/json ; charset=utf-8"),
+            RequestProtocol::ConnectUnaryJson
+        );
+        assert_eq!(
+            RequestProtocol::from_content_type("application/connect+proto;charset=utf-8"),
+            RequestProtocol::ConnectStreamProto
         );
     }
 
@@ -936,6 +978,27 @@ mod tests {
                 .unwrap()
                 .contains("missing required query parameter")
         );
+    }
+
+    #[test]
+    fn test_get_empty_connect_required() {
+        // An empty connect value is treated the same as a missing one.
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri("/svc/Method?connect=&encoding=json&message=%7B%7D")
+            .body(())
+            .unwrap();
+        let err = validate_get_query_params(&req, true);
+        assert!(err.is_some());
+        let err = err.unwrap();
+        assert!(matches!(err.code(), Code::InvalidArgument));
+        assert!(
+            err.message()
+                .unwrap()
+                .contains("missing required query parameter")
+        );
+        // When not required, empty connect is OK (same as missing).
+        assert!(validate_get_query_params(&req, false).is_none());
     }
 
     #[test]

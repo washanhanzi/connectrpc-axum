@@ -14,7 +14,6 @@ use crate::message::error::{
     Code, ConnectError, build_end_stream_frame_with_limit, internal_error_end_stream_frame,
     internal_error_response, internal_error_streaming_response,
 };
-use crate::message::request::envelope_flags;
 use axum::{
     body::{Body, Bytes},
     http::{HeaderValue, StatusCode, header},
@@ -85,18 +84,13 @@ pub fn compress_bytes(
 /// # Arguments
 /// - `payload`: The message bytes to wrap
 /// - `compressed`: Whether the payload is compressed (sets flag 0x01)
-pub fn wrap_envelope(payload: &[u8], compressed: bool) -> Vec<u8> {
-    let flags = if compressed {
-        envelope_flags::COMPRESSED
-    } else {
-        envelope_flags::MESSAGE
-    };
-
-    let mut frame = Vec::with_capacity(5 + payload.len());
-    frame.push(flags);
-    frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    frame.extend_from_slice(payload);
-    frame
+///
+/// # Errors
+/// Returns `Internal` if the payload length does not fit in the envelope's
+/// 4-byte length prefix.
+pub fn wrap_envelope(payload: &[u8], compressed: bool) -> Result<Vec<u8>, ConnectError> {
+    connectrpc_axum_core::wrap_envelope(payload, compressed)
+        .map_err(|e| ConnectError::new(Code::Internal, e.to_string()))
 }
 
 /// Set Connect-Content-Encoding header for streaming responses.
@@ -153,12 +147,12 @@ where
         // 2. Check send size limit (following connect-go behavior)
         // Note: For unary RPCs, Tower's CompressionLayer handles HTTP body compression,
         // so we check the uncompressed size here. Tower will compress the response body.
-        if let Some(max) = ctx.limits.get_send_max_bytes() {
-            if body.len() > max {
-                let msg = format!("message size {} exceeds sendMaxBytes {}", body.len(), max);
-                let err = ConnectError::new(crate::message::error::Code::ResourceExhausted, msg);
-                return err.into_response_with_context(ctx);
-            }
+        if let Some(max) = ctx.limits.get_send_max_bytes()
+            && body.len() > max
+        {
+            let msg = format!("message size {} exceeds sendMaxBytes {}", body.len(), max);
+            let err = ConnectError::new(crate::message::error::Code::ResourceExhausted, msg);
+            return err.into_response_with_context(ctx);
         }
 
         // 3. Build HTTP response
@@ -206,25 +200,28 @@ where
             };
 
         // 3. Check send size limit (following connect-go behavior)
-        if let Some(max) = ctx.limits.get_send_max_bytes() {
-            if data.len() > max {
-                let msg = if compressed {
-                    format!(
-                        "compressed message size {} exceeds sendMaxBytes {}",
-                        data.len(),
-                        max
-                    )
-                } else {
-                    format!("message size {} exceeds sendMaxBytes {}", data.len(), max)
-                };
-                let err = ConnectError::new(crate::message::error::Code::ResourceExhausted, msg);
-                // For streaming protocols, errors are returned as EndStream frames
-                return err.into_response_with_context(ctx);
-            }
+        if let Some(max) = ctx.limits.get_send_max_bytes()
+            && data.len() > max
+        {
+            let msg = if compressed {
+                format!(
+                    "compressed message size {} exceeds sendMaxBytes {}",
+                    data.len(),
+                    max
+                )
+            } else {
+                format!("message size {} exceeds sendMaxBytes {}", data.len(), max)
+            };
+            let err = ConnectError::new(crate::message::error::Code::ResourceExhausted, msg);
+            // For streaming protocols, errors are returned as EndStream frames
+            return err.into_response_with_context(ctx);
         }
 
         // 4. Build message frame
-        let message_frame = wrap_envelope(&data, compressed);
+        let message_frame = match wrap_envelope(&data, compressed) {
+            Ok(frame) => frame,
+            Err(err) => return err.into_response_with_context(ctx),
+        };
 
         // 5. Build EndStream frame
         let end_stream_frame =
@@ -347,27 +344,33 @@ where
                         };
 
                     // 3. Check send size limit (following connect-go behavior)
-                    if let Some(max) = send_max_bytes {
-                        if data.len() > max {
-                            let msg = if compressed {
-                                format!(
-                                    "compressed message size {} exceeds sendMaxBytes {}",
-                                    data.len(),
-                                    max
-                                )
-                            } else {
-                                format!("message size {} exceeds sendMaxBytes {}", data.len(), max)
-                            };
-                            let err = ConnectError::new(Code::ResourceExhausted, msg);
-                            let frame =
-                                build_end_stream_frame_with_limit(Some(&err), None, send_max_bytes);
-                            return (Bytes::from(frame), true);
-                        }
+                    if let Some(max) = send_max_bytes
+                        && data.len() > max
+                    {
+                        let msg = if compressed {
+                            format!(
+                                "compressed message size {} exceeds sendMaxBytes {}",
+                                data.len(),
+                                max
+                            )
+                        } else {
+                            format!("message size {} exceeds sendMaxBytes {}", data.len(), max)
+                        };
+                        let err = ConnectError::new(Code::ResourceExhausted, msg);
+                        let frame =
+                            build_end_stream_frame_with_limit(Some(&err), None, send_max_bytes);
+                        return (Bytes::from(frame), true);
                     }
 
                     // 4. Wrap in envelope with correct flags
-                    let frame = wrap_envelope(&data, compressed);
-                    (Bytes::from(frame), false)
+                    match wrap_envelope(&data, compressed) {
+                        Ok(frame) => (Bytes::from(frame), false),
+                        Err(err) => {
+                            let frame =
+                                build_end_stream_frame_with_limit(Some(&err), None, send_max_bytes);
+                            (Bytes::from(frame), true)
+                        }
+                    }
                 }
                 Err(err) => {
                     // Send Error EndStreamResponse (includes error metadata in the frame)
@@ -403,7 +406,7 @@ where
                 .filter_map(|x| async { x }),
             )
             // Wrap in Result for Body::from_stream
-            .map(|bytes| Ok::<_, std::convert::Infallible>(bytes));
+            .map(Ok::<_, std::convert::Infallible>);
 
         let body = Body::from_stream(body_stream);
 

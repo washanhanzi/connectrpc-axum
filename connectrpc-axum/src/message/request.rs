@@ -32,13 +32,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Read HTTP body bytes with a size limit.
 ///
-/// Returns `ResourceExhausted` error if the body exceeds `max_size`.
+/// Returns `ResourceExhausted` if the body exceeds `max_size`, or an
+/// `Internal` error for other body read failures.
 pub async fn read_body(body: Body, max_size: usize) -> Result<Bytes, ConnectError> {
     axum::body::to_bytes(body, max_size).await.map_err(|e| {
-        ConnectError::new(
-            Code::ResourceExhausted,
-            format!("failed to read request body: {e}"),
-        )
+        // Distinguish "body too large" from other transport/body errors by
+        // inspecting the error source chain.
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&e);
+        while let Some(err) = source {
+            if err.is::<http_body_util::LengthLimitError>() {
+                return ConnectError::new(
+                    Code::ResourceExhausted,
+                    format!("request body exceeds maximum allowed size of {max_size} bytes"),
+                );
+            }
+            source = err.source();
+        }
+        ConnectError::new(Code::Internal, format!("failed to read request body: {e}"))
     })
 }
 
@@ -139,28 +149,40 @@ where
 }
 
 /// Connect streaming envelope flags.
-pub mod envelope_flags {
-    /// Regular message (uncompressed).
-    pub const MESSAGE: u8 = 0x00;
-    /// Compressed message.
-    pub const COMPRESSED: u8 = 0x01;
-    /// End of stream.
-    pub const END_STREAM: u8 = 0x02;
+pub use connectrpc_axum_core::envelope_flags;
+
+/// Processed envelope payload, classified by frame type.
+pub use connectrpc_axum_core::EnvelopePayload;
+
+/// Convert an [`EnvelopeError`] into a [`ConnectError`] with the appropriate code.
+fn envelope_error_to_connect(err: connectrpc_axum_core::EnvelopeError) -> ConnectError {
+    use connectrpc_axum_core::EnvelopeError;
+    let code = match &err {
+        EnvelopeError::MessageTooLarge { .. } => Code::ResourceExhausted,
+        EnvelopeError::Compression(_)
+        | EnvelopeError::PayloadTooLarge { .. }
+        | EnvelopeError::MissingCompression => Code::Internal,
+        EnvelopeError::IncompleteHeader { .. }
+        | EnvelopeError::InvalidFlags(_)
+        | EnvelopeError::Decompression(_) => Code::InvalidArgument,
+    };
+    ConnectError::new(code, err.to_string())
 }
 
 /// Process envelope payload based on flags, with optional decompression.
 ///
-/// Given the flags byte and payload bytes from an envelope, validates the flags
-/// and decompresses the payload if needed.
+/// Delegates to [`connectrpc_axum_core::process_envelope_payload`], converting
+/// errors into [`ConnectError`]s with appropriate codes.
 ///
 /// Flags are a bitfield per the Connect spec, so they are matched with bitwise
 /// masks rather than exact equality: a compressed end-stream frame is `0x03`
 /// (`COMPRESSED | END_STREAM`), not a distinct value.
 ///
 /// # Returns
-/// - `Ok(Some(payload))` for message frames (END_STREAM bit clear)
-/// - `Ok(None)` for end-stream frames (END_STREAM bit set, e.g. 0x02 or 0x03)
-/// - `Err` for flags with unknown bits set
+/// - `Ok(EnvelopePayload::Message(payload))` for message frames (END_STREAM bit clear)
+/// - `Ok(EnvelopePayload::EndStream(payload))` for end-stream frames (END_STREAM bit set)
+/// - `Err` for flags with unknown bits set, decompression failures, or payloads
+///   exceeding `max_output` (`ResourceExhausted`)
 ///
 /// # Arguments
 /// - `flags`: The envelope flags byte
@@ -173,34 +195,10 @@ pub fn process_envelope_payload(
     payload: Bytes,
     encoding: CompressionEncoding,
     max_output: usize,
-) -> Result<Option<Bytes>, ConnectError> {
-    // Reject flags with bits outside the defined set (COMPRESSED | END_STREAM).
-    const KNOWN_FLAGS: u8 = envelope_flags::COMPRESSED | envelope_flags::END_STREAM;
-    if flags & !KNOWN_FLAGS != 0 {
-        return Err(ConnectError::new(
-            Code::InvalidArgument,
-            format!("invalid Connect frame flags: 0x{:02x}", flags),
-        ));
-    }
-
-    // EndStream bit (0x02) signals end of stream; it may be combined with the
-    // COMPRESSED bit (0x03), so test the bit rather than the whole byte.
-    if flags & envelope_flags::END_STREAM != 0 {
-        return Ok(None);
-    }
-
-    // COMPRESSED bit (0x01) indicates a per-frame compressed payload.
-    let is_compressed = flags & envelope_flags::COMPRESSED != 0;
-
-    // Decompress if needed, bounding output to guard against decompression bombs.
-    // Uncompressed frames are capped too so `max_output` holds for every flag.
-    let payload = if is_compressed {
-        decompress_bytes(payload, encoding, max_output)?
-    } else {
-        enforce_max_output(payload, max_output)?
-    };
-
-    Ok(Some(payload))
+) -> Result<EnvelopePayload, ConnectError> {
+    let max_output = (max_output != usize::MAX).then_some(max_output);
+    connectrpc_axum_core::process_envelope_payload(flags, payload, encoding, max_output)
+        .map_err(envelope_error_to_connect)
 }
 
 // ============================================================================
@@ -340,23 +338,26 @@ impl RequestPipeline {
             .map(|e| e.request)
             .unwrap_or(CompressionEncoding::Identity);
 
-        let payload = process_envelope_payload(
+        let payload = match process_envelope_payload(
             flags,
             raw_payload,
             encoding,
             ctx.limits.receive_max_bytes_or_max(),
         )
         .map_err(|e| ContextError::new(ctx.protocol, e, ctx.limits.get_send_max_bytes()))?
-        .ok_or_else(|| {
-            ContextError::new(
-                ctx.protocol,
-                ConnectError::new(
-                    Code::InvalidArgument,
-                    "unexpected EndStreamResponse in request",
-                ),
-                ctx.limits.get_send_max_bytes(),
-            )
-        })?;
+        {
+            EnvelopePayload::Message(payload) => payload,
+            EnvelopePayload::EndStream(_) => {
+                return Err(ContextError::new(
+                    ctx.protocol,
+                    ConnectError::new(
+                        Code::InvalidArgument,
+                        "unexpected EndStreamResponse in request",
+                    ),
+                    ctx.limits.get_send_max_bytes(),
+                ));
+            }
+        };
 
         Self::decode_message(ctx, &payload)
     }
@@ -581,22 +582,22 @@ where
         message_str.into_bytes()
     };
 
-    // 2. Decompress if compression is specified (bounded to guard against bombs)
-    let bytes = match params.compression.as_deref() {
-        #[cfg(feature = "compression-gzip-stream")]
-        Some("gzip") => decompress_bytes(
+    // 2. Decompress if compression is specified (bounded to guard against bombs).
+    // Uses the same codec resolution as the POST path so every enabled encoding works.
+    let compression = params.compression.as_deref();
+    let bytes = match CompressionEncoding::from_header(compression) {
+        Some(encoding) => decompress_bytes(
             bytes.into(),
-            CompressionEncoding::Gzip,
+            encoding,
             ctx.limits.receive_max_bytes_or_max(),
         )?,
-        Some("identity") | Some("") | None => bytes.into(),
-        Some(other) => {
+        None => {
             // This should be caught by layer validation, but handle as fallback
             return Err(ConnectError::new(
                 Code::Unimplemented,
                 format!(
                     "unknown compression \"{}\": supported encodings are {}",
-                    other,
+                    compression.unwrap_or(""),
                     connectrpc_axum_core::supported_encodings_str()
                 ),
             ));
@@ -678,8 +679,8 @@ where
                 let length = u32::from_be_bytes([buffer[1], buffer[2], buffer[3], buffer[4]]) as usize;
 
                 // Check message size limit BEFORE allocating memory
-                if let Err(err) = limits.check_size(length) {
-                    yield Err(ConnectError::new(Code::ResourceExhausted, err));
+                if let Err(err) = limits.check_size_connect(length) {
+                    yield Err(err);
                     return;
                 }
 
@@ -701,8 +702,8 @@ where
                     request_encoding,
                     limits.receive_max_bytes_or_max(),
                 ) {
-                    Ok(Some(payload)) => payload,
-                    Ok(None) => {
+                    Ok(EnvelopePayload::Message(payload)) => payload,
+                    Ok(EnvelopePayload::EndStream(_)) => {
                         // EndStream frame - client stream is done
                         return;
                     }
@@ -785,9 +786,8 @@ mod max_output_tests {
             CompressionEncoding::Identity,
             100,
         )
-        .unwrap()
         .unwrap();
-        assert_eq!(out.len(), 100);
+        assert_eq!(out, EnvelopePayload::Message(payload.clone()));
         // Uncompressed frame over limit is rejected (was previously unchecked).
         let err = process_envelope_payload(
             envelope_flags::MESSAGE,
@@ -800,31 +800,37 @@ mod max_output_tests {
     }
 
     #[test]
-    fn process_envelope_payload_end_stream_ignores_max_output() {
-        // EndStream frames carry no message payload; the cap must not reject them.
+    fn process_envelope_payload_end_stream_yields_payload() {
+        // EndStream frames yield their payload for the caller to parse.
         let out = process_envelope_payload(
             envelope_flags::END_STREAM,
-            Bytes::from_static(b"{}"),
-            CompressionEncoding::Identity,
-            0,
-        )
-        .unwrap();
-        assert!(out.is_none());
-    }
-
-    #[test]
-    fn process_envelope_payload_compressed_end_stream_is_end_stream() {
-        // Flags are a bitfield: COMPRESSED | END_STREAM (0x03) is a valid
-        // end-stream frame, not an invalid-flags error.
-        let flags = envelope_flags::COMPRESSED | envelope_flags::END_STREAM;
-        let out = process_envelope_payload(
-            flags,
             Bytes::from_static(b"{}"),
             CompressionEncoding::Identity,
             usize::MAX,
         )
         .unwrap();
-        assert!(out.is_none());
+        assert_eq!(out, EnvelopePayload::EndStream(Bytes::from_static(b"{}")));
+    }
+
+    #[test]
+    fn process_envelope_payload_compressed_without_negotiation_is_error() {
+        // A COMPRESSED frame with Identity negotiated is a protocol error
+        // (connect-go: "sent compressed message without compression support"),
+        // not a passthrough that fails later during decode.
+        let flags = envelope_flags::COMPRESSED;
+        let err = process_envelope_payload(
+            flags,
+            Bytes::from_static(b"data"),
+            CompressionEncoding::Identity,
+            usize::MAX,
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), Code::Internal);
+        assert!(
+            err.message()
+                .unwrap()
+                .contains("sent compressed message without compression support")
+        );
     }
 
     #[test]
@@ -897,9 +903,8 @@ mod decompression_bomb_tests {
             CompressionEncoding::Gzip,
             64 * 1024,
         )
-        .unwrap()
         .unwrap();
-        assert_eq!(&out[..], &payload[..]);
+        assert_eq!(out, EnvelopePayload::Message(Bytes::from(payload)));
     }
 
     // End-to-end: the frame's *compressed* length passes the size check, but
@@ -948,5 +953,101 @@ mod decompression_bomb_tests {
             .unwrap_err()
             .into_connect_error();
         assert_eq!(err.code(), Code::ResourceExhausted);
+    }
+}
+
+#[cfg(test)]
+mod read_body_tests {
+    //! `read_body` must distinguish "body too large" (`ResourceExhausted`)
+    //! from other body read failures (`Internal`).
+    use super::*;
+
+    #[tokio::test]
+    async fn read_body_over_limit_is_resource_exhausted() {
+        let body = Body::from(vec![0u8; 1024]);
+        let err = read_body(body, 100).await.unwrap_err();
+        assert_eq!(err.code(), Code::ResourceExhausted);
+    }
+
+    #[tokio::test]
+    async fn read_body_within_limit_ok() {
+        let body = Body::from(vec![0u8; 100]);
+        let bytes = read_body(body, 100).await.unwrap();
+        assert_eq!(bytes.len(), 100);
+    }
+
+    #[tokio::test]
+    async fn read_body_stream_error_is_internal() {
+        let stream = futures::stream::iter(vec![
+            Ok::<_, std::io::Error>(Bytes::from_static(b"data")),
+            Err(std::io::Error::other("connection reset")),
+        ]);
+        let body = Body::from_stream(stream);
+        let err = read_body(body, usize::MAX).await.unwrap_err();
+        assert_eq!(err.code(), Code::Internal);
+    }
+}
+
+#[cfg(all(test, feature = "compression-gzip-stream"))]
+mod get_request_compression_tests {
+    //! GET `compression=` handling must resolve codecs the same way the POST
+    //! path does, so every enabled encoding works (not just gzip).
+    use super::*;
+    use axum::http::Request as HttpRequest;
+    use base64::Engine as _;
+
+    async fn decode_get_request(
+        query: &str,
+    ) -> Result<ConnectRequest<pbjson_types::Empty>, ConnectError> {
+        let req = HttpRequest::builder()
+            .method(Method::GET)
+            .uri(format!("/svc/Method?{query}"))
+            .body(Body::empty())
+            .unwrap();
+        ConnectRequest::<pbjson_types::Empty>::from_request(req, &()).await
+    }
+
+    #[tokio::test]
+    async fn get_request_gzip_compression_decodes() {
+        let payload = pbjson_types::Empty::default().encode_to_vec();
+        let compressed = CompressionEncoding::Gzip
+            .codec()
+            .unwrap()
+            .compress(&payload)
+            .unwrap();
+        let message = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&compressed);
+        let query =
+            format!("connect=v1&encoding=proto&message={message}&base64=1&compression=gzip");
+        decode_get_request(&query).await.unwrap();
+    }
+
+    #[cfg(feature = "compression-br-stream")]
+    #[tokio::test]
+    async fn get_request_br_compression_decodes() {
+        let payload = pbjson_types::Empty::default().encode_to_vec();
+        let compressed = CompressionEncoding::Brotli
+            .codec()
+            .unwrap()
+            .compress(&payload)
+            .unwrap();
+        let message = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&compressed);
+        let query = format!("connect=v1&encoding=proto&message={message}&base64=1&compression=br");
+        decode_get_request(&query).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_request_unknown_compression_is_unimplemented() {
+        let err = decode_get_request("connect=v1&encoding=proto&message=&compression=lz4")
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Code::Unimplemented);
+        assert!(err.message().unwrap().contains("supported encodings are"));
+    }
+
+    #[tokio::test]
+    async fn get_request_identity_compression_decodes() {
+        decode_get_request("connect=v1&encoding=proto&message=&compression=identity")
+            .await
+            .unwrap();
     }
 }

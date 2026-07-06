@@ -93,22 +93,6 @@ impl MessageLimits {
 
     /// Check if an incoming message size exceeds the configured receive limit.
     ///
-    /// Returns `Ok(())` if the size is within limits, or `Err(String)` if it exceeds.
-    /// Use this variant when you need to customize the error handling.
-    pub fn check_size(&self, size: usize) -> Result<(), String> {
-        if let Some(max) = self.receive_max_bytes
-            && size > max
-        {
-            return Err(format!(
-                "message size {} bytes exceeds maximum allowed size of {} bytes",
-                size, max
-            ));
-        }
-        Ok(())
-    }
-
-    /// Check if an incoming message size exceeds the configured receive limit.
-    ///
     /// Returns `Ok(())` if the size is within limits, or `Err(ConnectError)` if it exceeds.
     pub fn check_size_connect(&self, size: usize) -> Result<(), ConnectError> {
         if let Some(max) = self.receive_max_bytes
@@ -176,33 +160,26 @@ mod tests {
     #[test]
     fn test_check_size_within_limit() {
         let limits = MessageLimits::new().receive_max_bytes(1024);
-        assert!(limits.check_size(512).is_ok());
-        assert!(limits.check_size(1024).is_ok());
+        assert!(limits.check_size_connect(512).is_ok());
+        assert!(limits.check_size_connect(1024).is_ok());
     }
 
     #[test]
     fn test_check_size_exceeds_limit() {
         let limits = MessageLimits::new().receive_max_bytes(1024);
-        let result = limits.check_size(1025);
+        let result = limits.check_size_connect(1025);
         assert!(result.is_err());
-        let err_msg = result.unwrap_err();
+        let err = result.unwrap_err();
+        assert!(matches!(err.code(), Code::ResourceExhausted));
+        let err_msg = err.message().unwrap();
         assert!(err_msg.contains("1025"));
         assert!(err_msg.contains("1024"));
     }
 
     #[test]
-    fn test_check_size_connect_exceeds_limit() {
-        let limits = MessageLimits::new().receive_max_bytes(1024);
-        let result = limits.check_size_connect(1025);
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(matches!(err.code(), Code::ResourceExhausted));
-    }
-
-    #[test]
     fn test_check_size_no_limit() {
         let limits = MessageLimits::new();
-        assert!(limits.check_size(usize::MAX).is_ok());
+        assert!(limits.check_size_connect(usize::MAX).is_ok());
     }
 
     #[test]

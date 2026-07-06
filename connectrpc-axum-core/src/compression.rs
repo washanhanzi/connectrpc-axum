@@ -7,6 +7,14 @@
 
 use crate::codec::BoxedCodec;
 
+#[cfg(any(
+    feature = "compression-gzip-stream",
+    feature = "compression-deflate-stream",
+    feature = "compression-br-stream",
+    feature = "compression-zstd-stream"
+))]
+use std::sync::OnceLock;
+
 #[cfg(feature = "compression-gzip-stream")]
 use crate::codec::GzipCodec;
 
@@ -39,20 +47,33 @@ pub enum CompressionEncoding {
 
 impl CompressionEncoding {
     /// Parse from Content-Encoding or Connect-Content-Encoding header value.
+    ///
+    /// Encoding tokens are matched case-insensitively per RFC 7231.
     /// Returns None for unsupported encodings (caller should return Unimplemented).
     pub fn from_header(value: Option<&str>) -> Option<Self> {
-        match value {
-            None | Some("identity") | Some("") => Some(Self::Identity),
-            #[cfg(feature = "compression-gzip-stream")]
-            Some("gzip") => Some(Self::Gzip),
-            #[cfg(feature = "compression-deflate-stream")]
-            Some("deflate") => Some(Self::Deflate),
-            #[cfg(feature = "compression-br-stream")]
-            Some("br") => Some(Self::Brotli),
-            #[cfg(feature = "compression-zstd-stream")]
-            Some("zstd") => Some(Self::Zstd),
-            _ => None, // unsupported
+        let Some(value) = value else {
+            return Some(Self::Identity);
+        };
+        if value.is_empty() || value.eq_ignore_ascii_case("identity") {
+            return Some(Self::Identity);
         }
+        #[cfg(feature = "compression-gzip-stream")]
+        if value.eq_ignore_ascii_case("gzip") {
+            return Some(Self::Gzip);
+        }
+        #[cfg(feature = "compression-deflate-stream")]
+        if value.eq_ignore_ascii_case("deflate") {
+            return Some(Self::Deflate);
+        }
+        #[cfg(feature = "compression-br-stream")]
+        if value.eq_ignore_ascii_case("br") {
+            return Some(Self::Brotli);
+        }
+        #[cfg(feature = "compression-zstd-stream")]
+        if value.eq_ignore_ascii_case("zstd") {
+            return Some(Self::Zstd);
+        }
+        None // unsupported
     }
 
     /// Get the header value string for this encoding.
@@ -78,17 +99,48 @@ impl CompressionEncoding {
     /// Get the codec for this encoding.
     ///
     /// Returns `None` for identity, `Some(BoxedCodec)` for others.
+    ///
+    /// Default codecs are cached in statics, so this is a cheap `Arc` clone
+    /// rather than a fresh allocation per call.
     pub fn codec(&self) -> Option<BoxedCodec> {
         match self {
             Self::Identity => None,
             #[cfg(feature = "compression-gzip-stream")]
-            Self::Gzip => Some(BoxedCodec::new(GzipCodec::default())),
+            Self::Gzip => {
+                static CODEC: OnceLock<BoxedCodec> = OnceLock::new();
+                Some(
+                    CODEC
+                        .get_or_init(|| BoxedCodec::new(GzipCodec::default()))
+                        .clone(),
+                )
+            }
             #[cfg(feature = "compression-deflate-stream")]
-            Self::Deflate => Some(BoxedCodec::new(DeflateCodec::default())),
+            Self::Deflate => {
+                static CODEC: OnceLock<BoxedCodec> = OnceLock::new();
+                Some(
+                    CODEC
+                        .get_or_init(|| BoxedCodec::new(DeflateCodec::default()))
+                        .clone(),
+                )
+            }
             #[cfg(feature = "compression-br-stream")]
-            Self::Brotli => Some(BoxedCodec::new(BrotliCodec::default())),
+            Self::Brotli => {
+                static CODEC: OnceLock<BoxedCodec> = OnceLock::new();
+                Some(
+                    CODEC
+                        .get_or_init(|| BoxedCodec::new(BrotliCodec::default()))
+                        .clone(),
+                )
+            }
             #[cfg(feature = "compression-zstd-stream")]
-            Self::Zstd => Some(BoxedCodec::new(ZstdCodec::default())),
+            Self::Zstd => {
+                static CODEC: OnceLock<BoxedCodec> = OnceLock::new();
+                Some(
+                    CODEC
+                        .get_or_init(|| BoxedCodec::new(ZstdCodec::default()))
+                        .clone(),
+                )
+            }
         }
     }
 
@@ -243,157 +295,28 @@ impl CompressionConfig {
 
 /// Returns a comma-separated string of supported encodings for error messages.
 pub fn supported_encodings_str() -> &'static str {
-    // Build string based on enabled features
     // Order: gzip, deflate, br, zstd, identity
-    #[cfg(all(
-        feature = "compression-gzip-stream",
-        feature = "compression-deflate-stream",
-        feature = "compression-br-stream",
-        feature = "compression-zstd-stream"
-    ))]
-    {
-        "gzip, deflate, br, zstd, identity"
-    }
-    #[cfg(all(
-        feature = "compression-gzip-stream",
-        feature = "compression-deflate-stream",
-        feature = "compression-br-stream",
-        not(feature = "compression-zstd-stream")
-    ))]
-    {
-        "gzip, deflate, br, identity"
-    }
-    #[cfg(all(
-        feature = "compression-gzip-stream",
-        feature = "compression-deflate-stream",
-        not(feature = "compression-br-stream"),
-        feature = "compression-zstd-stream"
-    ))]
-    {
-        "gzip, deflate, zstd, identity"
-    }
-    #[cfg(all(
-        feature = "compression-gzip-stream",
-        feature = "compression-deflate-stream",
-        not(feature = "compression-br-stream"),
-        not(feature = "compression-zstd-stream")
-    ))]
-    {
-        "gzip, deflate, identity"
-    }
-    #[cfg(all(
-        feature = "compression-gzip-stream",
-        not(feature = "compression-deflate-stream"),
-        feature = "compression-br-stream",
-        feature = "compression-zstd-stream"
-    ))]
-    {
-        "gzip, br, zstd, identity"
-    }
-    #[cfg(all(
-        feature = "compression-gzip-stream",
-        not(feature = "compression-deflate-stream"),
-        feature = "compression-br-stream",
-        not(feature = "compression-zstd-stream")
-    ))]
-    {
-        "gzip, br, identity"
-    }
-    #[cfg(all(
-        feature = "compression-gzip-stream",
-        not(feature = "compression-deflate-stream"),
-        not(feature = "compression-br-stream"),
-        feature = "compression-zstd-stream"
-    ))]
-    {
-        "gzip, zstd, identity"
-    }
-    #[cfg(all(
-        feature = "compression-gzip-stream",
-        not(feature = "compression-deflate-stream"),
-        not(feature = "compression-br-stream"),
-        not(feature = "compression-zstd-stream")
-    ))]
-    {
-        "gzip, identity"
-    }
-    #[cfg(all(
-        not(feature = "compression-gzip-stream"),
-        feature = "compression-deflate-stream",
-        feature = "compression-br-stream",
-        feature = "compression-zstd-stream"
-    ))]
-    {
-        "deflate, br, zstd, identity"
-    }
-    #[cfg(all(
-        not(feature = "compression-gzip-stream"),
-        feature = "compression-deflate-stream",
-        feature = "compression-br-stream",
-        not(feature = "compression-zstd-stream")
-    ))]
-    {
-        "deflate, br, identity"
-    }
-    #[cfg(all(
-        not(feature = "compression-gzip-stream"),
-        feature = "compression-deflate-stream",
-        not(feature = "compression-br-stream"),
-        feature = "compression-zstd-stream"
-    ))]
-    {
-        "deflate, zstd, identity"
-    }
-    #[cfg(all(
-        not(feature = "compression-gzip-stream"),
-        feature = "compression-deflate-stream",
-        not(feature = "compression-br-stream"),
-        not(feature = "compression-zstd-stream")
-    ))]
-    {
-        "deflate, identity"
-    }
-    #[cfg(all(
-        not(feature = "compression-gzip-stream"),
-        not(feature = "compression-deflate-stream"),
-        feature = "compression-br-stream",
-        feature = "compression-zstd-stream"
-    ))]
-    {
-        "br, zstd, identity"
-    }
-    #[cfg(all(
-        not(feature = "compression-gzip-stream"),
-        not(feature = "compression-deflate-stream"),
-        feature = "compression-br-stream",
-        not(feature = "compression-zstd-stream")
-    ))]
-    {
-        "br, identity"
-    }
-    #[cfg(all(
-        not(feature = "compression-gzip-stream"),
-        not(feature = "compression-deflate-stream"),
-        not(feature = "compression-br-stream"),
-        feature = "compression-zstd-stream"
-    ))]
-    {
-        "zstd, identity"
-    }
-    #[cfg(all(
-        not(feature = "compression-gzip-stream"),
-        not(feature = "compression-deflate-stream"),
-        not(feature = "compression-br-stream"),
-        not(feature = "compression-zstd-stream")
-    ))]
-    {
-        "identity"
-    }
+    static ENCODINGS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ENCODINGS.get_or_init(|| {
+        [
+            #[cfg(feature = "compression-gzip-stream")]
+            "gzip",
+            #[cfg(feature = "compression-deflate-stream")]
+            "deflate",
+            #[cfg(feature = "compression-br-stream")]
+            "br",
+            #[cfg(feature = "compression-zstd-stream")]
+            "zstd",
+            "identity",
+        ]
+        .join(", ")
+    })
 }
 
 /// Negotiate response encoding from Accept-Encoding header.
 ///
 /// Follows connect-go's approach: first supported encoding wins (client preference order).
+/// Encoding tokens are matched case-insensitively per RFC 7231.
 /// Respects `q=0` which means "not acceptable" per RFC 7231.
 pub fn negotiate_response_encoding(accept: Option<&str>) -> CompressionEncoding {
     let Some(accept) = accept else {
@@ -424,17 +347,24 @@ pub fn negotiate_response_encoding(accept: Option<&str>) -> CompressionEncoding 
         }
 
         // Return first supported encoding
-        match encoding {
-            #[cfg(feature = "compression-gzip-stream")]
-            "gzip" => return CompressionEncoding::Gzip,
-            #[cfg(feature = "compression-deflate-stream")]
-            "deflate" => return CompressionEncoding::Deflate,
-            #[cfg(feature = "compression-br-stream")]
-            "br" => return CompressionEncoding::Brotli,
-            #[cfg(feature = "compression-zstd-stream")]
-            "zstd" => return CompressionEncoding::Zstd,
-            "identity" => return CompressionEncoding::Identity,
-            _ => continue,
+        #[cfg(feature = "compression-gzip-stream")]
+        if encoding.eq_ignore_ascii_case("gzip") {
+            return CompressionEncoding::Gzip;
+        }
+        #[cfg(feature = "compression-deflate-stream")]
+        if encoding.eq_ignore_ascii_case("deflate") {
+            return CompressionEncoding::Deflate;
+        }
+        #[cfg(feature = "compression-br-stream")]
+        if encoding.eq_ignore_ascii_case("br") {
+            return CompressionEncoding::Brotli;
+        }
+        #[cfg(feature = "compression-zstd-stream")]
+        if encoding.eq_ignore_ascii_case("zstd") {
+            return CompressionEncoding::Zstd;
+        }
+        if encoding.eq_ignore_ascii_case("identity") {
+            return CompressionEncoding::Identity;
         }
     }
 

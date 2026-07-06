@@ -5,7 +5,9 @@
 
 use crate::context::error::ProtocolNegotiationError;
 use crate::context::protocol::{can_handle_content_type, can_handle_get_encoding, detect_protocol};
-use crate::context::{CompressionConfig, ConnectContext, MessageLimits, ServerConfig};
+use crate::context::{
+    CompressionConfig, ConnectContext, ConnectTimeout, MessageLimits, ServerConfig,
+};
 use crate::message::error::{Code, ConnectError};
 use axum::http::{Method, Request};
 use axum::response::Response;
@@ -226,6 +228,8 @@ where
 
         // 4. Store context in request extensions
         req.extensions_mut().insert(request_ctx);
+        req.extensions_mut()
+            .insert(ConnectTimeout::from_duration(timeout));
 
         // Clone inner service for the async block
         let inner = self.inner.clone();
@@ -251,5 +255,99 @@ where
                 None => inner.oneshot(req).await,
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::StatusCode;
+
+    async fn ok_service(_req: Request<Body>) -> Result<Response, std::convert::Infallible> {
+        Ok(Response::new(Body::empty()))
+    }
+
+    fn connect_request(timeout: Option<&str>) -> Request<Body> {
+        let mut builder = Request::builder()
+            .method(Method::POST)
+            .header("content-type", "application/json");
+        if let Some(timeout) = timeout {
+            builder = builder.header("connect-timeout-ms", timeout);
+        }
+        builder.body(Body::empty()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn malformed_timeout_header_returns_invalid_argument() {
+        let svc = tower::ServiceBuilder::new()
+            .layer(ConnectLayer::new())
+            .service_fn(ok_service);
+
+        let resp = svc.oneshot(connect_request(Some("abc"))).await.unwrap();
+        // InvalidArgument maps to HTTP 400 for unary
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn too_long_timeout_header_returns_invalid_argument() {
+        let svc = tower::ServiceBuilder::new()
+            .layer(ConnectLayer::new())
+            .service_fn(ok_service);
+
+        let resp = svc
+            .oneshot(connect_request(Some("12345678901")))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn valid_timeout_header_passes_through() {
+        let svc = tower::ServiceBuilder::new()
+            .layer(ConnectLayer::new())
+            .service_fn(ok_service);
+
+        let resp = svc.oneshot(connect_request(Some("5000"))).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn connect_timeout_extension_inserted() {
+        use std::time::Duration;
+
+        async fn assert_extension(
+            req: Request<Body>,
+        ) -> Result<Response, std::convert::Infallible> {
+            let timeout = req
+                .extensions()
+                .get::<ConnectTimeout>()
+                .expect("ConnectTimeout extension should be inserted");
+            assert_eq!(timeout.duration(), Some(Duration::from_millis(5000)));
+            Ok(Response::new(Body::empty()))
+        }
+
+        let svc = tower::ServiceBuilder::new()
+            .layer(ConnectLayer::new())
+            .service_fn(assert_extension);
+
+        let resp = svc.oneshot(connect_request(Some("5000"))).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn zero_timeout_is_immediately_expired_deadline() {
+        async fn slow_service(_req: Request<Body>) -> Result<Response, std::convert::Infallible> {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            Ok(Response::new(Body::empty()))
+        }
+
+        let svc = tower::ServiceBuilder::new()
+            .layer(ConnectLayer::new())
+            .service_fn(slow_service);
+
+        let resp = svc.oneshot(connect_request(Some("0"))).await.unwrap();
+        // DeadlineExceeded maps to HTTP 504 for unary
+        assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
     }
 }

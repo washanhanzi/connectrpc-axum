@@ -4,6 +4,7 @@
 //! Clients can set a `Connect-Timeout-Ms` header to specify how long they're
 //! willing to wait for a response.
 
+use crate::message::error::{Code, ConnectError};
 use axum::http::Request;
 use std::time::Duration;
 
@@ -55,6 +56,11 @@ impl ConnectTimeout {
         Self { duration: None }
     }
 
+    /// Create a ConnectTimeout from an optional duration.
+    pub fn from_duration(duration: Option<Duration>) -> Self {
+        Self { duration }
+    }
+
     /// Returns the timeout duration, or `None` if no timeout was specified.
     pub fn duration(&self) -> Option<Duration> {
         self.duration
@@ -63,18 +69,13 @@ impl ConnectTimeout {
     /// Parse the Connect-Timeout-Ms header value.
     ///
     /// Returns `Some(ConnectTimeout)` with the parsed duration if the value is valid,
-    /// or `None` if the header was not present or the value was invalid.
+    /// or `None` if the value was invalid.
     ///
-    /// Per the Connect spec, the value must be a non-negative integer representing
-    /// milliseconds. Values of 0 mean "no timeout" (unlimited time).
+    /// Per the Connect spec, the value must be a non-negative integer with at
+    /// most 10 digits representing milliseconds. A value of `0` is an
+    /// immediately-expired deadline, not "no timeout".
     pub fn parse(value: &str) -> Option<Self> {
-        let ms: u64 = value.parse().ok()?;
-        if ms == 0 {
-            // 0 means no timeout per Connect spec
-            Some(Self::none())
-        } else {
-            Some(Self::new(Duration::from_millis(ms)))
-        }
+        parse_timeout_ms(value).ok().map(Self::new)
     }
 }
 
@@ -90,27 +91,38 @@ impl Default for ConnectTimeout {
 
 /// Parse the Connect-Timeout-Ms header from a request.
 ///
-/// Returns `Some(Duration)` if the header is present and valid,
-/// or `None` if the header is missing, invalid, or zero (which means no timeout per Connect spec).
-pub fn parse_timeout<B>(req: &Request<B>) -> Option<Duration> {
-    req.headers()
-        .get(CONNECT_TIMEOUT_MS_HEADER)
-        .and_then(|v| v.to_str().ok())
-        .and_then(parse_timeout_ms)
+/// Returns `Ok(Some(Duration))` if the header is present and valid,
+/// `Ok(None)` if the header is missing or empty, or an `InvalidArgument`
+/// error if the value is malformed (matching connect-go).
+pub fn parse_timeout<B>(req: &Request<B>) -> Result<Option<Duration>, ConnectError> {
+    let Some(value) = req.headers().get(CONNECT_TIMEOUT_MS_HEADER) else {
+        return Ok(None);
+    };
+    let value = value.to_str().map_err(|_| {
+        ConnectError::new(Code::InvalidArgument, "parse timeout: invalid header value")
+    })?;
+    if value.is_empty() {
+        return Ok(None);
+    }
+    parse_timeout_ms(value).map(Some)
 }
 
 /// Parse a timeout milliseconds string.
 ///
-/// Returns `Some(Duration)` for valid positive values,
-/// or `None` for invalid values or 0 (which means no timeout per Connect spec).
-pub fn parse_timeout_ms(value: &str) -> Option<Duration> {
-    let ms: u64 = value.parse().ok()?;
-    if ms == 0 {
-        // 0 means no timeout per Connect spec
-        None
-    } else {
-        Some(Duration::from_millis(ms))
+/// Returns `Ok(Duration)` for valid values, or an `InvalidArgument` error for
+/// unparseable values or values with more than 10 digits (matching connect-go).
+/// A value of `0` is a valid, immediately-expired deadline.
+pub fn parse_timeout_ms(value: &str) -> Result<Duration, ConnectError> {
+    if value.len() > 10 {
+        return Err(ConnectError::new(
+            Code::InvalidArgument,
+            format!("parse timeout: \"{value}\" has >10 digits"),
+        ));
     }
+    let ms: u64 = value
+        .parse()
+        .map_err(|e| ConnectError::new(Code::InvalidArgument, format!("parse timeout: {e}")))?;
+    Ok(Duration::from_millis(ms))
 }
 
 /// Compute the effective timeout from server and client timeouts.
@@ -167,9 +179,9 @@ mod tests {
 
     #[test]
     fn test_connect_timeout_parse_zero() {
-        // 0 means no timeout
+        // 0 is an immediately-expired deadline, not "no timeout"
         let timeout = ConnectTimeout::parse("0").unwrap();
-        assert_eq!(timeout.duration(), None);
+        assert_eq!(timeout.duration(), Some(Duration::ZERO));
     }
 
     #[test]
@@ -183,21 +195,46 @@ mod tests {
 
     #[test]
     fn test_parse_timeout_ms_valid() {
-        assert_eq!(parse_timeout_ms("1000"), Some(Duration::from_millis(1000)));
-        assert_eq!(parse_timeout_ms("5000"), Some(Duration::from_millis(5000)));
+        assert_eq!(
+            parse_timeout_ms("1000").unwrap(),
+            Duration::from_millis(1000)
+        );
+        assert_eq!(
+            parse_timeout_ms("5000").unwrap(),
+            Duration::from_millis(5000)
+        );
     }
 
     #[test]
     fn test_parse_timeout_ms_zero() {
-        // 0 means no timeout per Connect spec
-        assert_eq!(parse_timeout_ms("0"), None);
+        // 0 is a valid, immediately-expired deadline
+        assert_eq!(parse_timeout_ms("0").unwrap(), Duration::ZERO);
     }
 
     #[test]
     fn test_parse_timeout_ms_invalid() {
-        assert_eq!(parse_timeout_ms("abc"), None);
-        assert_eq!(parse_timeout_ms("-1"), None);
-        assert_eq!(parse_timeout_ms(""), None);
+        assert_eq!(
+            parse_timeout_ms("abc").unwrap_err().code(),
+            Code::InvalidArgument
+        );
+        assert_eq!(
+            parse_timeout_ms("-1").unwrap_err().code(),
+            Code::InvalidArgument
+        );
+        assert_eq!(
+            parse_timeout_ms("").unwrap_err().code(),
+            Code::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn test_parse_timeout_ms_too_many_digits() {
+        // connect-go rejects values with more than 10 digits
+        let err = parse_timeout_ms("12345678901").unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().unwrap().contains(">10 digits"));
+        // 10 digits is fine
+        assert!(parse_timeout_ms("1234567890").is_ok());
     }
 
     // --- parse_timeout tests ---
@@ -209,7 +246,10 @@ mod tests {
             .header(CONNECT_TIMEOUT_MS_HEADER, "5000")
             .body(())
             .unwrap();
-        assert_eq!(parse_timeout(&req), Some(Duration::from_millis(5000)));
+        assert_eq!(
+            parse_timeout(&req).unwrap(),
+            Some(Duration::from_millis(5000))
+        );
     }
 
     #[test]
@@ -219,13 +259,23 @@ mod tests {
             .header(CONNECT_TIMEOUT_MS_HEADER, "0")
             .body(())
             .unwrap();
-        assert_eq!(parse_timeout(&req), None);
+        assert_eq!(parse_timeout(&req).unwrap(), Some(Duration::ZERO));
     }
 
     #[test]
     fn test_parse_timeout_missing() {
         let req = Request::builder().method(Method::POST).body(()).unwrap();
-        assert_eq!(parse_timeout(&req), None);
+        assert_eq!(parse_timeout(&req).unwrap(), None);
+    }
+
+    #[test]
+    fn test_parse_timeout_empty() {
+        let req = Request::builder()
+            .method(Method::POST)
+            .header(CONNECT_TIMEOUT_MS_HEADER, "")
+            .body(())
+            .unwrap();
+        assert_eq!(parse_timeout(&req).unwrap(), None);
     }
 
     #[test]
@@ -235,7 +285,8 @@ mod tests {
             .header(CONNECT_TIMEOUT_MS_HEADER, "not-a-number")
             .body(())
             .unwrap();
-        assert_eq!(parse_timeout(&req), None);
+        let err = parse_timeout(&req).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
     }
 
     // --- compute_effective_timeout tests ---
