@@ -99,6 +99,9 @@ fn take_or_register_optional_send_interceptor_error(
 ///
 /// This wrapper calls `intercept_stream_receive` on the interceptor for each
 /// message yielded by the inner stream.
+#[deprecated(
+    note = "use `InterceptingStreaming` instead, which also exposes trailers and drain helpers"
+)]
 pub struct InterceptingStream<S, T, I> {
     /// The underlying stream.
     inner: S,
@@ -116,6 +119,7 @@ pub struct InterceptingStream<S, T, I> {
     _marker: PhantomData<T>,
 }
 
+#[allow(deprecated)]
 impl<S, T, I> InterceptingStream<S, T, I> {
     /// Create a new intercepting stream.
     pub fn new(
@@ -153,8 +157,10 @@ impl<S, T, I> InterceptingStream<S, T, I> {
     }
 }
 
+#[allow(deprecated)]
 impl<S, T, I> Unpin for InterceptingStream<S, T, I> where S: Unpin {}
 
+#[allow(deprecated)]
 impl<S, T, I> Stream for InterceptingStream<S, T, I>
 where
     S: Stream<Item = Result<T, ClientError>> + Unpin,
@@ -190,162 +196,6 @@ where
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.inner.size_hint()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::{MessageInterceptor, MessageWrapper};
-    use futures::StreamExt;
-    use futures::stream;
-    use futures::task::{ArcWake, waker_ref};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    #[derive(Clone, Debug, PartialEq, Default)]
-    struct TestMessage {
-        value: String,
-    }
-
-    impl serde::Serialize for TestMessage {
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
-            use serde::ser::SerializeStruct;
-            let mut state = serializer.serialize_struct("TestMessage", 1)?;
-            state.serialize_field("value", &self.value)?;
-            state.end()
-        }
-    }
-
-    impl prost::Message for TestMessage {
-        fn encode_raw(&self, buf: &mut impl bytes::BufMut)
-        where
-            Self: Sized,
-        {
-            if !self.value.is_empty() {
-                prost::encoding::string::encode(1, &self.value, buf);
-            }
-        }
-
-        fn merge_field(
-            &mut self,
-            tag: u32,
-            wire_type: prost::encoding::WireType,
-            buf: &mut impl bytes::Buf,
-            ctx: prost::encoding::DecodeContext,
-        ) -> Result<(), prost::DecodeError>
-        where
-            Self: Sized,
-        {
-            if tag == 1 {
-                prost::encoding::string::merge(wire_type, &mut self.value, buf, ctx)
-            } else {
-                prost::encoding::skip_field(wire_type, tag, buf, ctx)
-            }
-        }
-
-        fn encoded_len(&self) -> usize {
-            if self.value.is_empty() {
-                0
-            } else {
-                prost::encoding::string::encoded_len(1, &self.value)
-            }
-        }
-
-        fn clear(&mut self) {
-            self.value.clear();
-        }
-    }
-
-    #[derive(Clone)]
-    struct FailingSendInterceptor;
-
-    #[derive(Default)]
-    struct WakeCounter {
-        count: AtomicUsize,
-    }
-
-    impl ArcWake for WakeCounter {
-        fn wake_by_ref(arc_self: &Arc<Self>) {
-            arc_self.count.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-
-    impl MessageInterceptor for FailingSendInterceptor {
-        fn on_stream_send<Req>(
-            &self,
-            _ctx: &StreamContext,
-            _request: &mut Req,
-        ) -> Result<(), ClientError>
-        where
-            Req: Message + Serialize + 'static,
-        {
-            Err(ClientError::invalid_argument("send blocked"))
-        }
-    }
-
-    #[tokio::test]
-    async fn test_send_interceptor_error_is_returned_and_recorded() {
-        let send_error = SendInterceptorError::new();
-        let messages = stream::iter(vec![
-            TestMessage {
-                value: "one".to_string(),
-            },
-            TestMessage {
-                value: "two".to_string(),
-            },
-        ]);
-        let mut stream = InterceptingSendStream::with_send_error_capture(
-            messages,
-            MessageWrapper(FailingSendInterceptor),
-            "test.Service/ClientStream".to_string(),
-            StreamType::ClientStream,
-            HeaderMap::new(),
-            send_error.clone(),
-        );
-
-        let err = stream.next().await.unwrap().unwrap_err();
-        assert_eq!(err.message(), Some("send blocked"));
-
-        let recorded = take_send_interceptor_error(&send_error).unwrap();
-        assert_eq!(recorded.message(), Some("send blocked"));
-
-        assert!(stream.next().await.is_none());
-    }
-
-    #[test]
-    fn test_send_interceptor_error_wakes_pending_receive_stream() {
-        let send_error = SendInterceptorError::new();
-        let streaming = Streaming::new(stream::pending::<Result<TestMessage, ClientError>>());
-        let mut stream = TypedReceiveStreaming::with_send_error_capture(
-            streaming,
-            None,
-            "test.Service/BidiStream".to_string(),
-            StreamType::BidiStream,
-            HeaderMap::new(),
-            HeaderMap::new(),
-            send_error.clone(),
-        );
-        let wake_counter = Arc::new(WakeCounter::default());
-        let waker = waker_ref(&wake_counter);
-        let mut cx = Context::from_waker(&waker);
-
-        assert!(matches!(
-            Pin::new(&mut stream).poll_next(&mut cx),
-            Poll::Pending
-        ));
-
-        send_error.store(ClientError::invalid_argument("send blocked"));
-
-        assert_eq!(wake_counter.count.load(Ordering::SeqCst), 1);
-        match Pin::new(&mut stream).poll_next(&mut cx) {
-            Poll::Ready(Some(Err(e))) => {
-                assert_eq!(e.message(), Some("send blocked"));
-            }
-            other => panic!("expected send interceptor error, got {other:?}"),
-        }
     }
 }
 
@@ -574,8 +424,14 @@ impl<S, T, I> InterceptingStreaming<S, T, I> {
     /// Get the inner streaming wrapper.
     ///
     /// This consumes the intercepting wrapper and returns the underlying `Streaming<S>`.
-    pub fn get_inner(self) -> Streaming<S> {
+    pub fn into_inner(self) -> Streaming<S> {
         self.inner
+    }
+
+    /// Get the inner streaming wrapper.
+    #[deprecated(note = "renamed to `into_inner`")]
+    pub fn get_inner(self) -> Streaming<S> {
+        self.into_inner()
     }
 }
 
@@ -988,5 +844,161 @@ where
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.inner.size_hint()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{MessageInterceptor, MessageWrapper};
+    use futures::StreamExt;
+    use futures::stream;
+    use futures::task::{ArcWake, waker_ref};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Clone, Debug, PartialEq, Default)]
+    struct TestMessage {
+        value: String,
+    }
+
+    impl serde::Serialize for TestMessage {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            use serde::ser::SerializeStruct;
+            let mut state = serializer.serialize_struct("TestMessage", 1)?;
+            state.serialize_field("value", &self.value)?;
+            state.end()
+        }
+    }
+
+    impl prost::Message for TestMessage {
+        fn encode_raw(&self, buf: &mut impl bytes::BufMut)
+        where
+            Self: Sized,
+        {
+            if !self.value.is_empty() {
+                prost::encoding::string::encode(1, &self.value, buf);
+            }
+        }
+
+        fn merge_field(
+            &mut self,
+            tag: u32,
+            wire_type: prost::encoding::WireType,
+            buf: &mut impl bytes::Buf,
+            ctx: prost::encoding::DecodeContext,
+        ) -> Result<(), prost::DecodeError>
+        where
+            Self: Sized,
+        {
+            if tag == 1 {
+                prost::encoding::string::merge(wire_type, &mut self.value, buf, ctx)
+            } else {
+                prost::encoding::skip_field(wire_type, tag, buf, ctx)
+            }
+        }
+
+        fn encoded_len(&self) -> usize {
+            if self.value.is_empty() {
+                0
+            } else {
+                prost::encoding::string::encoded_len(1, &self.value)
+            }
+        }
+
+        fn clear(&mut self) {
+            self.value.clear();
+        }
+    }
+
+    #[derive(Clone)]
+    struct FailingSendInterceptor;
+
+    #[derive(Default)]
+    struct WakeCounter {
+        count: AtomicUsize,
+    }
+
+    impl ArcWake for WakeCounter {
+        fn wake_by_ref(arc_self: &Arc<Self>) {
+            arc_self.count.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl MessageInterceptor for FailingSendInterceptor {
+        fn on_stream_send<Req>(
+            &self,
+            _ctx: &StreamContext,
+            _request: &mut Req,
+        ) -> Result<(), ClientError>
+        where
+            Req: Message + Serialize + 'static,
+        {
+            Err(ClientError::invalid_argument("send blocked"))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_send_interceptor_error_is_returned_and_recorded() {
+        let send_error = SendInterceptorError::new();
+        let messages = stream::iter(vec![
+            TestMessage {
+                value: "one".to_string(),
+            },
+            TestMessage {
+                value: "two".to_string(),
+            },
+        ]);
+        let mut stream = InterceptingSendStream::with_send_error_capture(
+            messages,
+            MessageWrapper(FailingSendInterceptor),
+            "test.Service/ClientStream".to_string(),
+            StreamType::ClientStream,
+            HeaderMap::new(),
+            send_error.clone(),
+        );
+
+        let err = stream.next().await.unwrap().unwrap_err();
+        assert_eq!(err.message(), Some("send blocked"));
+
+        let recorded = take_send_interceptor_error(&send_error).unwrap();
+        assert_eq!(recorded.message(), Some("send blocked"));
+
+        assert!(stream.next().await.is_none());
+    }
+
+    #[test]
+    fn test_send_interceptor_error_wakes_pending_receive_stream() {
+        let send_error = SendInterceptorError::new();
+        let streaming = Streaming::new(stream::pending::<Result<TestMessage, ClientError>>());
+        let mut stream = TypedReceiveStreaming::with_send_error_capture(
+            streaming,
+            None,
+            "test.Service/BidiStream".to_string(),
+            StreamType::BidiStream,
+            HeaderMap::new(),
+            HeaderMap::new(),
+            send_error.clone(),
+        );
+        let wake_counter = Arc::new(WakeCounter::default());
+        let waker = waker_ref(&wake_counter);
+        let mut cx = Context::from_waker(&waker);
+
+        assert!(matches!(
+            Pin::new(&mut stream).poll_next(&mut cx),
+            Poll::Pending
+        ));
+
+        send_error.store(ClientError::invalid_argument("send blocked"));
+
+        assert_eq!(wake_counter.count.load(Ordering::SeqCst), 1);
+        match Pin::new(&mut stream).poll_next(&mut cx) {
+            Poll::Ready(Some(Err(e))) => {
+                assert_eq!(e.message(), Some("send blocked"));
+            }
+            other => panic!("expected send interceptor error, got {other:?}"),
+        }
     }
 }

@@ -50,13 +50,14 @@ impl ClientError {
     /// For non-Rpc variants, returns an appropriate code:
     /// - Transport: `Unavailable`
     /// - Encode/Decode: `Internal`
-    /// - Protocol: `InvalidArgument`
+    /// - Protocol: `Internal` (wire protocol violations, matching connect-go)
     pub fn code(&self) -> Code {
         match self {
             ClientError::Rpc(status) => status.code(),
             ClientError::Transport(_) => Code::Unavailable,
-            ClientError::Encode(_) | ClientError::Decode(_) => Code::Internal,
-            ClientError::Protocol(_) => Code::InvalidArgument,
+            ClientError::Encode(_) | ClientError::Decode(_) | ClientError::Protocol(_) => {
+                Code::Internal
+            }
         }
     }
 
@@ -199,11 +200,21 @@ impl From<EnvelopeError> for ClientError {
             EnvelopeError::InvalidFlags(flags) => {
                 ClientError::Protocol(format!("invalid frame flags: 0x{:02x}", flags))
             }
+            EnvelopeError::MissingCompression => ClientError::Protocol(
+                "protocol error: sent compressed message without compression support".to_string(),
+            ),
             EnvelopeError::Decompression(msg) => {
                 ClientError::Decode(format!("decompression failed: {}", msg))
             }
             EnvelopeError::Compression(msg) => {
                 ClientError::Encode(format!("compression failed: {}", msg))
+            }
+            EnvelopeError::MessageTooLarge { limit } => ClientError::new(
+                Code::ResourceExhausted,
+                format!("message size exceeds maximum allowed size of {limit} bytes"),
+            ),
+            EnvelopeError::PayloadTooLarge { size } => {
+                ClientError::Encode(format!("payload size {size} out of bounds for envelope"))
             }
         }
     }
@@ -243,7 +254,7 @@ mod tests {
         assert_eq!(decode.code(), Code::Internal);
 
         let protocol = ClientError::Protocol("invalid frame".into());
-        assert_eq!(protocol.code(), Code::InvalidArgument);
+        assert_eq!(protocol.code(), Code::Internal);
     }
 
     #[test]

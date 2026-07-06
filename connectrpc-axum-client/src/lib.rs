@@ -575,10 +575,11 @@ pub use config::{
 pub use request::FrameEncoder;
 
 // Re-export from response module
+#[allow(deprecated)]
+pub use response::InterceptingStream;
 pub use response::{
-    ConnectResponse, FrameDecoder, InterceptingSendStream, InterceptingStream,
-    InterceptingStreaming, Metadata, SendInterceptorError, Streaming, TypedReceiveStreaming,
-    TypedSendStream,
+    ConnectResponse, FrameDecoder, InterceptingSendStream, InterceptingStreaming, Metadata,
+    SendInterceptorError, Streaming, TypedReceiveStreaming, TypedSendStream,
 };
 
 // Re-export transport types at the top level for convenience

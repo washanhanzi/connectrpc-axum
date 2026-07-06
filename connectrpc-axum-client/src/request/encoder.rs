@@ -63,7 +63,7 @@ enum EncoderState {
 ///     CompressionConfig::disabled(),
 /// );
 ///
-/// // Use with reqwest::Body::wrap_stream(encoder)
+/// // Use with TransportBody::streaming(encoder)
 /// ```
 pub struct FrameEncoder<S, T> {
     /// The underlying message stream.
@@ -150,7 +150,7 @@ impl<S, T> FrameEncoder<S, T> {
         let (payload, compressed) = compress_payload(payload, codec.as_ref())?;
 
         // 3. Wrap in envelope
-        let frame = wrap_envelope(&payload, compressed);
+        let frame = wrap_envelope(&payload, compressed)?;
 
         Ok(Bytes::from(frame))
     }

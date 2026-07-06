@@ -75,17 +75,20 @@ struct ErrorResponseJson {
 }
 
 /// JSON structure for error details.
+///
+/// Shared by unary error responses and streaming EndStream frames, which use
+/// the same wire format for details.
 #[derive(Deserialize)]
-struct ErrorDetailJson {
+pub(crate) struct ErrorDetailJson {
     #[serde(rename = "type")]
-    type_url: String,
+    pub(crate) type_url: String,
     #[serde(default)]
-    value: String,
+    pub(crate) value: String,
     // Some servers may include "debug" field which we ignore
 }
 
 /// Parse a single error detail from JSON.
-fn parse_error_detail(json: &ErrorDetailJson) -> Option<ErrorDetail> {
+pub(crate) fn parse_error_detail(json: &ErrorDetailJson) -> Option<ErrorDetail> {
     // Decode base64 value (Connect uses standard base64 without padding)
     let value = base64::engine::general_purpose::STANDARD_NO_PAD
         .decode(&json.value)
@@ -102,21 +105,17 @@ fn parse_error_detail(json: &ErrorDetailJson) -> Option<ErrorDetail> {
 ///
 /// This is used as a fallback when the response body doesn't contain
 /// a valid Connect error JSON.
+///
+/// Mirrors connect-go's `httpToCode` (protocol.go), which follows
+/// <https://github.com/grpc/grpc/blob/master/doc/http-grpc-status-mapping.md>.
+/// Note that this is NOT the inverse of the Connect-to-HTTP mapping.
 pub(crate) fn http_status_to_code(status: StatusCode) -> Code {
     match status.as_u16() {
-        200 => Code::Ok,
-        400 => Code::InvalidArgument,
+        400 => Code::Internal,
         401 => Code::Unauthenticated,
         403 => Code::PermissionDenied,
-        404 => Code::NotFound,
-        408 => Code::DeadlineExceeded,
-        409 => Code::AlreadyExists,
-        412 => Code::FailedPrecondition,
-        416 => Code::OutOfRange,
-        429 => Code::ResourceExhausted,
-        499 => Code::Canceled, // Client Closed Request (nginx)
-        500 => Code::Internal,
-        501 => Code::Unimplemented,
+        404 => Code::Unimplemented,
+        429 => Code::Unavailable,
         502..=504 => Code::Unavailable,
         _ => Code::Unknown,
     }
@@ -128,10 +127,10 @@ mod tests {
 
     #[test]
     fn test_http_status_to_code() {
-        assert!(matches!(http_status_to_code(StatusCode::OK), Code::Ok));
+        // Matches connect-go's httpToCode table (protocol.go)
         assert!(matches!(
             http_status_to_code(StatusCode::BAD_REQUEST),
-            Code::InvalidArgument
+            Code::Internal
         ));
         assert!(matches!(
             http_status_to_code(StatusCode::UNAUTHORIZED),
@@ -143,27 +142,37 @@ mod tests {
         ));
         assert!(matches!(
             http_status_to_code(StatusCode::NOT_FOUND),
-            Code::NotFound
-        ));
-        assert!(matches!(
-            http_status_to_code(StatusCode::CONFLICT),
-            Code::AlreadyExists
+            Code::Unimplemented
         ));
         assert!(matches!(
             http_status_to_code(StatusCode::TOO_MANY_REQUESTS),
-            Code::ResourceExhausted
+            Code::Unavailable
         ));
         assert!(matches!(
-            http_status_to_code(StatusCode::INTERNAL_SERVER_ERROR),
-            Code::Internal
-        ));
-        assert!(matches!(
-            http_status_to_code(StatusCode::NOT_IMPLEMENTED),
-            Code::Unimplemented
+            http_status_to_code(StatusCode::BAD_GATEWAY),
+            Code::Unavailable
         ));
         assert!(matches!(
             http_status_to_code(StatusCode::SERVICE_UNAVAILABLE),
             Code::Unavailable
+        ));
+        assert!(matches!(
+            http_status_to_code(StatusCode::GATEWAY_TIMEOUT),
+            Code::Unavailable
+        ));
+        // Everything else maps to Unknown
+        assert!(matches!(http_status_to_code(StatusCode::OK), Code::Unknown));
+        assert!(matches!(
+            http_status_to_code(StatusCode::CONFLICT),
+            Code::Unknown
+        ));
+        assert!(matches!(
+            http_status_to_code(StatusCode::INTERNAL_SERVER_ERROR),
+            Code::Unknown
+        ));
+        assert!(matches!(
+            http_status_to_code(StatusCode::NOT_IMPLEMENTED),
+            Code::Unknown
         ));
     }
 
@@ -223,7 +232,7 @@ mod tests {
     fn test_parse_error_response_invalid_json() {
         let body = b"Plain text error";
         let err = parse_error_response(StatusCode::INTERNAL_SERVER_ERROR, body);
-        assert_eq!(err.code(), Code::Internal);
+        assert_eq!(err.code(), Code::Unknown);
         assert_eq!(err.message(), Some("Plain text error"));
     }
 
@@ -231,7 +240,7 @@ mod tests {
     fn test_parse_error_response_empty_body() {
         let body = b"";
         let err = parse_error_response(StatusCode::NOT_FOUND, body);
-        assert_eq!(err.code(), Code::NotFound);
+        assert_eq!(err.code(), Code::Unimplemented);
         assert_eq!(err.message(), Some("Not Found"));
     }
 }

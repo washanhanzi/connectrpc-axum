@@ -7,15 +7,15 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use base64::Engine;
 use bytes::{Bytes, BytesMut};
 use connectrpc_axum_core::{
-    Code, CompressionEncoding, ENVELOPE_HEADER_SIZE, ErrorDetail, envelope_flags,
-    parse_envelope_header, process_envelope_payload,
+    Code, CompressionEncoding, ENVELOPE_HEADER_SIZE, EnvelopePayload, parse_envelope_header,
+    process_envelope_payload,
 };
 
 use crate::ClientError;
 use crate::response::Metadata;
+use crate::response::error_parser::{ErrorDetailJson, parse_error_detail};
 use futures::Stream;
 use prost::Message;
 use serde::Deserialize;
@@ -31,8 +31,8 @@ enum DecodedFrame<T> {
 
 /// Stream adapter that decodes Connect protocol envelope frames.
 ///
-/// Wraps a byte stream (from `reqwest::Response::bytes_stream()`) and yields
-/// decoded protobuf or JSON messages.
+/// Wraps a byte stream (such as one backed by a hyper response body) and
+/// yields decoded protobuf or JSON messages.
 ///
 /// # Frame Format
 ///
@@ -68,6 +68,8 @@ pub struct FrameDecoder<S, T> {
     use_proto: bool,
     /// Compression encoding for decompression.
     encoding: CompressionEncoding,
+    /// Maximum (decompressed) message size, or `None` for no limit.
+    max_message_size: Option<usize>,
     /// Stored trailers from EndStream frame.
     trailers: Option<Metadata>,
     /// Whether the stream has finished (received EndStream or error).
@@ -92,11 +94,21 @@ impl<S, T> FrameDecoder<S, T> {
             buffer: BytesMut::new(),
             use_proto,
             encoding,
+            max_message_size: None,
             trailers: None,
             finished: false,
             end_stream_error: None,
             _marker: PhantomData,
         }
+    }
+
+    /// Set the maximum (decompressed) message size.
+    ///
+    /// Frames whose payload exceeds this limit after decompression are
+    /// rejected with a `ResourceExhausted` error (decompression-bomb guard).
+    pub fn with_max_message_size(mut self, max_message_size: Option<usize>) -> Self {
+        self.max_message_size = max_message_size;
+        self
     }
 
     /// Get the trailers received in the EndStream frame.
@@ -130,19 +142,6 @@ impl<S, T> FrameDecoder<S, T> {
         }
     }
 
-    /// Decompress an envelope payload using the decoder's configured encoding.
-    ///
-    /// Used for frames whose COMPRESSED bit (0x01) is set. Identity passes the
-    /// bytes through unchanged.
-    fn decompress(&self, payload: Bytes) -> Result<Bytes, ClientError> {
-        let Some(codec) = self.encoding.codec() else {
-            return Ok(payload); // identity: passthrough
-        };
-        codec
-            .decompress(&payload)
-            .map_err(|e| ClientError::Decode(format!("decompression failed: {}", e)))
-    }
-
     /// Try to parse a complete frame from the buffer.
     ///
     /// Returns:
@@ -160,6 +159,18 @@ impl<S, T> FrameDecoder<S, T> {
 
         // Parse header
         let (flags, length) = parse_envelope_header(&self.buffer)?;
+
+        // Reject oversized frames before buffering the payload, so a hostile
+        // length prefix cannot force multi-gigabyte allocations.
+        if let Some(limit) = self.max_message_size
+            && length as usize > limit
+        {
+            return Err(ClientError::new(
+                Code::ResourceExhausted,
+                format!("message size {length} exceeds maximum allowed size of {limit} bytes"),
+            ));
+        }
+
         let frame_size = ENVELOPE_HEADER_SIZE + length as usize;
 
         // Check if we have the complete frame
@@ -167,44 +178,35 @@ impl<S, T> FrameDecoder<S, T> {
             return Ok(None);
         }
 
-        // Extract frame bytes
-        let frame_bytes = self.buffer.split_to(frame_size);
-        let payload = Bytes::copy_from_slice(&frame_bytes[ENVELOPE_HEADER_SIZE..]);
+        // Extract frame bytes (zero-copy: split the payload out of the buffer)
+        let mut frame_bytes = self.buffer.split_to(frame_size);
+        let payload = frame_bytes.split_off(ENVELOPE_HEADER_SIZE).freeze();
 
-        // Flags are a bitfield: the EndStream frame is identified by the
-        // END_STREAM bit (0x02), which may be combined with the COMPRESSED bit
-        // (0x03) when the server compresses the trailer payload. Test the bit
-        // rather than matching the whole byte so compressed EndStream frames are
-        // not mistaken for messages.
-        if flags & envelope_flags::END_STREAM != 0 {
-            // Decompress the trailer payload first if the COMPRESSED bit is set.
-            let payload = if flags & envelope_flags::COMPRESSED != 0 {
-                self.decompress(payload)?
-            } else {
-                payload
-            };
-            let (error, trailers) = parse_end_stream(&payload)?;
+        // Process the envelope: validate flags, decompress (bounded), and
+        // classify as message or end-stream frame. Flags are a bitfield, so a
+        // compressed EndStream frame (0x03) is handled here too.
+        match process_envelope_payload(flags, payload, self.encoding, self.max_message_size)? {
+            EnvelopePayload::EndStream(payload) => {
+                let (error, trailers) = parse_end_stream(&payload)?;
 
-            // Store trailers
-            self.trailers = trailers;
-            self.finished = true;
+                // Store trailers
+                self.trailers = trailers;
+                self.finished = true;
 
-            if let Some(err) = error {
-                // Store error for next poll
-                self.end_stream_error = Some(err);
+                if let Some(err) = error {
+                    // Store error for next poll
+                    self.end_stream_error = Some(err);
+                }
+
+                Ok(Some(DecodedFrame::EndStream))
             }
+            EnvelopePayload::Message(payload) => {
+                // Decode message
+                let message = self.decode_message(&payload)?;
 
-            return Ok(Some(DecodedFrame::EndStream));
+                Ok(Some(DecodedFrame::Message(message)))
+            }
         }
-
-        // Process message frame (validate flags, decompress)
-        let decompressed = process_envelope_payload(flags, payload, self.encoding)?
-            .ok_or_else(|| ClientError::Protocol("unexpected None from message frame".into()))?;
-
-        // Decode message
-        let message = self.decode_message(&decompressed)?;
-
-        Ok(Some(DecodedFrame::Message(message)))
     }
 }
 
@@ -306,16 +308,7 @@ struct EndStreamError {
     #[serde(default)]
     message: Option<String>,
     #[serde(default)]
-    details: Vec<EndStreamErrorDetail>,
-}
-
-/// Error detail in EndStream frame.
-#[derive(Deserialize)]
-struct EndStreamErrorDetail {
-    #[serde(rename = "type")]
-    type_url: String,
-    #[serde(default)]
-    value: String,
+    details: Vec<ErrorDetailJson>,
 }
 
 /// Parse an EndStream frame payload.
@@ -367,20 +360,6 @@ fn parse_end_stream(
     });
 
     Ok((error, trailers))
-}
-
-/// Parse an error detail from EndStream JSON.
-fn parse_error_detail(detail: &EndStreamErrorDetail) -> Option<ErrorDetail> {
-    // Decode base64 value (Connect uses standard base64 without padding)
-    let value = base64::engine::general_purpose::STANDARD_NO_PAD
-        .decode(&detail.value)
-        .or_else(|_| {
-            // Also try with padding in case server sends it
-            base64::engine::general_purpose::STANDARD.decode(&detail.value)
-        })
-        .ok()?;
-
-    Some(ErrorDetail::new(&detail.type_url, value))
 }
 
 #[cfg(test)]
@@ -565,15 +544,14 @@ mod tests {
         assert_eq!(values, vec!["value1", "value2"]);
     }
 
-    /// A `COMPRESSED | END_STREAM` frame (0x03) is a valid end-stream frame.
-    /// Flags are a bitfield, so the decoder must detect the END_STREAM bit
-    /// rather than matching exactly 0x02; otherwise the frame falls through to
-    /// the message path and fails with "unexpected None from message frame".
+    /// A frame with the COMPRESSED bit set while no compression was negotiated
+    /// (Identity) is a protocol error, matching connect-go's
+    /// "sent compressed message without compression support".
     #[tokio::test]
     async fn test_decode_compressed_flag_end_stream_with_identity() {
         let frame = make_frame(0x00, br#"{"value":"hello"}"#);
-        // 0x03 = COMPRESSED | END_STREAM. With Identity encoding the payload is
-        // not actually compressed, exercising the bit-detection path.
+        // 0x03 = COMPRESSED | END_STREAM, but Identity means no compression
+        // support was negotiated.
         let end_payload = br#"{"metadata":{"x-custom":["v"]}}"#;
         let end_frame = make_frame(0x03, end_payload);
 
@@ -587,11 +565,13 @@ mod tests {
         let msg = decoder.next().await.unwrap().unwrap();
         assert_eq!(msg.value, "hello");
 
-        // Stream ends cleanly (no "unexpected None" protocol error).
-        assert!(decoder.next().await.is_none());
-
-        let trailers = decoder.trailers().unwrap();
-        assert_eq!(trailers.get("x-custom"), Some("v"));
+        // The compressed frame without negotiated compression is rejected.
+        let err = decoder.next().await.unwrap().unwrap_err();
+        assert!(matches!(err, ClientError::Protocol(_)));
+        assert!(
+            err.to_string()
+                .contains("sent compressed message without compression support")
+        );
     }
 
     /// A gzip-compressed `0x03` end-stream frame: the decoder must decompress
@@ -617,6 +597,45 @@ mod tests {
         assert!(decoder.next().await.is_none());
         let trailers = decoder.trailers().unwrap();
         assert_eq!(trailers.get("x-t"), Some("1"));
+    }
+
+    /// A frame whose declared envelope length exceeds `max_message_size` is
+    /// rejected as soon as the header is parsed, before the payload arrives,
+    /// so a hostile length prefix cannot force large buffer allocations.
+    #[tokio::test]
+    async fn test_decode_rejects_oversized_declared_length_before_buffering() {
+        // Header declares a 1 MiB payload, but only the header is ever sent.
+        let mut header = vec![0x00u8];
+        header.extend_from_slice(&(1024u32 * 1024).to_be_bytes());
+
+        let stream =
+            stream::iter(vec![Ok::<_, ClientError>(Bytes::from(header))]).chain(stream::pending());
+        let mut decoder =
+            FrameDecoder::<_, TestMessage>::new(stream, false, CompressionEncoding::Identity)
+                .with_max_message_size(Some(64 * 1024));
+
+        // The error surfaces without waiting for the (never-sent) payload.
+        let err = decoder.next().await.unwrap().unwrap_err();
+        assert_eq!(err.code(), Code::ResourceExhausted);
+    }
+
+    /// A small compressed frame must not expand past `max_message_size`
+    /// during decompression (decompression-bomb guard).
+    #[cfg(feature = "compression-gzip-stream")]
+    #[tokio::test]
+    async fn test_decode_max_message_size_bounds_decompression() {
+        let codec = CompressionEncoding::Gzip.codec().unwrap();
+        // 1 MiB of zeros compresses to ~1 KiB but expands far past the limit.
+        let bomb = codec.compress(&vec![0u8; 1024 * 1024]).unwrap();
+        let frame = make_frame(0x01, &bomb);
+
+        let stream = stream::iter(vec![Ok::<_, ClientError>(frame)]);
+        let mut decoder =
+            FrameDecoder::<_, TestMessage>::new(stream, false, CompressionEncoding::Gzip)
+                .with_max_message_size(Some(64 * 1024));
+
+        let err = decoder.next().await.unwrap().unwrap_err();
+        assert_eq!(err.code(), Code::ResourceExhausted);
     }
 
     #[tokio::test]
