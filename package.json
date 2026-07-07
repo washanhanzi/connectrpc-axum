@@ -6,5 +6,17 @@
 	},
 	"devDependencies": {
 		"vitepress": "^1.6.4"
+	},
+	"pnpm": {
+		"onlyBuiltDependencies": [
+			"esbuild"
+		],
+		"overrides": {
+			"vite": "^6.4.3",
+			"esbuild": "^0.25.0",
+			"rollup": "^4.59.0",
+			"postcss": "^8.5.10",
+			"preact": "^10.28.2"
+		}
 	}
 }
