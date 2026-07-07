@@ -199,7 +199,7 @@ impl From<EnvelopeError> for ClientError {
                 expected, actual
             )),
             EnvelopeError::InvalidFlags(flags) => {
-                ClientError::Protocol(format!("invalid frame flags: 0x{:02x}", flags))
+                ClientError::Protocol(format!("protocol error: invalid envelope flags {flags}"))
             }
             EnvelopeError::MissingCompression => ClientError::Protocol(
                 "protocol error: sent compressed message without compression support".to_string(),

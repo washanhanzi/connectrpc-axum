@@ -157,12 +157,15 @@ fn envelope_error_to_connect(err: connectrpc_axum_core::EnvelopeError) -> Connec
     use connectrpc_axum_core::EnvelopeError;
     let code = match &err {
         EnvelopeError::MessageTooLarge { .. } => Code::ResourceExhausted,
+        // connect-go reports unknown envelope flag bits as Internal
+        // ("protocol error: invalid envelope flags %d").
         EnvelopeError::Compression(_)
         | EnvelopeError::PayloadTooLarge { .. }
-        | EnvelopeError::MissingCompression => Code::Internal,
-        EnvelopeError::IncompleteHeader { .. }
-        | EnvelopeError::InvalidFlags(_)
-        | EnvelopeError::Decompression(_) => Code::InvalidArgument,
+        | EnvelopeError::MissingCompression
+        | EnvelopeError::InvalidFlags(_) => Code::Internal,
+        EnvelopeError::IncompleteHeader { .. } | EnvelopeError::Decompression(_) => {
+            Code::InvalidArgument
+        }
         // EnvelopeError is #[non_exhaustive]; future variants are protocol
         // errors, which connect-go reports as Internal.
         _ => Code::Internal,
@@ -349,12 +352,13 @@ impl RequestPipeline {
         {
             EnvelopePayload::Message(payload) => payload,
             EnvelopePayload::EndStream(_) => {
+                // connect-go reads the single request message through its
+                // streaming machinery, where an end-stream frame surfaces as
+                // EOF, i.e. a cardinality violation (zero messages), which the
+                // gRPC status-code spec maps to Unimplemented.
                 return Err(ContextError::new(
                     ctx.protocol,
-                    ConnectError::new(
-                        Code::InvalidArgument,
-                        "unexpected EndStreamResponse in request",
-                    ),
+                    ConnectError::new(Code::Unimplemented, "unary request has zero messages"),
                     ctx.limits.get_send_max_bytes(),
                 ));
             }
@@ -704,8 +708,16 @@ where
                     limits.receive_max_bytes_or_max(),
                 ) {
                     Ok(EnvelopePayload::Message(payload)) => payload,
-                    Ok(EnvelopePayload::EndStream(_)) => {
-                        // EndStream frame - client stream is done
+                    Ok(EnvelopePayload::EndStream(payload)) => {
+                        // EndStream frame - the client stream is done, but only
+                        // gracefully if the frame passes the same validation
+                        // connect-go applies (nothing follows it, payload is a
+                        // well-formed end-stream message).
+                        if let Err(err) =
+                            validate_client_end_stream(&buffer, &mut body, &payload).await
+                        {
+                            yield Err(err);
+                        }
                         return;
                     }
                     Err(err) => {
@@ -751,6 +763,68 @@ where
             }
         }
     }
+}
+
+/// Wire shape of the Connect end-stream message, mirroring connect-go's
+/// `connectEndStreamMessage`. Used only to validate client-sent end-stream
+/// frames; the contents are discarded.
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct ClientEndStreamMessage {
+    #[serde(default)]
+    error: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default)]
+    metadata: Option<std::collections::HashMap<String, Vec<String>>>,
+}
+
+/// Validate a client-sent end-stream frame the way connect-go does.
+///
+/// connect-go treats a client-sent end-stream frame as a graceful end of the
+/// request stream, but only after verifying that nothing follows the frame and
+/// that its payload is a well-formed end-stream message; either violation is
+/// an `Internal` protocol error. Checked in that order, and with the same
+/// messages, as connect-go (which reuses its client-side "corrupt response"
+/// wording on the server).
+async fn validate_client_end_stream(
+    buffered: &BytesMut,
+    body: &mut Body,
+    payload: &[u8],
+) -> Result<(), ConnectError> {
+    // Drain the rest of the stream to ensure there is no extra data.
+    let mut extra = buffered.len();
+    loop {
+        match body.frame().await {
+            Some(Ok(frame)) => {
+                if let Some(data) = frame.data_ref() {
+                    extra += data.len();
+                }
+            }
+            Some(Err(err)) => {
+                return Err(ConnectError::new(
+                    Code::Internal,
+                    format!("corrupt response: I/O error after end-stream message: {err}"),
+                ));
+            }
+            None => break,
+        }
+    }
+    if extra > 0 {
+        return Err(ConnectError::new(
+            Code::Internal,
+            format!("corrupt response: {extra} extra bytes after end of stream"),
+        ));
+    }
+
+    // The end-stream payload is always JSON, regardless of the negotiated
+    // codec. `Option` mirrors Go's json.Unmarshal accepting a literal `null`.
+    serde_json::from_slice::<Option<ClientEndStreamMessage>>(payload)
+        .map(drop)
+        .map_err(|err| {
+            ConnectError::new(
+                Code::Internal,
+                format!("unmarshal end stream message: {err}"),
+            )
+        })
 }
 
 #[cfg(test)]
@@ -836,7 +910,9 @@ mod max_output_tests {
 
     #[test]
     fn process_envelope_payload_unknown_flag_bits_rejected() {
-        // Bits outside COMPRESSED | END_STREAM are still a protocol error.
+        // Bits outside COMPRESSED | END_STREAM are a protocol error, reported
+        // as Internal like connect-go's "protocol error: invalid envelope
+        // flags %d".
         let err = process_envelope_payload(
             0x80,
             Bytes::from_static(b"x"),
@@ -844,7 +920,135 @@ mod max_output_tests {
             usize::MAX,
         )
         .unwrap_err();
-        assert_eq!(err.code(), Code::InvalidArgument);
+        assert_eq!(err.code(), Code::Internal);
+        assert_eq!(
+            err.message().unwrap(),
+            "protocol error: invalid envelope flags 128"
+        );
+    }
+}
+
+#[cfg(test)]
+mod client_end_stream_tests {
+    //! A client-sent end-stream frame ends the request stream gracefully, but
+    //! only after the validation connect-go applies: nothing may follow the
+    //! frame and its payload must be a well-formed end-stream message.
+    //! Expectations below were verified against connect-go's server behavior.
+    use super::*;
+    use futures::StreamExt;
+
+    fn frame(flags: u8, payload: &[u8]) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(5 + payload.len());
+        buf.push(flags);
+        buf.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        buf.extend_from_slice(payload);
+        buf
+    }
+
+    fn message_frame() -> Vec<u8> {
+        frame(
+            envelope_flags::MESSAGE,
+            &pbjson_types::Empty::default().encode_to_vec(),
+        )
+    }
+
+    async fn collect(body: Vec<u8>) -> Vec<Result<pbjson_types::Empty, ConnectError>> {
+        create_frame_stream::<pbjson_types::Empty>(
+            Body::from(body),
+            true,
+            MessageLimits::new(),
+            CompressionEncoding::Identity,
+        )
+        .collect()
+        .await
+    }
+
+    #[tokio::test]
+    async fn end_stream_frame_ends_stream_gracefully() {
+        let items = collect(frame(envelope_flags::END_STREAM, b"{}")).await;
+        assert!(items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn message_then_end_stream_frame_is_graceful() {
+        let mut body = message_frame();
+        body.extend_from_slice(&frame(envelope_flags::END_STREAM, b"{}"));
+        let items = collect(body).await;
+        assert_eq!(items.len(), 1);
+        assert!(items[0].is_ok());
+    }
+
+    #[tokio::test]
+    async fn end_stream_frame_with_metadata_is_graceful() {
+        let items = collect(frame(
+            envelope_flags::END_STREAM,
+            br#"{"metadata":{"x-extra":["1"]}}"#,
+        ))
+        .await;
+        assert!(items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn end_stream_frame_with_invalid_json_is_internal() {
+        let items = collect(frame(envelope_flags::END_STREAM, b"notjson")).await;
+        assert_eq!(items.len(), 1);
+        let err = items[0].as_ref().unwrap_err();
+        assert_eq!(err.code(), Code::Internal);
+        assert!(
+            err.message()
+                .unwrap()
+                .starts_with("unmarshal end stream message:")
+        );
+    }
+
+    #[tokio::test]
+    async fn bytes_after_end_stream_frame_are_internal() {
+        let mut body = frame(envelope_flags::END_STREAM, b"{}");
+        body.extend_from_slice(&message_frame());
+        let extra = message_frame().len();
+        let items = collect(body).await;
+        assert_eq!(items.len(), 1);
+        let err = items[0].as_ref().unwrap_err();
+        assert_eq!(err.code(), Code::Internal);
+        assert_eq!(
+            err.message().unwrap(),
+            format!("corrupt response: {extra} extra bytes after end of stream")
+        );
+    }
+
+    // The extra-bytes check runs before payload validation, matching connect-go.
+    #[tokio::test]
+    async fn extra_bytes_reported_before_invalid_json() {
+        let mut body = frame(envelope_flags::END_STREAM, b"notjson");
+        body.extend_from_slice(b"junk");
+        let items = collect(body).await;
+        assert_eq!(items.len(), 1);
+        let err = items[0].as_ref().unwrap_err();
+        assert_eq!(err.code(), Code::Internal);
+        assert!(
+            err.message()
+                .unwrap()
+                .starts_with("corrupt response: 4 extra bytes")
+        );
+    }
+
+    #[test]
+    fn enveloped_unary_end_stream_frame_is_cardinality_violation() {
+        // connect-go: an end-stream frame instead of the single request
+        // message reads as EOF → "unary request has zero messages"
+        // (Unimplemented).
+        let ctx = ConnectContext {
+            protocol: crate::context::RequestProtocol::ConnectStreamProto,
+            ..Default::default()
+        };
+        let err = RequestPipeline::decode_enveloped_bytes::<pbjson_types::Empty>(
+            &ctx,
+            Bytes::from(frame(envelope_flags::END_STREAM, b"{}")),
+        )
+        .unwrap_err()
+        .into_connect_error();
+        assert_eq!(err.code(), Code::Unimplemented);
+        assert_eq!(err.message().unwrap(), "unary request has zero messages");
     }
 }
 
