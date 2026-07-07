@@ -208,7 +208,9 @@ pub enum EnvelopeError {
     IncompleteHeader { expected: usize, actual: usize },
 
     /// Invalid frame flags.
-    #[error("invalid frame flags: 0x{0:02x}")]
+    // Wording and decimal formatting match connect-go's
+    // "protocol error: invalid envelope flags %d".
+    #[error("protocol error: invalid envelope flags {0}")]
     InvalidFlags(u8),
 
     /// A frame had the COMPRESSED bit set, but no compression was negotiated.
@@ -522,7 +524,10 @@ mod tests {
         );
 
         let err = EnvelopeError::InvalidFlags(0xFF);
-        assert_eq!(err.to_string(), "invalid frame flags: 0xff");
+        assert_eq!(
+            err.to_string(),
+            "protocol error: invalid envelope flags 255"
+        );
 
         let err = EnvelopeError::Decompression("gzip failed".into());
         assert_eq!(err.to_string(), "decompression failed: gzip failed");
