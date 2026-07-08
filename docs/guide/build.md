@@ -118,7 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`no_connect_server()` and `with_tonic()` cannot be combined.
+`with_tonic()` and `no_connect_server()` can be combined, but `with_tonic()` must be called first: `.with_tonic().no_connect_server()` generates tonic-only stubs, while the reverse order is a compile error (after `no_connect_server()`, `with_tonic()` is no longer available).
 
 ### `with_tonic_client()` and `with_tonic_client_config(...)`
 
@@ -274,9 +274,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Depending on enabled methods/features:
 
-- Message types with `prost::Message` + `serde` derives
+- Message types with `prost::Message` + `serde` derives (pbjson serde generation is skipped, with a cargo warning, for proto files without a `package` declaration — those messages only get `prost::Message`)
 - Connect service builders (unless `no_connect_server()` is used)
-- Connect route paths
+- Per-method procedure path constants in the `{service}_procedures` module (if `with_connect_client()`)
 - Typed Connect clients (if `with_connect_client()`)
 - Tonic server stubs (if `with_tonic()`)
 - Tonic client stubs (if `with_tonic_client()`)

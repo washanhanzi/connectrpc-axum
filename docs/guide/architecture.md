@@ -39,23 +39,26 @@ The core modules in the server runtime library:
 
 ### Layer Stack
 
-Requests flow through a three-layer middleware stack:
+Requests flow through a middleware stack (outermost to innermost):
 
 ```
 HTTP Request
     ↓
-┌─────────────────────────────────────────────┐
-│              BridgeLayer                    │  ← Size limits, streaming detection
-│  ┌───────────────────────────────────────┐  │
-│  │     Tower CompressionLayer            │  │  ← HTTP body compression (unary only)
-│  │  ┌─────────────────────────────────┐  │  │
-│  │  │         ConnectLayer            │  │  │  ← Protocol detection, context
-│  │  │  ┌───────────────────────────┐  │  │  │
-│  │  │  │          Handler          │  │  │  │  ← Your RPC handlers
-│  │  │  └───────────────────────────┘  │  │  │
-│  │  └─────────────────────────────────┘  │  │
-│  └───────────────────────────────────────┘  │
-└─────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────┐
+│              BridgeLayer                              │  ← Size limits, streaming detection
+│  ┌─────────────────────────────────────────────────┐  │
+│  │     Tower RequestDecompressionLayer             │  │  ← Request body decompression (unary only)
+│  │  ┌───────────────────────────────────────────┐  │  │
+│  │  │     Tower CompressionLayer                │  │  │  ← Response body compression (unary only)
+│  │  │  ┌─────────────────────────────────────┐  │  │  │
+│  │  │  │         ConnectLayer                │  │  │  │  ← Protocol detection, context
+│  │  │  │  ┌───────────────────────────────┐  │  │  │  │
+│  │  │  │  │          Handler              │  │  │  │  │  ← Your RPC handlers
+│  │  │  │  └───────────────────────────────┘  │  │  │  │
+│  │  │  └─────────────────────────────────────┘  │  │  │
+│  │  └───────────────────────────────────────────┘  │  │
+│  └─────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────┘
     ↓
 HTTP Response
 ```
@@ -65,9 +68,9 @@ HTTP Response
 - Detects Connect streaming requests (`application/connect+*`)
 - For streaming: prevents Tower compression by setting identity encoding
 
-**Tower CompressionLayer** (middle):
-- Standard HTTP body compression for unary RPCs
-- Uses `Accept-Encoding`/`Content-Encoding` headers
+**Tower RequestDecompressionLayer / CompressionLayer** (middle):
+- Two distinct tower-http layers: `RequestDecompressionLayer` decompresses unary request bodies, `CompressionLayer` compresses unary response bodies
+- Use standard `Accept-Encoding`/`Content-Encoding` headers
 
 **ConnectLayer** (innermost) - see `layer/connect.rs`:
 - Validates content-type and returns HTTP 415 for unsupported types
@@ -83,12 +86,12 @@ The Connect protocol uses different compression mechanisms for unary vs streamin
 
 **Unary RPCs** - HTTP body compression:
 ```
-Request → BridgeLayer (size check) → Tower decompress → ConnectLayer → Handler
-                                                                          ↓
-Response ← BridgeLayer ← Tower compress ← ConnectLayer ← Handler response
+Request → BridgeLayer (size check) → RequestDecompressionLayer (decompress) → ConnectLayer → Handler
+                                                                                  ↓
+Response ← BridgeLayer ← CompressionLayer (compress) ← ConnectLayer ← Handler response
 ```
 - Uses standard `Accept-Encoding` / `Content-Encoding` headers
-- Handled entirely by Tower's `CompressionLayer`
+- Request decompression is handled by tower-http's `RequestDecompressionLayer`, response compression by its `CompressionLayer`
 - BridgeLayer checks compressed body size before decompression
 
 **Streaming RPCs** - per-envelope compression:
@@ -99,7 +102,9 @@ Request → BridgeLayer (bypass Tower) → ConnectLayer → Handler
 ```
 - Uses `Connect-Accept-Encoding` / `Connect-Content-Encoding` headers
 - BridgeLayer sets `Accept-Encoding: identity` to prevent Tower from interfering
-- `context/envelope_compression.rs` provides codec implementations
+- Codec implementations (`GzipCodec`, `DeflateCodec`, `BrotliCodec`, `ZstdCodec`) live in `connectrpc-axum-core`'s `codec.rs`; `context/envelope_compression.rs` re-exports them and handles envelope-compression negotiation
+
+Envelope flags are treated as a bitfield (`COMPRESSED | END_STREAM`); frames with unknown flag bits are rejected. Streaming decompression is bounded by `receive_max_bytes` via `Codec::decompress_limited`, so a compressed envelope cannot expand past the configured limit (see `envelope.rs` and `codec.rs` in `connectrpc-axum-core`).
 
 ### Code Structure
 
@@ -149,7 +154,7 @@ Key insight: `http::Extensions` cannot be cloned, but it can be *moved*. The lay
 
 ### ConnectHandlerWrapper
 
-The `ConnectHandlerWrapper<F>` type transforms user functions into axum-compatible handlers. It's a newtype wrapper with multiple `impl Handler<T, S>` blocks, each with different trait bounds:
+The `ConnectHandlerWrapper<F>` type transforms user functions into axum-compatible handlers. It's a wrapper struct around the handler function (plus `PhantomData` for the request/response types), with multiple `impl Handler<T, S>` blocks, each with different trait bounds:
 
 ```
 User function: async fn(E1, E2, ..., ConnectRequest<Req>) -> ConnectResponse<Resp>
@@ -176,18 +181,18 @@ See `handler.rs` for the implementation.
 For tonic-style handlers (trait-based), the library uses a factory pattern with boxed calls:
 
 ```
-User trait impl: async fn method(&self, req: tonic::Request<Req>) -> Result<Response<Resp>, Status>
+User handler: async fn(ConnectRequest<Req>) -> Result<ConnectResponse<Resp>, ConnectError>
                                     ↓
             IntoFactory trait converts to BoxedCall
                                     ↓
-            TonicCompatibleHandlerWrapper adapts to axum Handler
+            TonicHandlerWrapper adapts to axum Handler
                                     ↓
                         Axum can route to it
 ```
 
 The "2-layer box" approach (same pattern axum uses for `Handler` → `MethodRouter`):
 1. **Factory layer**: `IntoFactory` trait produces `BoxedCall<Req, Resp>` - a type-erased callable
-2. **Wrapper layer**: `TonicCompatibleHandlerWrapper` implements `Handler` for the boxed call
+2. **Wrapper layer**: `TonicHandlerWrapper` implements `Handler` for the boxed call
 
 One caveat: axum uses a trait for the factory layer, while we use closures. See [this discussion](https://github.com/washanhanzi/connectrpc-axum/discussions/18) for the design rationale.
 
@@ -245,7 +250,7 @@ let app = MakeServiceBuilder::new()
 The builder handles:
 - Wrapping Connect routes with `ConnectLayer` for protocol handling
 - Wrapping routes with `BridgeLayer` for compression bridging
-- Adding Tower `CompressionLayer` for HTTP body compression
+- Adding tower-http `RequestDecompressionLayer` and `CompressionLayer` for HTTP body decompression/compression
 - Routing gRPC services through `ContentTypeSwitch` (by Content-Type header)
 - Passing plain axum routes through without Connect processing
 
@@ -257,7 +262,7 @@ User provides:
 
 MakeServiceBuilder adds:
     ├── BridgeLayer
-    ├── CompressionLayer
+    ├── RequestDecompressionLayer + CompressionLayer
     ├── ConnectLayer (for Connect routes only)
     └── ContentTypeSwitch (routes gRPC vs Connect)
 

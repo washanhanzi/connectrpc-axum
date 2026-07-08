@@ -460,6 +460,12 @@ let client = ConnectClient::builder("http://localhost:3000")
     .build()?;
 ```
 
+**Send interceptor errors:** if `on_stream_send` returns `Err` mid-stream, the client
+aborts the HTTP request body — the server sees a broken request, not a clean
+end-of-stream. The interceptor's error is returned to the caller and takes precedence
+over any transport or server error surfaced afterwards (including buffered received
+messages in bidi streams).
+
 ### Chaining Interceptors
 
 Multiple interceptors can be chained. They execute in order for requests and reverse order for responses:
@@ -471,6 +477,14 @@ let client = ConnectClient::builder("http://localhost:3000")
     .with_message_interceptor(LoggingInterceptor)
     .build()?;
 ```
+
+### Typed Per-Method Interceptors
+
+Generated client builders also expose typed per-method interceptor methods —
+`with_before_*`, `with_after_*`, `with_on_send_*`, and `with_on_receive_*` (one set per
+RPC method) — as a typed alternative to the low-level `with_interceptor` /
+`with_message_interceptor` API. These take closures with the concrete request/response
+types for that method, so no trait implementation is needed.
 
 ## Error Handling
 
@@ -499,6 +513,10 @@ match client.call_unary::<Req, Res>("service/Method", &request).await {
     Err(ClientError::Protocol(msg)) => {
         println!("Protocol error: {}", msg);
     }
+    // ClientError is #[non_exhaustive], so a wildcard arm is required
+    Err(e) => {
+        println!("Other error: {}", e);
+    }
 }
 ```
 
@@ -510,7 +528,7 @@ match client.call_unary::<Req, Res>("service/Method", &request).await {
 | `Transport(_)` | `Unavailable` | Yes |
 | `Encode(_)` | `Internal` | No |
 | `Decode(_)` | `Internal` | No |
-| `Protocol(_)` | `InvalidArgument` | No |
+| `Protocol(_)` | `Internal` | No |
 
 ### Convenience Constructors
 
@@ -658,8 +676,8 @@ while let Some(Ok(msg)) = stream.next().await {
 // Gracefully drain remaining messages
 stream.drain().await;
 
-// Or with a timeout
-stream.drain_timeout(Duration::from_secs(5)).await;
+// Or with a timeout (returns Ok(drained) or Err(drained) on timeout)
+let _ = stream.drain_timeout(Duration::from_secs(5)).await;
 ```
 
 ## Observability
@@ -693,7 +711,7 @@ Each RPC call creates a span with:
 
 ```rust
 use connectrpc_axum_client::{
-    ConnectClient, CallOptions, HeaderInterceptor, RetryPolicy,
+    ConnectClient, HeaderInterceptor, RetryPolicy,
     CompressionConfig, CompressionEncoding, CompressionLevel,
     retry_with_policy,
 };

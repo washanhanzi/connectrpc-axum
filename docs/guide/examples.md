@@ -75,5 +75,5 @@ For examples with tonic features:
 
 ```bash
 cargo run --bin tonic-unary --features tonic
-cargo run --bin grpc-web --features tonic-web
+cargo run --bin grpc-web
 ```

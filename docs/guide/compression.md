@@ -2,16 +2,16 @@
 
 ## Default Compression
 
-When using `build_connect()` on a service builder, gzip compression is enabled by default:
+When using `build_connect()` on a service builder, gzip compression is enabled by default — provided a gzip compression feature (e.g. `compression-gzip`) is enabled. Compression features are off by default, so without one `build_connect()` applies no HTTP-body compression:
 
 ```rust
-let router = helloworldservice::HelloWorldServiceBuilder::new()
+let router = hello_world_service_connect::HelloWorldServiceBuilder::new()
     .say_hello(say_hello)
-    .build_connect();  // Includes default gzip compression
+    .build_connect();  // Includes gzip compression when a gzip feature is enabled
 ```
 
 This uses `MakeServiceBuilder::new()` internally, which provides:
-- Default gzip compression and decompression
+- Gzip compression and decompression by default (when a gzip compression feature is enabled)
 - Standard ConnectLayer configuration
 
 ## Custom Configuration
@@ -99,7 +99,7 @@ let config = CompressionConfig::default();
 
 ## Request Decompression
 
-The server automatically decompresses incoming requests. Unsupported encodings return `Unimplemented` error listing enabled encodings.
+The server automatically decompresses incoming requests. For streaming RPCs and GET requests, unsupported encodings return a Connect `Unimplemented` error listing enabled encodings. Unary request decompression is handled by tower-http's request decompression layer, which does not produce a Connect error.
 
 ## gRPC Compression (Tonic)
 

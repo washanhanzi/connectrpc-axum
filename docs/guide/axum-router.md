@@ -70,7 +70,7 @@ async fn get_user(
 }
 
 // Register in service builder AND at custom path
-let connect_router = userservice::UserServiceBuilder::new()
+let connect_router = user_service_connect::UserServiceBuilder::new()
     .get_user(get_user)
     .build();
 
@@ -102,7 +102,7 @@ rpc GetUser(GetUserRequest) returns (GetUserResponse) {
 The generated service builder will automatically handle both GET and POST requests:
 
 ```rust
-let router = userservice::UserServiceBuilder::new()
+let router = user_service_connect::UserServiceBuilder::new()
     .get_user(get_user)
     .build_connect();  // GET + POST automatically enabled for GetUser
 ```
@@ -110,7 +110,7 @@ let router = userservice::UserServiceBuilder::new()
 The code generator also exports idempotency level constants for each method:
 
 ```rust
-use your_crate::userservice::GET_USER_IDEMPOTENCY;
+use your_crate::user_service_connect::GET_USER_IDEMPOTENCY;
 // GET_USER_IDEMPOTENCY == IdempotencyLevel::NoSideEffects
 ```
 

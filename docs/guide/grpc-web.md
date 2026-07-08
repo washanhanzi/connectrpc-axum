@@ -40,7 +40,7 @@ async fn say_hello(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build both Connect router and gRPC server from same handlers
     let (connect_router, grpc_server) =
-        helloworldservice::HelloWorldServiceTonicCompatibleBuilder::new()
+        hello_world_service_connect::HelloWorldServiceTonicCompatibleBuilder::new()
             .say_hello(say_hello)
             .with_state(AppState::default())
             .build();
