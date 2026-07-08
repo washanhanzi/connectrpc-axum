@@ -18,7 +18,8 @@ docs/
 │   ├── limits.md
 │   ├── timeout.md
 │   ├── compression.md
-│   ├── http-endpoints.md
+│   ├── axum-router.md
+│   ├── client.md
 │   ├── tonic.md
 │   ├── grpc-web.md
 │   ├── build.md
@@ -26,8 +27,7 @@ docs/
 │   ├── development.md
 │   ├── architecture.md
 │   └── compare/
-│       ├── axum-connect.md
-│       └── connectrpc.md
+│       └── connect-rust.md
 └── plans/              # Internal planning docs (not in sidebar)
     ├── errordetails.md
     └── extended-codec-support.md
@@ -43,15 +43,15 @@ docs/
 | `guide/limits.md` | `/guide/limits` | Receive and send message size limits |
 | `guide/timeout.md` | `/guide/timeout` | Server-side timeout configuration |
 | `guide/compression.md` | `/guide/compression` | Response compression (gzip) |
-| `guide/http-endpoints.md` | `/guide/http-endpoints` | Plain HTTP routes alongside Connect |
+| `guide/axum-router.md` | `/guide/axum-router` | Axum router integration, plain HTTP routes alongside Connect |
+| `guide/client.md` | `/guide/client` | Connect RPC client, generated typed clients, interceptors, retry |
 | `guide/tonic.md` | `/guide/tonic` | Tonic gRPC integration, dual-protocol serving |
 | `guide/grpc-web.md` | `/guide/grpc-web` | Browser gRPC-Web support via tonic-web |
 | `guide/build.md` | `/guide/build` | build.rs config, prost, tonic codegen options |
 | `guide/examples.md` | `/guide/examples` | Links to example code |
 | `guide/development.md` | `/guide/development` | Contributing, Claude Code skills |
 | `guide/architecture.md` | `/guide/architecture` | Library internals, request flow, module structure |
-| `guide/compare/axum-connect.md` | `/guide/compare/axum-connect` | Comparison with axum-connect crate |
-| `guide/compare/connectrpc.md` | `/guide/compare/connectrpc` | Comparison with connectrpc crate |
+| `guide/compare/connect-rust.md` | `/guide/compare/connect-rust` | Comparison with the official connectrpc crate (connect-rust) |
 
 ## Adding Pages
 

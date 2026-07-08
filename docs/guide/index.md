@@ -96,7 +96,7 @@ use axum::extract::State;
 use connectrpc_axum::prelude::*;
 use futures::Stream;
 // Import generated types from your crate
-use your_crate::{HelloRequest, HelloResponse, helloworldservice};
+use your_crate::{HelloRequest, HelloResponse, hello_world_service_connect};
 
 #[derive(Clone, Default)]
 struct AppState;
@@ -131,7 +131,7 @@ async fn say_hello_stream(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build the service router (bare router without middleware)
-    let hello_router = helloworldservice::HelloWorldServiceBuilder::new()
+    let hello_router = hello_world_service_connect::HelloWorldServiceBuilder::new()
         .say_hello(say_hello)
         .say_hello_stream(say_hello_stream)
         .with_state(AppState::default())

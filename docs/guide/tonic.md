@@ -57,7 +57,7 @@ async fn say_hello(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build both Connect router and gRPC server from same handlers
     let (connect_router, grpc_server) =
-        helloworldservice::HelloWorldServiceTonicCompatibleBuilder::new()
+        hello_world_service_connect::HelloWorldServiceTonicCompatibleBuilder::new()
             .say_hello(say_hello)
             .with_state(AppState::default())
             .build();
@@ -119,6 +119,8 @@ Compression feature on `connectrpc-axum`(like `compression-gzip`) doesn't enable
 use `add_grpc_service_with`:
 
 ```rust
+use tonic::codec::CompressionEncoding;
+
 let app = MakeServiceBuilder::new()
     .add_router(connect_router)
     .add_grpc_service_with(grpc_server, |svc| {

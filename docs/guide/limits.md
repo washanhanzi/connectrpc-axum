@@ -35,6 +35,8 @@ MakeServiceBuilder::new()
 
 When exceeded, the server returns a `ResourceExhausted` error before processing the request.
 
+For streaming requests, `receive_max_bytes` also bounds decompression itself: compressed envelopes are decompressed with the limit enforced as output is produced, so a small compressed frame (a "decompression bomb") cannot expand past the limit. Exceeding the limit during decompression returns `ResourceExhausted`, while a frame that fails to decompress returns `InvalidArgument`.
+
 ### Axum Router Behavior
 
 When you add plain HTTP routes via `add_axum_router()`, the receive limit is applied using Tower's `RequestBodyLimitLayer`. This provides consistent size limiting across your entire service.
@@ -66,11 +68,10 @@ MakeServiceBuilder::new()
 
 ### Compression Interaction
 
-Following connect-go's behavior, the send size is checked **after** encoding and compression. This means:
+The point at which the send size is checked differs between unary and streaming RPCs:
 
-- If compression reduces the message below the limit, it succeeds
-- If compression is not applied (message too small or disabled), the uncompressed size is checked
-- Error messages indicate whether the checked size was compressed or not
+- **Unary**: the limit is checked on the **uncompressed** encoded message, before Tower's `CompressionLayer` compresses the response body. An over-limit message is rejected even if compression would have brought it under the limit. The error always reads `message size {size} exceeds sendMaxBytes {limit}`.
+- **Streaming**: each envelope is compressed first (when envelope compression is negotiated), and the limit is checked on the **compressed** envelope size. Compression can therefore bring a message under the limit. The error message indicates whether the checked size was compressed (`compressed message size ...`) or not (`message size ...`).
 
 ### Streaming
 

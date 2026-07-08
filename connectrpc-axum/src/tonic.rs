@@ -6,7 +6,7 @@
 //! # Overview
 //!
 //! - [`ContentTypeSwitch`] - Routes requests to gRPC or Connect based on content-type
-//! - [`TonicCompatibleHandlerWrapper`] - Handler wrapper with full extractor support
+//! - [`TonicHandlerWrapper`] - Handler wrapper with full extractor support
 //! - [`FromRequestPartsLayer`] - Middleware enabling `FromRequestParts` extractors
 //! - [`RequestContext`] - Full request context for extractor support
 

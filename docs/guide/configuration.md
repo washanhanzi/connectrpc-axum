@@ -6,13 +6,13 @@ Generated builders register handlers and create bare routers:
 
 ```rust
 // Build bare routers (no ConnectLayer applied yet)
-let hello_router = helloworldservice::HelloWorldServiceBuilder::new()
+let hello_router = hello_world_service_connect::HelloWorldServiceBuilder::new()
     .say_hello(say_hello)
     .say_hello_stream(say_hello_stream)
     .with_state(AppState::default())
     .build();  // Returns Router without ConnectLayer
 
-let user_router = userservice::UserServiceBuilder::new()
+let user_router = user_service_connect::UserServiceBuilder::new()
     .get_user(get_user)
     .with_state(AppState::default())
     .build();

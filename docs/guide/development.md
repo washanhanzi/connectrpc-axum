@@ -2,7 +2,7 @@
 
 ## Claude Code Skills
 
-This project includes [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills) to assist with development. See the skill files in [`.claude/skills/`](https://github.com/washanhanzi/connectrpc-axum/tree/main/.claude/skills/) for details.
+This project includes [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills) to assist with development. See the skill files in [`.agents/skills/`](https://github.com/washanhanzi/connectrpc-axum/tree/main/.agents/skills/) for details.
 
 | Skill | Description |
 |-------|-------------|

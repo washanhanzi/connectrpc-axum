@@ -76,8 +76,7 @@ export default defineConfig({
         {
           text: 'Comparisons',
           items: [
-            { text: 'axum-connect', link: '/guide/compare/axum-connect' },
-            { text: 'connectrpc', link: '/guide/compare/connectrpc' }
+            { text: 'connect-rust', link: '/guide/compare/connect-rust' }
           ]
         }
       ]
