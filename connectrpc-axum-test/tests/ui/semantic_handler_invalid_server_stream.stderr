@@ -8,16 +8,75 @@ error[E0277]: the trait bound `ConnectHandlerWrapper<fn(connectrpc_axum::Connect
    |
    = help: the trait `Handler<_, _>` is not implemented for `ConnectHandlerWrapper<fn(connectrpc_axum::ConnectRequest<HelloResponse>) -> impl futures::Future<Output = Result<connectrpc_axum::ConnectResponse<connectrpc_axum::StreamBody<futures::stream::Empty<Result<HelloResponse, connectrpc_axum::ConnectError>>>>, connectrpc_axum::ConnectError>> {say_hello_stream}, HelloRequest, HelloResponse>`
    = note: Consider using `#[axum::debug_handler]` to improve the error message
-   = help: the following other types implement trait `Handler<T, S>`:
-             `ConnectHandlerWrapper<F, Req, Resp>` implements `Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, connectrpc_axum::ConnectRequest<Req>), S>`
-             `ConnectHandlerWrapper<F, Req, Resp>` implements `Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), S>`
-             `ConnectHandlerWrapper<F, Req, Resp>` implements `Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), S>`
-             `ConnectHandlerWrapper<F, Req, Resp>` implements `Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), S>`
-             `ConnectHandlerWrapper<F, Req, Resp>` implements `Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, connectrpc_axum::ConnectRequest<Req>), S>`
-             `ConnectHandlerWrapper<F, Req, Resp>` implements `Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), S>`
-             `ConnectHandlerWrapper<F, Req, Resp>` implements `Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), S>`
-             `ConnectHandlerWrapper<F, Req, Resp>` implements `Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), S>`
-           and $N others
+   = help: `ConnectHandlerWrapper<F, Req, Resp>` implements trait `Handler<T, S>`:
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, connectrpc_axum::ConnectRequest<Req>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16, connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, connectrpc_axum::ConnectRequest<Req>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, connectrpc_axum::ConnectRequest<Req>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, connectrpc_axum::ConnectRequest<Req>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, connectrpc_axum::ConnectRequest<Req>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, connectrpc_axum::ConnectRequest<Req>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, connectrpc_axum::ConnectRequest<Req>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, connectrpc_axum::ConnectRequest<Req>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, A9, connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, connectrpc_axum::ConnectRequest<Req>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, A8, connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, connectrpc_axum::ConnectRequest<Req>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), S>
+             Handler<(A1, A2, A3, A4, A5, A6, A7, connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, connectrpc_axum::ConnectRequest<Req>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, A6, connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), S>
+             Handler<(A1, A2, A3, A4, A5, A6, connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, connectrpc_axum::ConnectRequest<Req>), S>
+             Handler<(A1, A2, A3, A4, A5, connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, A5, connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), S>
+             Handler<(A1, A2, A3, A4, A5, connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, connectrpc_axum::ConnectRequest<Req>), S>
+             Handler<(A1, A2, A3, A4, connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, A4, connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), S>
+             Handler<(A1, A2, A3, A4, connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, connectrpc_axum::ConnectRequest<Req>), S>
+             Handler<(A1, A2, A3, connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, A3, connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), S>
+             Handler<(A1, A2, A3, connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, connectrpc_axum::ConnectRequest<Req>), S>
+             Handler<(A1, A2, connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, A2, connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), S>
+             Handler<(A1, A2, connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, connectrpc_axum::ConnectRequest<Req>), S>
+             Handler<(A1, connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(A1, connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), S>
+             Handler<(A1, connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), S>
+             Handler<(connectrpc_axum::ConnectRequest<Req>, connectrpc_axum::StreamBody<St>), ()>
+             Handler<(connectrpc_axum::ConnectRequest<Req>,), ()>
+             Handler<(connectrpc_axum::ConnectRequest<Streaming<Req>>, Resp), ()>
+             Handler<(connectrpc_axum::ConnectRequest<Streaming<Req>>, connectrpc_axum::StreamBody<St>), ()>
 note: required by a bound in `HelloWorldServiceBuilder::<S>::say_hello_stream`
   --> tests/ui/semantic_handler_invalid_server_stream.rs:38:64
    |

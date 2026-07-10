@@ -130,7 +130,7 @@ impl SchemaSet {
                 let segments: Vec<&str> = rest.split('.').collect();
                 let (type_name, parents) = segments.split_last().expect("type has name");
                 std::iter::once(rust_path.clone())
-                    .chain(parents.iter().map(|s| prost::to_snake(s)))
+                    .chain(parents.iter().map(prost::to_snake))
                     .chain(std::iter::once(prost::to_upper_camel(type_name)))
                     .collect::<Vec<_>>()
                     .join("::")

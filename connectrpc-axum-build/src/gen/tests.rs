@@ -88,7 +88,6 @@ fn method(
         client_streaming: Some(client_streaming),
         server_streaming: Some(server_streaming),
         options: Some(options),
-        ..Default::default()
     }
 }
 
@@ -158,8 +157,10 @@ fn test_with_tonic_codegen() {
 
 #[test]
 fn test_idempotency_level_no_side_effects() {
-    let mut method_options = MethodOptions::default();
-    method_options.idempotency_level = Some(IdempotencyLevel::NoSideEffects as i32);
+    let method_options = MethodOptions {
+        idempotency_level: Some(IdempotencyLevel::NoSideEffects as i32),
+        ..Default::default()
+    };
 
     let buf = render_service(
         "user",
@@ -181,8 +182,10 @@ fn test_idempotency_level_no_side_effects() {
 
 #[test]
 fn test_idempotency_level_idempotent() {
-    let mut method_options = MethodOptions::default();
-    method_options.idempotency_level = Some(IdempotencyLevel::Idempotent as i32);
+    let method_options = MethodOptions {
+        idempotency_level: Some(IdempotencyLevel::Idempotent as i32),
+        ..Default::default()
+    };
 
     let buf = render_service(
         "user",
@@ -226,8 +229,10 @@ fn test_idempotency_level_unknown_default() {
 
 #[test]
 fn test_no_side_effects_enables_get_routing() {
-    let mut method_options = MethodOptions::default();
-    method_options.idempotency_level = Some(IdempotencyLevel::NoSideEffects as i32);
+    let method_options = MethodOptions {
+        idempotency_level: Some(IdempotencyLevel::NoSideEffects as i32),
+        ..Default::default()
+    };
 
     let buf = render_service(
         "user",

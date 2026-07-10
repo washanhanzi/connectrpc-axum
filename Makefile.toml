@@ -22,6 +22,32 @@ args = ["test", "--workspace"]
 # CI Tasks
 # ============================================================================
 
+[tasks.fmt-check]
+description = "Check Rust formatting"
+category = "CI"
+command = "cargo"
+args = ["fmt", "--all", "--", "--check"]
+
+[tasks.clippy]
+description = "Run Clippy with warnings denied"
+category = "CI"
+command = "cargo"
+args = [
+  "clippy",
+  "--workspace",
+  "--all-targets",
+  "--all-features",
+  "--",
+  "-D",
+  "warnings",
+  "-A",
+  "clippy::result-large-err",
+  "-A",
+  "clippy::type-complexity",
+  "-A",
+  "clippy::too-many-arguments",
+]
+
 [tasks.ci]
 description = "Run all CI checks (fmt, clippy, test)"
 category = "CI"

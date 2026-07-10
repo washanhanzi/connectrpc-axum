@@ -342,6 +342,15 @@ impl AxumConnectServiceGenerator {
                         #(#connect_builder_methods)*
                     }
 
+                    impl<S> Default for #service_builder_name<S>
+                    where
+                        S: Clone + Send + Sync + 'static,
+                    {
+                        fn default() -> Self {
+                            Self::new()
+                        }
+                    }
+
                     impl #service_builder_name<()> {
                         /// Build the final Connect RPC router with all registered handlers.
                         ///

@@ -20,9 +20,11 @@ pin_project! {
     /// - Empty bodies (for some GET requests)
     /// - Full bodies (for unary requests with complete message)
     /// - Streaming bodies (for client/bidi streaming requests)
+    #[derive(Default)]
     #[project = TransportBodyProj]
     pub enum TransportBody {
         /// Empty request body.
+        #[default]
         Empty,
         /// Full request body with all data available.
         Full {
@@ -101,12 +103,6 @@ impl Body for TransportBody {
             }
             TransportBody::Streaming { .. } => http_body::SizeHint::default(),
         }
-    }
-}
-
-impl Default for TransportBody {
-    fn default() -> Self {
-        TransportBody::Empty
     }
 }
 

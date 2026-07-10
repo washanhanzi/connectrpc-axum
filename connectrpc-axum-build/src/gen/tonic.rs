@@ -578,6 +578,15 @@ pub(super) fn generate_tonic_code(
             }
         }
 
+        impl<S> Default for #tonic_builder_name<S>
+        where
+            S: Clone + Send + Sync + 'static,
+        {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
         impl #tonic_builder_name<()> {
             /// Build without state by converting factories with `()`
             ///

@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - release
+      - "release/**"
+  pull_request:
+    branches:
+      - main
+      - release
+      - "release/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.1
+          components: clippy, rustfmt
+
+      - name: Install Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 1.25.0
+          cache-dependency-path: connectrpc-axum-test/go/go.sum
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "35.0"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cargo-make
+        run: cargo install cargo-make --version 0.37.24 --locked
+
+      - name: Run CI checks
+        run: cargo make ci
