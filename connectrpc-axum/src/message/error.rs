@@ -413,6 +413,17 @@ impl Serialize for ConnectError {
 // Tonic Conversions (feature-gated)
 // ============================================================================
 
+#[cfg(feature = "tonic")]
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct GoogleRpcStatus {
+    #[prost(int32, tag = "1")]
+    code: i32,
+    #[prost(string, tag = "2")]
+    message: String,
+    #[prost(message, repeated, tag = "3")]
+    details: Vec<::pbjson_types::Any>,
+}
+
 /// Convert a tonic Code to a Connect Code.
 #[cfg(feature = "tonic")]
 pub fn code_from_tonic(code: ::tonic::Code) -> Code {
@@ -464,22 +475,97 @@ pub fn code_to_tonic(code: Code) -> ::tonic::Code {
 #[cfg(feature = "tonic")]
 impl From<::tonic::Status> for ConnectError {
     fn from(status: ::tonic::Status) -> Self {
-        let code = code_from_tonic(status.code());
-        let msg = status.message().to_string();
+        use ::prost::Message;
 
-        if msg.is_empty() {
-            ConnectError::from_code(code)
+        let rich_status = if status.details().is_empty() {
+            None
         } else {
-            ConnectError::new(code, msg)
+            GoogleRpcStatus::decode(status.details()).ok()
+        };
+
+        let mut err = if let Some(rich_status) = rich_status {
+            let code = code_from_tonic(::tonic::Code::from_i32(rich_status.code));
+            let mut err = if rich_status.message.is_empty() {
+                ConnectError::from_code(code)
+            } else {
+                ConnectError::new(code, rich_status.message)
+            };
+
+            for detail in rich_status.details {
+                err = err.add_detail(detail.type_url, detail.value.to_vec());
+            }
+            err
+        } else {
+            let code = code_from_tonic(status.code());
+            if status.message().is_empty() {
+                ConnectError::from_code(code)
+            } else {
+                ConnectError::new(code, status.message())
+            }
+        };
+
+        let mut metadata = HeaderMap::new();
+        for (name, value) in status.metadata().as_ref() {
+            if !is_protocol_header(name.as_str()) {
+                metadata.append(name.clone(), value.clone());
+            }
         }
+        if !metadata.is_empty() {
+            err.meta = Some(metadata);
+        }
+
+        err
     }
 }
 
 #[cfg(feature = "tonic")]
 impl From<ConnectError> for ::tonic::Status {
     fn from(err: ConnectError) -> Self {
+        use ::prost::Message;
+
         let code = code_to_tonic(err.code());
-        ::tonic::Status::new(code, err.message().unwrap_or("").to_string())
+        let message = err.message().unwrap_or("").to_owned();
+        let details = if err.details().is_empty() {
+            ::bytes::Bytes::new()
+        } else {
+            GoogleRpcStatus {
+                code: code as i32,
+                message: message.clone(),
+                details: err
+                    .details()
+                    .iter()
+                    .map(|detail| {
+                        let type_url = if detail.type_url().contains('/') {
+                            detail.type_url().to_owned()
+                        } else {
+                            format!("type.googleapis.com/{}", detail.type_url())
+                        };
+                        ::pbjson_types::Any {
+                            type_url,
+                            value: detail.value().to_vec().into(),
+                        }
+                    })
+                    .collect(),
+            }
+            .encode_to_vec()
+            .into()
+        };
+
+        let mut headers = HeaderMap::new();
+        if let Some(metadata) = err.meta() {
+            for (name, value) in metadata {
+                if !is_protocol_header(name.as_str()) {
+                    headers.append(name.clone(), value.clone());
+                }
+            }
+        }
+
+        ::tonic::Status::with_details_and_metadata(
+            code,
+            message,
+            details,
+            ::tonic::metadata::MetadataMap::from_headers(headers),
+        )
     }
 }
 
@@ -772,6 +858,103 @@ mod tests {
         assert_eq!(err.details().len(), 2);
         assert_eq!(err.details()[0].type_url(), "test.Type1");
         assert_eq!(err.details()[0].value(), &[1, 2, 3]);
+    }
+
+    #[cfg(feature = "tonic")]
+    #[test]
+    fn connect_error_to_tonic_status_preserves_metadata_and_rich_details() {
+        use ::prost::Message;
+
+        let err = ConnectError::new(Code::InvalidArgument, "invalid name")
+            .add_detail("example.v1.NameError", vec![1, 2, 3])
+            .with_meta("x-request-id", "req-123")
+            .with_meta("grpc-status", "13")
+            .with_meta("connect-timeout-ms", "1000");
+
+        let status = ::tonic::Status::from(err);
+
+        assert_eq!(status.code(), ::tonic::Code::InvalidArgument);
+        assert_eq!(status.message(), "invalid name");
+        assert_eq!(status.metadata().get("x-request-id").unwrap(), "req-123");
+        assert!(status.metadata().get("grpc-status").is_none());
+        assert!(status.metadata().get("connect-timeout-ms").is_none());
+
+        let rich_status = GoogleRpcStatus::decode(status.details()).unwrap();
+        assert_eq!(rich_status.code, ::tonic::Code::InvalidArgument as i32);
+        assert_eq!(rich_status.message, "invalid name");
+        assert_eq!(rich_status.details.len(), 1);
+        assert_eq!(
+            rich_status.details[0].type_url,
+            "type.googleapis.com/example.v1.NameError"
+        );
+        assert_eq!(rich_status.details[0].value.as_ref(), &[1, 2, 3]);
+    }
+
+    #[cfg(feature = "tonic")]
+    #[test]
+    fn tonic_status_to_connect_error_preserves_metadata_and_rich_details() {
+        use ::prost::Message;
+
+        let rich_status = GoogleRpcStatus {
+            code: ::tonic::Code::PermissionDenied as i32,
+            message: "access denied".to_owned(),
+            details: vec![
+                ::pbjson_types::Any {
+                    type_url: "type.googleapis.com/example.v1.AccessError".to_owned(),
+                    value: vec![4, 5, 6].into(),
+                },
+                ::pbjson_types::Any {
+                    type_url: "errors.example.net/example.v1.PolicyError".to_owned(),
+                    value: vec![7, 8].into(),
+                },
+            ],
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("x-request-id", HeaderValue::from_static("req-456"));
+        headers.insert("grpc-status", HeaderValue::from_static("13"));
+        headers.insert("content-type", HeaderValue::from_static("application/grpc"));
+        let status = ::tonic::Status::with_details_and_metadata(
+            ::tonic::Code::Unknown,
+            "outer status",
+            rich_status.encode_to_vec().into(),
+            ::tonic::metadata::MetadataMap::from_headers(headers),
+        );
+
+        let err = ConnectError::from(status);
+
+        assert_eq!(err.code(), Code::PermissionDenied);
+        assert_eq!(err.message(), Some("access denied"));
+        assert_eq!(err.details().len(), 2);
+        assert_eq!(
+            err.details()[0].type_url(),
+            "type.googleapis.com/example.v1.AccessError"
+        );
+        assert_eq!(err.details()[0].value(), &[4, 5, 6]);
+        assert_eq!(
+            err.details()[1].type_url(),
+            "errors.example.net/example.v1.PolicyError"
+        );
+        assert_eq!(err.details()[1].value(), &[7, 8]);
+        let metadata = err.meta().unwrap();
+        assert_eq!(metadata.get("x-request-id").unwrap(), "req-456");
+        assert!(metadata.get("grpc-status").is_none());
+        assert!(metadata.get("content-type").is_none());
+    }
+
+    #[cfg(feature = "tonic")]
+    #[test]
+    fn malformed_tonic_details_fall_back_to_outer_status() {
+        let status = ::tonic::Status::with_details(
+            ::tonic::Code::DataLoss,
+            "broken response",
+            ::bytes::Bytes::from_static(b"not a google.rpc.Status"),
+        );
+
+        let err = ConnectError::from(status);
+
+        assert_eq!(err.code(), Code::DataLoss);
+        assert_eq!(err.message(), Some("broken response"));
+        assert!(err.details().is_empty());
     }
 
     #[test]
