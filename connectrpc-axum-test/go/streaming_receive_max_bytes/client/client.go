@@ -21,6 +21,7 @@ type testCase struct {
 
 var testCases = []testCase{
 	{"small streaming request succeeds", `{"name":"Alice"}`, true},
+	{"payload exactly at limit succeeds", `{"name":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}`, true},
 	{"large streaming request fails", `{"name":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}`, false},
 }
 

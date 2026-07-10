@@ -19,6 +19,11 @@ const TEST_CASES: &[TestCase] = &[
         expect_success: true,
     },
     TestCase {
+        name: "payload exactly at limit succeeds",
+        request_body: r#"{"name":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}"#,
+        expect_success: true,
+    },
+    TestCase {
         name: "large streaming request fails",
         request_body: r#"{"name":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}"#,
         expect_success: false,

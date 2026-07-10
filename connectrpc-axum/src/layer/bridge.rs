@@ -22,7 +22,8 @@ use crate::message::error::{Code, ConnectError};
 /// For streaming requests, sets `Accept-Encoding: identity` to prevent Tower
 /// from compressing the response (streaming uses per-envelope compression).
 ///
-/// Also enforces request body size limits on the compressed body (before decompression).
+/// Also enforces unary request body size limits on the compressed body before decompression.
+/// Streaming limits apply independently to each envelope.
 ///
 /// This is algorithm-agnostic and works with any compression layer inside.
 ///
@@ -55,7 +56,7 @@ impl BridgeLayer {
 
     /// Create a new BridgeLayer with the specified receive size limit.
     ///
-    /// This limits the compressed request body size (from `Content-Length` header).
+    /// This limits the compressed unary request body size (from `Content-Length` header).
     /// Requests exceeding this limit are rejected with `ResourceExhausted` error
     /// before decompression occurs.
     ///
@@ -111,8 +112,12 @@ where
     }
 
     fn call(&mut self, mut req: Request<Body>) -> Self::Future {
-        // Check Content-Length against receive_max_bytes limit
-        if let Some(max_size) = self.receive_max_bytes
+        let connect_streaming = is_connect_streaming(&req);
+
+        // Streaming Content-Length covers every envelope, while the configured
+        // receive limit applies to each message independently.
+        if !connect_streaming
+            && let Some(max_size) = self.receive_max_bytes
             && let Some(content_length) = get_content_length(&req)
             && content_length > max_size
         {
@@ -131,7 +136,7 @@ where
             });
         }
 
-        if is_connect_streaming(&req) {
+        if connect_streaming {
             // Streaming uses per-envelope compression via Connect-Content-Encoding/Connect-Accept-Encoding,
             // NOT HTTP body compression via Content-Encoding/Accept-Encoding.
             // Remove Content-Encoding to prevent Tower from decompressing the request body.
@@ -306,6 +311,22 @@ mod tests {
         let resp = svc.oneshot(req).await.unwrap();
         // ResourceExhausted maps to 429 Too Many Requests in Connect protocol
         assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn streaming_content_length_is_not_compared_to_per_message_limit() {
+        let svc = ServiceBuilder::new()
+            .layer(BridgeLayer::with_receive_limit(Some(64)))
+            .service_fn(echo_service);
+
+        let req = Request::builder()
+            .header(CONTENT_TYPE, "application/connect+json")
+            .header(CONTENT_LENGTH, "138")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = svc.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]
