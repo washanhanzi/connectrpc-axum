@@ -16,11 +16,20 @@ use rustls::ClientConfig;
 use tower_service::Service;
 
 use super::body::TransportBody;
-use super::connector::{build_https_connector, danger_accept_invalid_certs_config};
+use super::connector::{
+    build_http_connector, build_https_connector, danger_accept_invalid_certs_config,
+    default_tls_config,
+};
 use crate::ClientError;
 
-/// Type alias for the hyper client with HTTPS connector.
-type HyperClient = Client<HttpsConnector<HttpConnector>, TransportBody>;
+type HttpClient = Client<HttpConnector, TransportBody>;
+type HttpsClient = Client<HttpsConnector<HttpConnector>, TransportBody>;
+
+#[derive(Clone)]
+enum ConfiguredHyperClient {
+    Http(HttpClient),
+    Https(HttpsClient),
+}
 
 /// HTTP transport using hyper_util's legacy client.
 ///
@@ -42,7 +51,7 @@ type HyperClient = Client<HttpsConnector<HttpConnector>, TransportBody>;
 /// ```
 #[derive(Clone)]
 pub struct HyperTransport {
-    client: HyperClient,
+    client: ConfiguredHyperClient,
     /// Whether HTTP/2 only mode is enabled.
     http2_only: bool,
 }
@@ -71,10 +80,11 @@ impl HyperTransport {
         &self,
         request: http::Request<TransportBody>,
     ) -> Result<http::Response<Incoming>, ClientError> {
-        self.client
-            .request(request)
-            .await
-            .map_err(|e| ClientError::Transport(format!("request failed: {}", e)))
+        let response = match &self.client {
+            ConfiguredHyperClient::Http(client) => client.request(request).await,
+            ConfiguredHyperClient::Https(client) => client.request(request).await,
+        };
+        response.map_err(|e| ClientError::Transport(format!("request failed: {}", e)))
     }
 
     /// Check if this transport is configured for HTTP/2 only.
@@ -261,22 +271,12 @@ impl HyperTransportBuilder {
 
     /// Build the transport.
     ///
-    /// # Panics
-    ///
-    /// Panics if no custom TLS config is provided and TLS features are not enabled.
-    /// Either enable the `tls` feature or provide a custom config via `tls_config()`.
     pub fn build(self) -> Result<HyperTransport, ClientError> {
-        // Create TLS config
         let tls_config = if self.danger_accept_invalid_certs {
             Some(danger_accept_invalid_certs_config())
         } else {
-            self.tls_config
+            self.tls_config.or_else(default_tls_config)
         };
-
-        // Create HTTPS connector
-        // If tls_config is None, build_https_connector will use default config
-        // (if TLS features enabled) or panic with helpful message
-        let https_connector = build_https_connector(tls_config);
 
         // Create client builder
         let mut builder = Client::builder(TokioExecutor::new());
@@ -311,8 +311,12 @@ impl HyperTransportBuilder {
             builder.http2_keep_alive_timeout(timeout);
         }
 
-        // Build client
-        let client = builder.build(https_connector);
+        let client = match tls_config {
+            Some(config) => {
+                ConfiguredHyperClient::Https(builder.build(build_https_connector(Some(config))))
+            }
+            None => ConfiguredHyperClient::Http(builder.build(build_http_connector())),
+        };
 
         Ok(HyperTransport {
             client,
@@ -358,13 +362,8 @@ impl Service<http::Request<TransportBody>> for HyperTransport {
     }
 
     fn call(&mut self, req: http::Request<TransportBody>) -> Self::Future {
-        let client = self.client.clone();
-        Box::pin(async move {
-            client
-                .request(req)
-                .await
-                .map_err(|e| ClientError::Transport(format!("request failed: {}", e)))
-        })
+        let transport = self.clone();
+        Box::pin(async move { transport.request(req).await })
     }
 }
 
@@ -426,5 +425,23 @@ mod tests {
         let result = HyperTransportBuilder::new().http2_only(true).build();
         assert!(result.is_ok());
         assert!(result.unwrap().is_http2_only());
+    }
+
+    #[tokio::test]
+    async fn default_transport_sends_plain_http_request() {
+        let app = axum::Router::new().route("/", axum::routing::get(|| async { "ok" }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let transport = HyperTransportBuilder::new().build().unwrap();
+        let request = http::Request::get(format!("http://{address}/"))
+            .body(TransportBody::empty())
+            .unwrap();
+        let response = transport.request(request).await.unwrap();
+
+        assert_eq!(response.status(), http::StatusCode::OK);
     }
 }

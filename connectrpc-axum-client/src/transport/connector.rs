@@ -95,12 +95,19 @@ fn try_get_crypto_provider_builder()
 /// a feature-gated crypto provider or a user-installed global default.
 ///
 /// Returns `None` if no crypto provider is available.
-#[cfg(any(feature = "tls-native-roots", feature = "tls-webpki-roots"))]
 pub fn default_tls_config() -> Option<ClientConfig> {
-    let builder = try_get_crypto_provider_builder()?;
-    let roots = build_root_store();
+    #[cfg(any(feature = "tls-native-roots", feature = "tls-webpki-roots"))]
+    {
+        let builder = try_get_crypto_provider_builder()?;
+        let roots = build_root_store();
 
-    Some(builder.with_root_certificates(roots).with_no_client_auth())
+        Some(builder.with_root_certificates(roots).with_no_client_auth())
+    }
+
+    #[cfg(not(any(feature = "tls-native-roots", feature = "tls-webpki-roots")))]
+    {
+        None
+    }
 }
 
 /// Build the root certificate store from enabled features.
@@ -150,31 +157,13 @@ fn build_root_store() -> rustls::RootCertStore {
 pub fn build_https_connector(tls_config: Option<ClientConfig>) -> HttpsConnector<HttpConnector> {
     let config = match tls_config {
         Some(config) => config,
-        None => {
-            #[cfg(any(feature = "tls-native-roots", feature = "tls-webpki-roots"))]
-            {
-                default_tls_config().unwrap_or_else(|| {
-                    panic!(
-                        "HTTPS requires a crypto provider. Either:\n\
-                         - Enable `tls-ring` or `tls-aws-lc` feature, or\n\
-                         - Install a global crypto provider via `CryptoProvider::install_default()`\n\n\
-                         Example in Cargo.toml:\n\
-                         connectrpc-axum-client = {{ version = \"...\", features = [\"tls\"] }}"
-                    );
-                })
-            }
-
-            #[cfg(not(any(feature = "tls-native-roots", feature = "tls-webpki-roots")))]
-            {
-                panic!(
-                    "HTTPS requires TLS root certificates. Enable one of:\n\
-                     - `tls-native-roots` - use system certificates\n\
-                     - `tls-webpki-roots` - use bundled Mozilla certificates\n\n\
-                     Or enable `tls` feature for sensible defaults:\n\
-                     connectrpc-axum-client = {{ version = \"...\", features = [\"tls\"] }}"
-                );
-            }
-        }
+        None => default_tls_config().unwrap_or_else(|| {
+            panic!(
+                "HTTPS requires a crypto provider and root certificates. Enable the `tls` \
+                 feature, enable one provider and one roots feature, or provide a custom \
+                 ClientConfig."
+            );
+        }),
     };
 
     HttpsConnectorBuilder::new()
@@ -188,9 +177,7 @@ pub fn build_https_connector(tls_config: Option<ClientConfig>) -> HttpsConnector
 ///
 /// Use this for development/testing with `http://` URLs.
 pub fn build_http_connector() -> HttpConnector {
-    let mut connector = HttpConnector::new();
-    connector.enforce_http(false);
-    connector
+    HttpConnector::new()
 }
 
 // ============================================================================

@@ -53,6 +53,8 @@ pub use connector::{
     has_tls_support,
 };
 
+pub use connector::default_tls_config;
+
 // Feature-gated exports
 #[cfg(feature = "tls-ring")]
 pub use connector::RingProvider;
@@ -65,9 +67,6 @@ pub use connector::NativeRoots;
 
 #[cfg(feature = "tls-webpki-roots")]
 pub use connector::WebpkiRoots;
-
-#[cfg(any(feature = "tls-native-roots", feature = "tls-webpki-roots"))]
-pub use connector::default_tls_config;
 
 pub use hyper::{HyperTransport, HyperTransportBuilder};
 
