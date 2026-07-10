@@ -5,6 +5,7 @@
 
 use std::marker::PhantomData;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
@@ -14,6 +15,7 @@ use connectrpc_axum_core::{
 };
 
 use crate::ClientError;
+use crate::response::RequestStreamError;
 use futures::Stream;
 use prost::Message;
 use serde::Serialize;
@@ -76,6 +78,8 @@ pub struct FrameEncoder<S, T> {
     compression: CompressionConfig,
     /// Current encoder state.
     state: EncoderState,
+    /// Shared storage used to preserve request stream failures across Hyper.
+    request_error: Option<Arc<RequestStreamError>>,
     /// Type marker for the message type.
     _marker: PhantomData<T>,
 }
@@ -101,8 +105,17 @@ impl<S, T> FrameEncoder<S, T> {
             encoding,
             compression,
             state: EncoderState::Streaming,
+            request_error: None,
             _marker: PhantomData,
         }
+    }
+
+    pub(crate) fn with_request_error_capture(
+        mut self,
+        request_error: Arc<RequestStreamError>,
+    ) -> Self {
+        self.request_error = Some(request_error);
+        self
     }
 
     /// Get the compression encoding used by this encoder.
@@ -193,11 +206,17 @@ where
                                 Err(e) => {
                                     // On error, mark as done and return the error
                                     this.state = EncoderState::Done;
+                                    if let Some(ref request_error) = this.request_error {
+                                        request_error.store(e.clone());
+                                    }
                                     return Poll::Ready(Some(Err(e)));
                                 }
                             },
                             Err(e) => {
                                 this.state = EncoderState::Done;
+                                if let Some(ref request_error) = this.request_error {
+                                    request_error.store(e.clone());
+                                }
                                 return Poll::Ready(Some(Err(e)));
                             }
                         },

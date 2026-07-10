@@ -22,21 +22,21 @@ use super::streaming::Streaming;
 use super::types::Metadata;
 
 #[doc(hidden)]
-pub struct SendInterceptorError {
-    inner: Mutex<SendInterceptorErrorInner>,
+pub struct RequestStreamError {
+    inner: Mutex<RequestStreamErrorInner>,
 }
 
 #[derive(Default)]
-struct SendInterceptorErrorInner {
+struct RequestStreamErrorInner {
     error: Option<ClientError>,
     waker: Option<Waker>,
 }
 
-impl SendInterceptorError {
+impl RequestStreamError {
     #[doc(hidden)]
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            inner: Mutex::new(SendInterceptorErrorInner::default()),
+            inner: Mutex::new(RequestStreamErrorInner::default()),
         })
     }
 
@@ -74,25 +74,27 @@ impl SendInterceptorError {
     }
 }
 
-pub(crate) fn take_send_interceptor_error(
-    send_error: &Arc<SendInterceptorError>,
+pub(crate) fn take_request_stream_error(
+    request_error: &Arc<RequestStreamError>,
 ) -> Option<ClientError> {
-    send_error.take()
+    request_error.take()
 }
 
-fn take_optional_send_interceptor_error(
-    send_error: &Option<Arc<SendInterceptorError>>,
+fn take_optional_request_stream_error(
+    request_error: &Option<Arc<RequestStreamError>>,
 ) -> Option<ClientError> {
-    send_error.as_ref().and_then(|send_error| send_error.take())
+    request_error
+        .as_ref()
+        .and_then(|request_error| request_error.take())
 }
 
-fn take_or_register_optional_send_interceptor_error(
-    send_error: &Option<Arc<SendInterceptorError>>,
+fn take_or_register_optional_request_stream_error(
+    request_error: &Option<Arc<RequestStreamError>>,
     cx: &Context<'_>,
 ) -> Option<ClientError> {
-    send_error
+    request_error
         .as_ref()
-        .and_then(|send_error| send_error.take_or_register(cx))
+        .and_then(|request_error| request_error.take_or_register(cx))
 }
 
 /// A stream wrapper that intercepts incoming messages.
@@ -214,8 +216,8 @@ pub struct InterceptingSendStream<S, T, I> {
     stream_type: StreamType,
     /// Request headers (for context).
     request_headers: HeaderMap,
-    /// Shared send interceptor error storage.
-    send_error: Option<Arc<SendInterceptorError>>,
+    /// Shared request stream error storage.
+    request_error: Option<Arc<RequestStreamError>>,
     /// Whether an outbound interceptor error has aborted this stream.
     aborted: bool,
     /// Marker for message type.
@@ -241,14 +243,14 @@ impl<S, T, I> InterceptingSendStream<S, T, I> {
         )
     }
 
-    /// Create a new intercepting send stream that records send interceptor errors.
-    pub fn with_send_error_capture(
+    /// Create a new intercepting send stream that records request stream errors.
+    pub fn with_request_error_capture(
         inner: S,
         interceptor: I,
         procedure: String,
         stream_type: StreamType,
         request_headers: HeaderMap,
-        send_error: Arc<SendInterceptorError>,
+        request_error: Arc<RequestStreamError>,
     ) -> Self {
         Self::new_inner(
             inner,
@@ -256,7 +258,7 @@ impl<S, T, I> InterceptingSendStream<S, T, I> {
             procedure,
             stream_type,
             request_headers,
-            Some(send_error),
+            Some(request_error),
         )
     }
 
@@ -266,7 +268,7 @@ impl<S, T, I> InterceptingSendStream<S, T, I> {
         procedure: String,
         stream_type: StreamType,
         request_headers: HeaderMap,
-        send_error: Option<Arc<SendInterceptorError>>,
+        request_error: Option<Arc<RequestStreamError>>,
     ) -> Self {
         Self {
             inner,
@@ -274,7 +276,7 @@ impl<S, T, I> InterceptingSendStream<S, T, I> {
             procedure,
             stream_type,
             request_headers,
-            send_error,
+            request_error,
             aborted: false,
             _marker: PhantomData,
         }
@@ -312,8 +314,8 @@ where
                     Ok(()) => Poll::Ready(Some(Ok(msg))),
                     Err(e) => {
                         this.aborted = true;
-                        if let Some(ref send_error) = this.send_error {
-                            send_error.store(e.clone());
+                        if let Some(ref request_error) = this.request_error {
+                            request_error.store(e.clone());
                         }
                         Poll::Ready(Some(Err(e)))
                     }
@@ -350,8 +352,8 @@ pub struct InterceptingStreaming<S, T, I> {
     request_headers: HeaderMap,
     /// Response headers.
     response_headers: HeaderMap,
-    /// Shared send interceptor error storage.
-    send_error: Option<Arc<SendInterceptorError>>,
+    /// Shared request stream error storage.
+    request_error: Option<Arc<RequestStreamError>>,
     /// Marker for message type.
     _marker: PhantomData<T>,
 }
@@ -377,17 +379,17 @@ impl<S, T, I> InterceptingStreaming<S, T, I> {
         )
     }
 
-    /// Create a new intercepting streaming wrapper that can yield send interceptor errors.
+    /// Create a new intercepting streaming wrapper that can yield request stream errors.
     ///
     /// Captured send errors are yielded before buffered received messages.
-    pub fn with_send_error_capture(
+    pub fn with_request_error_capture(
         inner: Streaming<S>,
         interceptor: I,
         procedure: String,
         stream_type: StreamType,
         request_headers: HeaderMap,
         response_headers: HeaderMap,
-        send_error: Arc<SendInterceptorError>,
+        request_error: Arc<RequestStreamError>,
     ) -> Self {
         Self::new_inner(
             inner,
@@ -396,7 +398,7 @@ impl<S, T, I> InterceptingStreaming<S, T, I> {
             stream_type,
             request_headers,
             response_headers,
-            Some(send_error),
+            Some(request_error),
         )
     }
 
@@ -407,7 +409,7 @@ impl<S, T, I> InterceptingStreaming<S, T, I> {
         stream_type: StreamType,
         request_headers: HeaderMap,
         response_headers: HeaderMap,
-        send_error: Option<Arc<SendInterceptorError>>,
+        request_error: Option<Arc<RequestStreamError>>,
     ) -> Self {
         Self {
             inner,
@@ -416,7 +418,7 @@ impl<S, T, I> InterceptingStreaming<S, T, I> {
             stream_type,
             request_headers,
             response_headers,
-            send_error,
+            request_error,
             _marker: PhantomData,
         }
     }
@@ -480,13 +482,13 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
 
-        if let Some(e) = take_optional_send_interceptor_error(&this.send_error) {
+        if let Some(e) = take_optional_request_stream_error(&this.request_error) {
             return Poll::Ready(Some(Err(e)));
         }
 
         match Pin::new(&mut this.inner).poll_next(cx) {
             Poll::Ready(Some(Ok(mut msg))) => {
-                if let Some(e) = take_optional_send_interceptor_error(&this.send_error) {
+                if let Some(e) = take_optional_request_stream_error(&this.request_error) {
                     return Poll::Ready(Some(Err(e)));
                 }
 
@@ -505,25 +507,26 @@ where
                 }
             }
             Poll::Ready(Some(Err(e))) => {
-                if let Some(send_error) = take_optional_send_interceptor_error(&this.send_error) {
+                if let Some(request_error) = take_optional_request_stream_error(&this.request_error)
+                {
                     #[cfg(feature = "tracing")]
                     tracing::debug!(
                         procedure = this.procedure.as_str(),
                         receive_error = %&e,
-                        send_interceptor_error = %&send_error,
-                        "receive stream error suppressed by send interceptor error"
+                        request_stream_error = %&request_error,
+                        "receive stream error suppressed by request stream error"
                     );
 
-                    Poll::Ready(Some(Err(send_error)))
+                    Poll::Ready(Some(Err(request_error)))
                 } else {
                     Poll::Ready(Some(Err(e)))
                 }
             }
             Poll::Ready(None) => {
                 // Only an already-captured send error can replace stream completion. If a bidi
-                // send failure is discovered after this returns None, there is no receive poll left
+                // request stream failure is discovered after this returns None, there is no receive poll left
                 // to observe it.
-                if let Some(e) = take_optional_send_interceptor_error(&this.send_error) {
+                if let Some(e) = take_optional_request_stream_error(&this.request_error) {
                     Poll::Ready(Some(Err(e)))
                 } else {
                     Poll::Ready(None)
@@ -531,7 +534,7 @@ where
             }
             Poll::Pending => {
                 if let Some(e) =
-                    take_or_register_optional_send_interceptor_error(&this.send_error, cx)
+                    take_or_register_optional_request_stream_error(&this.request_error, cx)
                 {
                     Poll::Ready(Some(Err(e)))
                 } else {
@@ -554,7 +557,7 @@ where
 ///
 /// This is the typed counterpart of [`InterceptingSendStream`], used by generated
 /// clients. On the first interceptor error the stream records the error in the
-/// shared [`SendInterceptorError`] slot, yields the error once, and then ends.
+/// shared [`RequestStreamError`] slot, yields the error once, and then ends.
 /// The yielded error aborts the HTTP request body (the server sees a broken
 /// request, not a clean end-of-stream), and the recorded error takes precedence
 /// over any transport or server error observed afterwards.
@@ -569,21 +572,21 @@ pub struct TypedSendStream<S, T> {
     stream_type: StreamType,
     /// Request headers (for context).
     request_headers: HeaderMap,
-    /// Shared send interceptor error storage.
-    send_error: Option<Arc<SendInterceptorError>>,
+    /// Shared request stream error storage.
+    request_error: Option<Arc<RequestStreamError>>,
     /// Whether an outbound interceptor error has aborted this stream.
     aborted: bool,
 }
 
 impl<S, T> TypedSendStream<S, T> {
-    /// Create a new typed send stream that records send interceptor errors.
-    pub fn with_send_error_capture(
+    /// Create a new typed send stream that records request stream errors.
+    pub fn with_request_error_capture(
         inner: S,
         interceptor: Option<Arc<dyn for<'a> TypedInterceptor<StreamContext<'a>, T>>>,
         procedure: String,
         stream_type: StreamType,
         request_headers: HeaderMap,
-        send_error: Arc<SendInterceptorError>,
+        request_error: Arc<RequestStreamError>,
     ) -> Self {
         Self {
             inner,
@@ -591,7 +594,7 @@ impl<S, T> TypedSendStream<S, T> {
             procedure,
             stream_type,
             request_headers,
-            send_error: Some(send_error),
+            request_error: Some(request_error),
             aborted: false,
         }
     }
@@ -628,8 +631,8 @@ where
                         Ok(()) => Poll::Ready(Some(Ok(msg))),
                         Err(e) => {
                             this.aborted = true;
-                            if let Some(ref send_error) = this.send_error {
-                                send_error.store(e.clone());
+                            if let Some(ref request_error) = this.request_error {
+                                request_error.store(e.clone());
                             }
                             Poll::Ready(Some(Err(e)))
                         }
@@ -665,8 +668,8 @@ pub struct TypedReceiveStreaming<S, T> {
     request_headers: HeaderMap,
     /// Response headers.
     response_headers: HeaderMap,
-    /// Shared send interceptor error storage.
-    send_error: Option<Arc<SendInterceptorError>>,
+    /// Shared request stream error storage.
+    request_error: Option<Arc<RequestStreamError>>,
 }
 
 impl<S, T> TypedReceiveStreaming<S, T> {
@@ -690,17 +693,17 @@ impl<S, T> TypedReceiveStreaming<S, T> {
         )
     }
 
-    /// Create a new typed receive stream that can yield send interceptor errors.
+    /// Create a new typed receive stream that can yield request stream errors.
     ///
     /// Captured send errors are yielded before buffered received messages.
-    pub fn with_send_error_capture(
+    pub fn with_request_error_capture(
         inner: Streaming<S>,
         interceptor: Option<Arc<dyn for<'a> TypedInterceptor<StreamContext<'a>, T>>>,
         procedure: String,
         stream_type: StreamType,
         request_headers: HeaderMap,
         response_headers: HeaderMap,
-        send_error: Arc<SendInterceptorError>,
+        request_error: Arc<RequestStreamError>,
     ) -> Self {
         Self::new_inner(
             inner,
@@ -709,7 +712,7 @@ impl<S, T> TypedReceiveStreaming<S, T> {
             stream_type,
             request_headers,
             response_headers,
-            Some(send_error),
+            Some(request_error),
         )
     }
 
@@ -720,7 +723,7 @@ impl<S, T> TypedReceiveStreaming<S, T> {
         stream_type: StreamType,
         request_headers: HeaderMap,
         response_headers: HeaderMap,
-        send_error: Option<Arc<SendInterceptorError>>,
+        request_error: Option<Arc<RequestStreamError>>,
     ) -> Self {
         Self {
             inner,
@@ -729,7 +732,7 @@ impl<S, T> TypedReceiveStreaming<S, T> {
             stream_type,
             request_headers,
             response_headers,
-            send_error,
+            request_error,
         }
     }
 }
@@ -778,13 +781,13 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
 
-        if let Some(e) = take_optional_send_interceptor_error(&this.send_error) {
+        if let Some(e) = take_optional_request_stream_error(&this.request_error) {
             return Poll::Ready(Some(Err(e)));
         }
 
         match Pin::new(&mut this.inner).poll_next(cx) {
             Poll::Ready(Some(Ok(mut msg))) => {
-                if let Some(e) = take_optional_send_interceptor_error(&this.send_error) {
+                if let Some(e) = take_optional_request_stream_error(&this.request_error) {
                     return Poll::Ready(Some(Err(e)));
                 }
 
@@ -806,25 +809,26 @@ where
                 }
             }
             Poll::Ready(Some(Err(e))) => {
-                if let Some(send_error) = take_optional_send_interceptor_error(&this.send_error) {
+                if let Some(request_error) = take_optional_request_stream_error(&this.request_error)
+                {
                     #[cfg(feature = "tracing")]
                     tracing::debug!(
                         procedure = this.procedure.as_str(),
                         receive_error = %&e,
-                        send_interceptor_error = %&send_error,
-                        "receive stream error suppressed by send interceptor error"
+                        request_stream_error = %&request_error,
+                        "receive stream error suppressed by request stream error"
                     );
 
-                    Poll::Ready(Some(Err(send_error)))
+                    Poll::Ready(Some(Err(request_error)))
                 } else {
                     Poll::Ready(Some(Err(e)))
                 }
             }
             Poll::Ready(None) => {
                 // Only an already-captured send error can replace stream completion. If a bidi
-                // send failure is discovered after this returns None, there is no receive poll left
+                // request stream failure is discovered after this returns None, there is no receive poll left
                 // to observe it.
-                if let Some(e) = take_optional_send_interceptor_error(&this.send_error) {
+                if let Some(e) = take_optional_request_stream_error(&this.request_error) {
                     Poll::Ready(Some(Err(e)))
                 } else {
                     Poll::Ready(None)
@@ -832,7 +836,7 @@ where
             }
             Poll::Pending => {
                 if let Some(e) =
-                    take_or_register_optional_send_interceptor_error(&this.send_error, cx)
+                    take_or_register_optional_request_stream_error(&this.request_error, cx)
                 {
                     Poll::Ready(Some(Err(e)))
                 } else {
@@ -942,7 +946,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_interceptor_error_is_returned_and_recorded() {
-        let send_error = SendInterceptorError::new();
+        let request_error = RequestStreamError::new();
         let messages = stream::iter(vec![
             TestMessage {
                 value: "one".to_string(),
@@ -951,19 +955,19 @@ mod tests {
                 value: "two".to_string(),
             },
         ]);
-        let mut stream = InterceptingSendStream::with_send_error_capture(
+        let mut stream = InterceptingSendStream::with_request_error_capture(
             messages,
             MessageWrapper(FailingSendInterceptor),
             "test.Service/ClientStream".to_string(),
             StreamType::ClientStream,
             HeaderMap::new(),
-            send_error.clone(),
+            request_error.clone(),
         );
 
         let err = stream.next().await.unwrap().unwrap_err();
         assert_eq!(err.message(), Some("send blocked"));
 
-        let recorded = take_send_interceptor_error(&send_error).unwrap();
+        let recorded = take_request_stream_error(&request_error).unwrap();
         assert_eq!(recorded.message(), Some("send blocked"));
 
         assert!(stream.next().await.is_none());
@@ -971,16 +975,16 @@ mod tests {
 
     #[test]
     fn test_send_interceptor_error_wakes_pending_receive_stream() {
-        let send_error = SendInterceptorError::new();
+        let request_error = RequestStreamError::new();
         let streaming = Streaming::new(stream::pending::<Result<TestMessage, ClientError>>());
-        let mut stream = TypedReceiveStreaming::with_send_error_capture(
+        let mut stream = TypedReceiveStreaming::with_request_error_capture(
             streaming,
             None,
             "test.Service/BidiStream".to_string(),
             StreamType::BidiStream,
             HeaderMap::new(),
             HeaderMap::new(),
-            send_error.clone(),
+            request_error.clone(),
         );
         let wake_counter = Arc::new(WakeCounter::default());
         let waker = waker_ref(&wake_counter);
@@ -991,14 +995,14 @@ mod tests {
             Poll::Pending
         ));
 
-        send_error.store(ClientError::invalid_argument("send blocked"));
+        request_error.store(ClientError::invalid_argument("send blocked"));
 
         assert_eq!(wake_counter.count.load(Ordering::SeqCst), 1);
         match Pin::new(&mut stream).poll_next(&mut cx) {
             Poll::Ready(Some(Err(e))) => {
                 assert_eq!(e.message(), Some("send blocked"));
             }
-            other => panic!("expected send interceptor error, got {other:?}"),
+            other => panic!("expected request stream error, got {other:?}"),
         }
     }
 }

@@ -17,9 +17,9 @@ mod types;
 pub use decoder::FrameDecoder;
 #[allow(deprecated)]
 pub use intercepting::InterceptingStream;
-pub(crate) use intercepting::take_send_interceptor_error;
+pub(crate) use intercepting::take_request_stream_error;
 pub use intercepting::{
-    InterceptingSendStream, InterceptingStreaming, SendInterceptorError, TypedReceiveStreaming,
+    InterceptingSendStream, InterceptingStreaming, RequestStreamError, TypedReceiveStreaming,
     TypedSendStream,
 };
 pub use streaming::Streaming;

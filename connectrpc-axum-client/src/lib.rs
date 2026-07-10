@@ -579,7 +579,7 @@ pub use request::FrameEncoder;
 pub use response::InterceptingStream;
 pub use response::{
     ConnectResponse, FrameDecoder, InterceptingSendStream, InterceptingStreaming, Metadata,
-    SendInterceptorError, Streaming, TypedReceiveStreaming, TypedSendStream,
+    RequestStreamError, Streaming, TypedReceiveStreaming, TypedSendStream,
 };
 
 // Re-export transport types at the top level for convenience

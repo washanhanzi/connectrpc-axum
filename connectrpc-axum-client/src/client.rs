@@ -30,7 +30,7 @@ use crate::request::FrameEncoder;
 use crate::response::error_parser::parse_error_response;
 use crate::response::{
     ConnectResponse, FrameDecoder, InterceptingSendStream, InterceptingStreaming, Metadata,
-    SendInterceptorError, Streaming, take_send_interceptor_error,
+    RequestStreamError, Streaming, take_request_stream_error,
 };
 
 /// A raw streaming RPC response: the decoded response stream (a [`FrameDecoder`]
@@ -967,14 +967,14 @@ impl<I: InterceptorInternal> ConnectClient<I> {
 
             // Wrap request stream with InterceptingSendStream for per-message interception
             // Client-streaming awaits the unary response, so captured send errors are checked before return.
-            let send_error = SendInterceptorError::new();
-            let intercepting_stream = InterceptingSendStream::with_send_error_capture(
+            let request_error = RequestStreamError::new();
+            let intercepting_stream = InterceptingSendStream::with_request_error_capture(
                 request,
                 self.interceptor.clone(),
                 procedure.to_string(),
                 StreamType::ClientStream,
                 headers.clone(),
-                send_error.clone(),
+                request_error.clone(),
             );
 
             self.call_client_stream_fallible_with_headers(
@@ -982,7 +982,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                 intercepting_stream,
                 options,
                 headers,
-                send_error,
+                request_error,
             )
             .await
         })
@@ -993,7 +993,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
     /// Used by generated clients whose typed `on_send` interceptors can fail.
     /// An `Err` item from `request` aborts the HTTP request body mid-stream
     /// (the server sees a broken request, not a clean end-of-stream). The error
-    /// recorded in `send_error` takes precedence over any transport or server
+    /// recorded in `request_error` takes precedence over any transport or server
     /// error on every return path, including a successful response.
     #[doc(hidden)]
     pub async fn call_client_stream_fallible_with_options<Req, Res, S>(
@@ -1001,7 +1001,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         procedure: &str,
         request: S,
         options: CallOptions,
-        send_error: Arc<SendInterceptorError>,
+        request_error: Arc<RequestStreamError>,
     ) -> Result<ConnectResponse<Res>, ClientError>
     where
         Req: Message + Serialize + 'static,
@@ -1019,7 +1019,11 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             }
 
             self.call_client_stream_fallible_with_headers(
-                procedure, request, options, headers, send_error,
+                procedure,
+                request,
+                options,
+                headers,
+                request_error,
             )
             .await
         })
@@ -1031,7 +1035,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         request: S,
         options: CallOptions,
         headers: http::HeaderMap,
-        send_error: Arc<SendInterceptorError>,
+        request_error: Arc<RequestStreamError>,
     ) -> Result<ConnectResponse<Res>, ClientError>
     where
         Req: Message + Serialize + 'static,
@@ -1045,7 +1049,8 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             self.use_proto,
             self.request_encoding,
             self.compression,
-        );
+        )
+        .with_request_error_capture(request_error.clone());
 
         let body = TransportBody::streaming(encoder);
 
@@ -1065,15 +1070,15 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             let response = match self.transport.request(req).await {
                 Ok(response) => response,
                 Err(e) => {
-                    if let Some(send_error) = take_send_interceptor_error(&send_error) {
-                        return Err(send_error);
+                    if let Some(request_error) = take_request_stream_error(&request_error) {
+                        return Err(request_error);
                     }
                     return Err(e);
                 }
             };
 
-            if let Some(send_error) = take_send_interceptor_error(&send_error) {
-                return Err(send_error);
+            if let Some(request_error) = take_request_stream_error(&request_error) {
+                return Err(request_error);
             }
 
             let status = response.status();
@@ -1087,10 +1092,10 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                 )
                 .await;
                 // The transport may still be polling the request body while the
-                // error body is collected, so a send interceptor error can be
+                // error body is collected, so a request stream error can be
                 // recorded after the check above.
-                if let Some(send_error) = take_send_interceptor_error(&send_error) {
-                    return Err(send_error);
+                if let Some(request_error) = take_request_stream_error(&request_error) {
+                    return Err(request_error);
                 }
                 return Err(match body_result? {
                     LimitedBody::Complete(body_bytes) => decompress_and_parse_error(
@@ -1125,14 +1130,14 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             let message = match decoder.next().await {
                 Some(Ok(msg)) => msg,
                 Some(Err(e)) => {
-                    if let Some(send_error) = take_send_interceptor_error(&send_error) {
-                        return Err(send_error);
+                    if let Some(request_error) = take_request_stream_error(&request_error) {
+                        return Err(request_error);
                     }
                     return Err(e);
                 }
                 None => {
-                    if let Some(send_error) = take_send_interceptor_error(&send_error) {
-                        return Err(send_error);
+                    if let Some(request_error) = take_request_stream_error(&request_error) {
+                        return Err(request_error);
                     }
                     return Err(ClientError::Protocol(
                         "expected response message but stream ended".to_string(),
@@ -1144,15 +1149,15 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             if let Some(result) = decoder.next().await {
                 match result {
                     Err(e) => {
-                        if let Some(send_error) = take_send_interceptor_error(&send_error) {
-                            return Err(send_error);
+                        if let Some(request_error) = take_request_stream_error(&request_error) {
+                            return Err(request_error);
                         }
                         // EndStream contained an error - propagate it
                         return Err(e);
                     }
                     Ok(_) => {
-                        if let Some(send_error) = take_send_interceptor_error(&send_error) {
-                            return Err(send_error);
+                        if let Some(request_error) = take_request_stream_error(&request_error) {
+                            return Err(request_error);
                         }
                         // Protocol violation: got another message after the response
                         return Err(ClientError::new(
@@ -1163,8 +1168,8 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                 }
             }
 
-            if let Some(send_error) = take_send_interceptor_error(&send_error) {
-                return Err(send_error);
+            if let Some(request_error) = take_request_stream_error(&request_error) {
+                return Err(request_error);
             }
 
             Ok::<_, ClientError>((message, response_headers))
@@ -1173,10 +1178,10 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             Some(t) => match timeout(t, call).await {
                 Ok(result) => result?,
                 Err(_) => {
-                    // A send interceptor error still takes precedence over
+                    // A request stream error still takes precedence over
                     // the client-side timeout.
-                    if let Some(send_error) = take_send_interceptor_error(&send_error) {
-                        return Err(send_error);
+                    if let Some(request_error) = take_request_stream_error(&request_error) {
+                        return Err(request_error);
                     }
                     return Err(ClientError::new(
                         Code::DeadlineExceeded,
@@ -1354,14 +1359,14 @@ impl<I: InterceptorInternal> ConnectClient<I> {
 
             // Wrap request stream with InterceptingSendStream for per-message interception
             // Bidi returns a receive stream, so captured send errors also wake pending receive polls.
-            let send_error = SendInterceptorError::new();
-            let intercepting_stream = InterceptingSendStream::with_send_error_capture(
+            let request_error = RequestStreamError::new();
+            let intercepting_stream = InterceptingSendStream::with_request_error_capture(
                 request,
                 self.interceptor.clone(),
                 procedure.to_string(),
                 StreamType::BidiStream,
                 headers.clone(),
-                send_error.clone(),
+                request_error.clone(),
             );
 
             let response = self
@@ -1370,20 +1375,20 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                     intercepting_stream,
                     options,
                     headers.clone(),
-                    send_error.clone(),
+                    request_error.clone(),
                 )
                 .await?;
             let response_headers = response.metadata().headers().clone();
 
             Ok(response.map(|stream_body| {
-                InterceptingStreaming::with_send_error_capture(
+                InterceptingStreaming::with_request_error_capture(
                     stream_body,
                     self.interceptor.clone(),
                     procedure.to_string(),
                     StreamType::BidiStream,
                     headers,
                     response_headers,
-                    send_error,
+                    request_error,
                 )
             }))
         })
@@ -1394,16 +1399,16 @@ impl<I: InterceptorInternal> ConnectClient<I> {
     /// Used by generated clients whose typed `on_send` interceptors can fail.
     /// An `Err` item from `request` aborts the HTTP request body mid-stream
     /// (the server sees a broken request, not a clean end-of-stream). The error
-    /// recorded in `send_error` takes precedence over transport and call-start
+    /// recorded in `request_error` takes precedence over transport and call-start
     /// errors; callers wrapping the returned stream should pass the same
-    /// `send_error` to a receive wrapper so it also wins over receive errors.
+    /// `request_error` to a receive wrapper so it also wins over receive errors.
     #[doc(hidden)]
     pub async fn call_bidi_stream_fallible_with_options<Req, Res, S>(
         &self,
         procedure: &str,
         request: S,
         options: CallOptions,
-        send_error: Arc<SendInterceptorError>,
+        request_error: Arc<RequestStreamError>,
     ) -> Result<
         RawStreamingResponse<
             impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin + use<'_, I, Req, Res, S>,
@@ -1427,7 +1432,11 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             }
 
             self.call_bidi_stream_fallible_with_headers(
-                procedure, request, options, headers, send_error,
+                procedure,
+                request,
+                options,
+                headers,
+                request_error,
             )
             .await
         })
@@ -1439,7 +1448,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         request: S,
         options: CallOptions,
         headers: http::HeaderMap,
-        send_error: Arc<SendInterceptorError>,
+        request_error: Arc<RequestStreamError>,
     ) -> Result<
         RawStreamingResponse<
             impl futures::Stream<Item = Result<Bytes, ClientError>> + Unpin + use<'_, I, Req, Res, S>,
@@ -1459,7 +1468,8 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             self.use_proto,
             self.request_encoding,
             self.compression,
-        );
+        )
+        .with_request_error_capture(request_error.clone());
 
         let body = TransportBody::streaming(encoder);
 
@@ -1489,15 +1499,15 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         let response = match response_result {
             Ok(response) => response,
             Err(e) => {
-                if let Some(send_error) = take_send_interceptor_error(&send_error) {
-                    return Err(send_error);
+                if let Some(request_error) = take_request_stream_error(&request_error) {
+                    return Err(request_error);
                 }
                 return Err(e);
             }
         };
 
-        if let Some(send_error) = take_send_interceptor_error(&send_error) {
-            return Err(send_error);
+        if let Some(request_error) = take_request_stream_error(&request_error) {
+            return Err(request_error);
         }
 
         let status = response.status();
@@ -1508,10 +1518,10 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                 collect_body_limited(response.into_body(), self.receive_max_bytes, "error body")
                     .await;
             // The transport may still be polling the request body while the
-            // error body is collected, so a send interceptor error can be
+            // error body is collected, so a request stream error can be
             // recorded after the check above.
-            if let Some(send_error) = take_send_interceptor_error(&send_error) {
-                return Err(send_error);
+            if let Some(request_error) = take_request_stream_error(&request_error) {
+                return Err(request_error);
             }
             return Err(match body_result? {
                 LimitedBody::Complete(body_bytes) => decompress_and_parse_error(
@@ -1835,6 +1845,52 @@ mod tests {
             }
         }
 
+        #[derive(Clone, Default, PartialEq)]
+        struct FailingJsonMessage {
+            fail: bool,
+        }
+
+        impl serde::Serialize for FailingJsonMessage {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                if self.fail {
+                    return Err(serde::ser::Error::custom("intentional JSON failure"));
+                }
+                serializer.serialize_unit_struct("FailingJsonMessage")
+            }
+        }
+
+        impl Message for FailingJsonMessage {
+            fn encode_raw(&self, _buf: &mut impl bytes::BufMut)
+            where
+                Self: Sized,
+            {
+            }
+
+            fn merge_field(
+                &mut self,
+                _tag: u32,
+                wire_type: prost::encoding::WireType,
+                buf: &mut impl bytes::Buf,
+                ctx: prost::encoding::DecodeContext,
+            ) -> Result<(), prost::DecodeError>
+            where
+                Self: Sized,
+            {
+                prost::encoding::skip_field(wire_type, _tag, buf, ctx)
+            }
+
+            fn encoded_len(&self) -> usize {
+                0
+            }
+
+            fn clear(&mut self) {
+                self.fail = false;
+            }
+        }
+
         /// Start an axum server on an ephemeral port; returns its base URL.
         async fn spawn_server(app: Router) -> String {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1843,6 +1899,70 @@ mod tests {
                 axum::serve(listener, app).await.unwrap();
             });
             format!("http://{}", addr)
+        }
+
+        #[tokio::test]
+        async fn bidi_preserves_encoding_error_after_response_headers() {
+            let app = Router::new().route(
+                "/test.Service/BidiStream",
+                post(|request: http::Request<axum::body::Body>| async move {
+                    tokio::spawn(async move {
+                        let mut body = request.into_body();
+                        while body.frame().await.is_some() {}
+                    });
+                    http::Response::builder()
+                        .status(http::StatusCode::OK)
+                        .header(header::CONTENT_TYPE, "application/connect+json")
+                        .body(axum::body::Body::from_stream(futures::stream::pending::<
+                            Result<Bytes, std::io::Error>,
+                        >()))
+                        .unwrap()
+                }),
+            );
+            let base_url = spawn_server(app).await;
+            let transport = crate::transport::HyperTransportBuilder::new()
+                .http2_only(true)
+                .build()
+                .unwrap();
+            let client = ConnectClient::builder(&base_url)
+                .with_transport(transport)
+                .build()
+                .unwrap();
+            let (sender, receiver) = tokio::sync::mpsc::channel(2);
+            tokio::spawn(async move {
+                sender
+                    .send(FailingJsonMessage { fail: false })
+                    .await
+                    .unwrap();
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                sender
+                    .send(FailingJsonMessage { fail: true })
+                    .await
+                    .unwrap();
+            });
+
+            let response = client
+                .call_bidi_stream::<FailingJsonMessage, TestMessage, _>(
+                    "test.Service/BidiStream",
+                    tokio_stream::wrappers::ReceiverStream::new(receiver),
+                )
+                .await
+                .unwrap();
+            let mut stream = response.into_inner();
+            let error = tokio::time::timeout(Duration::from_secs(1), stream.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err();
+
+            assert!(matches!(error, ClientError::Encode(_)));
+            assert!(
+                error
+                    .message()
+                    .unwrap()
+                    .contains("intentional JSON failure")
+            );
+            assert!(!error.is_retryable());
         }
 
         /// Build a Connect streaming envelope frame.

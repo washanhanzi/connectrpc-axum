@@ -31,6 +31,21 @@ enum ConfiguredHyperClient {
     Https(HttpsClient),
 }
 
+fn map_hyper_request_error(error: hyper_util::client::legacy::Error) -> ClientError {
+    let mut source: &(dyn std::error::Error + 'static) = &error;
+    loop {
+        if let Some(client_error) = source.downcast_ref::<ClientError>() {
+            return client_error.clone();
+        }
+        let Some(next) = source.source() else {
+            break;
+        };
+        source = next;
+    }
+
+    ClientError::Transport(format!("request failed: {error}"))
+}
+
 /// HTTP transport using hyper_util's legacy client.
 ///
 /// This transport provides full HTTP/1.1 and HTTP/2 support with TLS,
@@ -84,7 +99,7 @@ impl HyperTransport {
             ConfiguredHyperClient::Http(client) => client.request(request).await,
             ConfiguredHyperClient::Https(client) => client.request(request).await,
         };
-        response.map_err(|e| ClientError::Transport(format!("request failed: {}", e)))
+        response.map_err(map_hyper_request_error)
     }
 
     /// Check if this transport is configured for HTTP/2 only.
@@ -443,5 +458,30 @@ mod tests {
         let response = transport.request(request).await.unwrap();
 
         assert_eq!(response.status(), http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn request_body_error_preserves_client_error() {
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::post(|_body: bytes::Bytes| async { "unreachable" }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let transport = HyperTransportBuilder::new().build().unwrap();
+        let request = http::Request::post(format!("http://{address}/"))
+            .body(TransportBody::streaming(futures::stream::iter([Err(
+                ClientError::Encode("invalid request message".to_string()),
+            )])))
+            .unwrap();
+        let error = transport.request(request).await.unwrap_err();
+
+        assert!(matches!(error, ClientError::Encode(_)));
+        assert_eq!(error.message(), Some("invalid request message"));
+        assert!(!error.is_retryable());
     }
 }
