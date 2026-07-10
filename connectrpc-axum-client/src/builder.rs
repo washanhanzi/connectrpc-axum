@@ -198,12 +198,8 @@ impl<I: InterceptorInternal> ClientBuilder<I> {
     /// - **Server-side**: The `Connect-Timeout-Ms` header is sent, allowing the
     ///   server to cancel processing if the deadline will be exceeded
     ///
-    /// For unary and client-streaming RPCs, the timeout applies to the entire
-    /// call including connection, request, and response.
-    ///
-    /// For server-streaming and bidirectional RPCs, the timeout applies to the
-    /// initial connection and response establishment. Stream consumption is not
-    /// subject to this timeout (use [`Streaming::drain_timeout`] for that).
+    /// The timeout applies to the complete RPC lifecycle, including response
+    /// stream consumption for server-streaming and bidirectional calls.
     ///
     /// Individual calls can override this timeout using [`CallOptions::timeout`].
     ///

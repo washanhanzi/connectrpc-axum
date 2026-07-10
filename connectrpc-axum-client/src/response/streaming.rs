@@ -14,6 +14,7 @@
 //!
 //! [`CallOptions::timeout`]: crate::CallOptions::timeout
 
+use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -67,12 +68,23 @@ use super::types::Metadata;
 pub struct Streaming<S> {
     /// The underlying frame decoder.
     inner: S,
+    deadline: Option<Pin<Box<tokio::time::Sleep>>>,
+    deadline_error_returned: bool,
 }
 
 impl<S> Streaming<S> {
     /// Create a new Streaming wrapping the given stream.
     pub fn new(inner: S) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            deadline: None,
+            deadline_error_returned: false,
+        }
+    }
+
+    pub(crate) fn with_deadline(mut self, deadline: tokio::time::Instant) -> Self {
+        self.deadline = Some(Box::pin(tokio::time::sleep_until(deadline)));
+        self
     }
 
     /// Get a reference to the inner stream.
@@ -108,7 +120,7 @@ impl<S, T> Streaming<FrameDecoder<S, T>> {
 
     /// Check if the stream has finished.
     pub fn is_finished(&self) -> bool {
-        self.inner.is_finished()
+        self.deadline_error_returned || self.inner.is_finished()
     }
 }
 
@@ -161,7 +173,7 @@ where
     pub async fn drain(&mut self) -> usize {
         use futures::StreamExt;
         let mut count = 0;
-        while let Some(result) = self.inner.next().await {
+        while let Some(result) = self.next().await {
             if result.is_ok() {
                 count += 1;
             }
@@ -204,7 +216,7 @@ where
                     return Err(count);
                 }
 
-                item = self.inner.next() => {
+                item = self.next() => {
                     match item {
                         Some(Ok(_)) => count += 1,
                         Some(Err(_)) => {}
@@ -222,8 +234,30 @@ where
 {
     type Item = Result<T, ClientError>;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.inner).poll_next(cx)
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.deadline_error_returned {
+            return Poll::Ready(None);
+        }
+
+        let inner = Pin::new(&mut this.inner).poll_next(cx);
+        if matches!(inner, Poll::Ready(None)) {
+            return Poll::Ready(None);
+        }
+
+        if this
+            .deadline
+            .as_mut()
+            .is_some_and(|deadline| deadline.as_mut().poll(cx).is_ready())
+        {
+            this.deadline_error_returned = true;
+            return Poll::Ready(Some(Err(ClientError::new(
+                connectrpc_axum_core::Code::DeadlineExceeded,
+                "client timeout exceeded",
+            ))));
+        }
+
+        inner
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -414,5 +448,16 @@ mod tests {
 
         // Stream should be finished
         assert!(streaming.is_finished());
+    }
+
+    #[tokio::test]
+    async fn call_deadline_ends_pending_stream() {
+        let mut streaming = Streaming::new(stream::pending::<Result<TestMessage, ClientError>>())
+            .with_deadline(tokio::time::Instant::now() + std::time::Duration::from_millis(25));
+
+        let error = streaming.next().await.unwrap().unwrap_err();
+        assert_eq!(error.code(), connectrpc_axum_core::Code::DeadlineExceeded);
+        assert_eq!(error.message(), Some("client timeout exceeded"));
+        assert!(streaming.next().await.is_none());
     }
 }

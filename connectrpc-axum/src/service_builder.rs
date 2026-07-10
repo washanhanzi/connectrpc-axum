@@ -385,10 +385,9 @@ where
     /// This ensures the smaller timeout always wins, matching Connect-Go's timeout
     /// selection. On timeout, a Connect `deadline_exceeded` error is returned.
     ///
-    /// For server-streaming and bidirectional RPCs, this timeout covers request
-    /// handling until the HTTP response is produced. It does not bound the lazy
-    /// response body stream after that response is returned. If a streaming response
-    /// must stop at a deadline, enforce that deadline in the stream handler.
+    /// Handler execution and streaming response bodies share one absolute deadline.
+    /// If that deadline expires after streaming response headers are produced, the
+    /// response body ends with a Connect `deadline_exceeded` EndStream frame.
     ///
     /// # Examples
     ///

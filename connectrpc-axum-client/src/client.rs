@@ -5,7 +5,7 @@
 use bytes::Bytes;
 use http::{Method, Request, header};
 use http_body_util::BodyExt;
-use tokio::time::timeout;
+use tokio::time::{Instant, timeout, timeout_at};
 
 use connectrpc_axum_core::{
     Code, CompressionConfig, CompressionEncoding, DecompressError, wrap_envelope,
@@ -743,6 +743,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         rpc_call_span!(self, procedure, "server_stream", {
             // Build headers (before interceptors so they can modify them)
             let effective_timeout = options.timeout.or(self.default_timeout);
+            let deadline = effective_timeout.map(|duration| Instant::now() + duration);
             let mut headers = self.streaming_request_headers(&options, effective_timeout, false);
 
             // Apply interceptors to the headers and the request message.
@@ -783,11 +784,8 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             let request_headers = headers.clone();
             *req.headers_mut() = headers;
 
-            // Send request (with client-side timeout if configured; for
-            // server-streaming the timeout applies until the response
-            // headers arrive, not to stream consumption)
-            let response = if let Some(t) = effective_timeout {
-                timeout(t, self.transport.request(req))
+            let response = if let Some(deadline) = deadline {
+                timeout_at(deadline, self.transport.request(req))
                     .await
                     .map_err(|_| {
                         ClientError::new(Code::DeadlineExceeded, "client timeout exceeded")
@@ -801,12 +799,19 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             let response_headers = response.headers().clone();
 
             if status != http::StatusCode::OK {
-                let body = collect_body_limited(
+                let collect_body = collect_body_limited(
                     response.into_body(),
                     self.receive_max_bytes,
                     "error body",
-                )
-                .await?;
+                );
+                let body = match deadline {
+                    Some(deadline) => {
+                        timeout_at(deadline, collect_body).await.map_err(|_| {
+                            ClientError::new(Code::DeadlineExceeded, "client timeout exceeded")
+                        })??
+                    }
+                    None => collect_body.await?,
+                };
                 return Err(match body {
                     LimitedBody::Complete(body_bytes) => decompress_and_parse_error(
                         status,
@@ -841,7 +846,10 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                 .with_max_message_size(self.receive_max_bytes);
 
             // Wrap with Streaming
-            let stream_body = Streaming::new(decoder);
+            let stream_body = match deadline {
+                Some(deadline) => Streaming::new(decoder).with_deadline(deadline),
+                None => Streaming::new(decoder),
+            };
 
             // Wrap with InterceptingStreaming for per-message interception
             let intercepting_stream = InterceptingStreaming::new(
@@ -1461,6 +1469,8 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         Res: Message + DeserializeOwned + Default + 'static,
         S: Stream<Item = Result<Req, ClientError>> + Send + Unpin + 'static,
     {
+        let effective_timeout = options.timeout.or(self.default_timeout);
+        let deadline = effective_timeout.map(|duration| Instant::now() + duration);
         let url = format!("{}/{}", self.base_url, procedure);
 
         let encoder: FrameEncoder<_, Req> = FrameEncoder::new(
@@ -1481,12 +1491,8 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             .map_err(|e| ClientError::Protocol(format!("failed to build request: {}", e)))?;
         *req.headers_mut() = headers;
 
-        // Send request (with client-side timeout if configured; for bidi
-        // streaming the timeout applies until the response headers arrive,
-        // not to stream consumption)
-        let effective_timeout = options.timeout.or(self.default_timeout);
-        let response_result = if let Some(t) = effective_timeout {
-            match timeout(t, self.transport.request(req)).await {
+        let response_result = if let Some(deadline) = deadline {
+            match timeout_at(deadline, self.transport.request(req)).await {
                 Ok(result) => result,
                 Err(_) => Err(ClientError::new(
                     Code::DeadlineExceeded,
@@ -1514,9 +1520,14 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         let response_headers = response.headers().clone();
 
         if status != http::StatusCode::OK {
-            let body_result =
-                collect_body_limited(response.into_body(), self.receive_max_bytes, "error body")
-                    .await;
+            let collect_body =
+                collect_body_limited(response.into_body(), self.receive_max_bytes, "error body");
+            let body_result = match deadline {
+                Some(deadline) => timeout_at(deadline, collect_body).await.map_err(|_| {
+                    ClientError::new(Code::DeadlineExceeded, "client timeout exceeded")
+                })?,
+                None => collect_body.await,
+            };
             // The transport may still be polling the request body while the
             // error body is collected, so a request stream error can be
             // recorded after the check above.
@@ -1567,7 +1578,10 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         let decoder = FrameDecoder::new(byte_stream, self.use_proto, response_encoding)
             .with_max_message_size(self.receive_max_bytes);
 
-        let stream_body = Streaming::new(decoder);
+        let stream_body = match deadline {
+            Some(deadline) => Streaming::new(decoder).with_deadline(deadline),
+            None => Streaming::new(decoder),
+        };
 
         let metadata = Metadata::new(response_headers);
 
@@ -2316,6 +2330,33 @@ mod tests {
                 .await
                 .unwrap_err();
             assert_eq!(err.code(), Code::DeadlineExceeded);
+        }
+
+        #[tokio::test]
+        async fn server_stream_timeout_covers_response_body() {
+            let app = Router::new().route(
+                "/test.Service/ServerStream",
+                post(|| async { stalled_body_response("application/connect+json") }),
+            );
+            let base_url = spawn_server(app).await;
+            let client = ConnectClient::builder(&base_url)
+                .timeout(Duration::from_millis(100))
+                .build()
+                .unwrap();
+
+            let response = client
+                .call_server_stream::<TestMessage, TestMessage>(
+                    "test.Service/ServerStream",
+                    &TestMessage::default(),
+                )
+                .await
+                .unwrap();
+            let mut stream = response.into_inner();
+            let error = stream.next().await.unwrap().unwrap_err();
+
+            assert_eq!(error.code(), Code::DeadlineExceeded);
+            assert_eq!(error.message(), Some("client timeout exceeded"));
+            assert!(stream.next().await.is_none());
         }
 
         /// The client-streaming timeout covers reading the single response

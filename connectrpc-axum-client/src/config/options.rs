@@ -50,11 +50,8 @@ impl CallOptions {
     /// - **Server-side**: The `Connect-Timeout-Ms` header is sent, allowing the
     ///   server to cancel processing if the deadline will be exceeded
     ///
-    /// For unary and client-streaming RPCs, the timeout applies to the entire
-    /// call including connection, request, and response.
-    ///
-    /// For server-streaming and bidirectional RPCs, the timeout applies to the
-    /// initial connection and response establishment.
+    /// The timeout applies to the complete RPC lifecycle, including response
+    /// stream consumption for server-streaming and bidirectional calls.
     ///
     /// The maximum supported timeout is approximately 115 days (10 digit milliseconds).
     /// Larger values will be treated as no timeout.

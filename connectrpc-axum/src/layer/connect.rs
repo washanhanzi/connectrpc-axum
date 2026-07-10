@@ -8,15 +8,21 @@ use crate::context::protocol::{can_handle_content_type, can_handle_get_encoding,
 use crate::context::{
     CompressionConfig, ConnectContext, ConnectTimeout, MessageLimits, ServerConfig,
 };
-use crate::message::error::{Code, ConnectError};
-use axum::http::{Method, Request};
+use crate::message::error::{Code, ConnectError, build_end_stream_frame_with_limit};
+use axum::body::{Body, Bytes};
+use axum::http::{Method, Request, StatusCode, header};
 use axum::response::Response;
+use connectrpc_axum_core::{ENVELOPE_HEADER_SIZE, envelope_flags, parse_envelope_header};
+use futures::StreamExt;
+use http_body::Frame;
+use http_body_util::BodyStream;
 use std::time::Duration;
 use std::{
     future::Future,
     pin::Pin,
     task::{Context as TaskContext, Poll},
 };
+use tokio::time::{Instant, timeout_at};
 use tower::{Layer, Service, ServiceExt};
 
 /// Layer that wraps services with Connect protocol detection and message limits.
@@ -92,10 +98,9 @@ impl ConnectLayer {
     /// This ensures the smaller timeout always wins, matching Connect-Go's timeout
     /// selection. On timeout, a Connect `deadline_exceeded` error is returned.
     ///
-    /// For server-streaming and bidirectional RPCs, this timeout covers request
-    /// handling until the HTTP response is produced. It does not bound the lazy
-    /// response body stream after that response is returned. If a streaming response
-    /// must stop at a deadline, enforce that deadline in the stream handler.
+    /// Handler execution and streaming response bodies share one absolute deadline.
+    /// If that deadline expires after streaming response headers are produced, the
+    /// response body ends with a Connect `deadline_exceeded` EndStream frame.
     ///
     /// # Example
     ///
@@ -223,6 +228,7 @@ where
 
         // 3. Extract values needed for async block before moving context
         let timeout = request_ctx.timeout;
+        let deadline = timeout.map(|duration| Instant::now() + duration);
         let protocol = request_ctx.protocol;
         let send_max_bytes = request_ctx.limits.get_send_max_bytes();
 
@@ -237,23 +243,100 @@ where
         let inner = std::mem::replace(&mut self.inner, inner);
 
         Box::pin(async move {
-            // Apply timeout if configured
-            match timeout {
-                Some(duration) => {
-                    match tokio::time::timeout(duration, inner.oneshot(req)).await {
-                        Ok(result) => result,
-                        Err(_elapsed) => {
-                            // Timeout exceeded - return Connect deadline_exceeded error
-                            let err = ConnectError::new(
-                                Code::DeadlineExceeded,
-                                "request timeout exceeded",
-                            );
-                            Ok(err.into_response_with_send_limit(protocol, send_max_bytes))
+            let response = match deadline {
+                Some(deadline) => match timeout_at(deadline, inner.oneshot(req)).await {
+                    Ok(result) => result?,
+                    Err(_elapsed) => {
+                        let err =
+                            ConnectError::new(Code::DeadlineExceeded, "request timeout exceeded");
+                        return Ok(err.into_response_with_send_limit(protocol, send_max_bytes));
+                    }
+                },
+                None => inner.oneshot(req).await?,
+            };
+
+            let is_connect_streaming_response = response.status() == StatusCode::OK
+                && response
+                    .headers()
+                    .get(header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.split(';').next())
+                    .is_some_and(|value| {
+                        matches!(
+                            value.trim(),
+                            "application/connect+json" | "application/connect+proto"
+                        )
+                    });
+
+            let Some(deadline) = deadline.filter(|_| is_connect_streaming_response) else {
+                return Ok(response);
+            };
+
+            let (parts, body) = response.into_parts();
+            let deadline_error =
+                ConnectError::new(Code::DeadlineExceeded, "request timeout exceeded");
+            let deadline_frame = Bytes::from(build_end_stream_frame_with_limit(
+                Some(&deadline_error),
+                None,
+                send_max_bytes,
+            ));
+            let response_frames = async_stream::stream! {
+                let mut frames = BodyStream::new(body);
+                let sleep = tokio::time::sleep_until(deadline);
+                tokio::pin!(sleep);
+
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = &mut sleep => {
+                            yield Ok::<_, axum::Error>(Frame::data(deadline_frame));
+                            break;
+                        }
+                        frame = frames.next() => {
+                            let Some(frame) = frame else {
+                                break;
+                            };
+                            let body_error = frame.is_err();
+                            let contains_end_stream = frame
+                                .as_ref()
+                                .ok()
+                                .and_then(Frame::data_ref)
+                                .is_some_and(|data| {
+                                    let mut offset = 0;
+                                    while data.len().saturating_sub(offset) >= ENVELOPE_HEADER_SIZE {
+                                        let Ok((flags, length)) = parse_envelope_header(&data[offset..])
+                                        else {
+                                            return false;
+                                        };
+                                        let Some(frame_end) = offset
+                                            .checked_add(ENVELOPE_HEADER_SIZE)
+                                            .and_then(|payload_start| payload_start.checked_add(length as usize))
+                                        else {
+                                            return false;
+                                        };
+                                        if frame_end > data.len() {
+                                            return false;
+                                        }
+                                        if flags & envelope_flags::END_STREAM != 0 {
+                                            return true;
+                                        }
+                                        offset = frame_end;
+                                    }
+                                    false
+                                });
+                            yield frame;
+                            if body_error || contains_end_stream {
+                                break;
+                            }
                         }
                     }
                 }
-                None => inner.oneshot(req).await,
-            }
+            };
+
+            Ok(Response::from_parts(
+                parts,
+                Body::new(http_body_util::StreamBody::new(response_frames)),
+            ))
         })
     }
 }
@@ -261,8 +344,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::Body;
-    use axum::http::StatusCode;
+    use http_body_util::BodyExt;
 
     async fn ok_service(_req: Request<Body>) -> Result<Response, std::convert::Infallible> {
         Ok(Response::new(Body::empty()))
@@ -349,5 +431,65 @@ mod tests {
         let resp = svc.oneshot(connect_request(Some("0"))).await.unwrap();
         // DeadlineExceeded maps to HTTP 504 for unary
         assert_eq!(resp.status(), StatusCode::GATEWAY_TIMEOUT);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn streaming_response_body_uses_handler_deadline() {
+        async fn delayed_streaming_service(
+            _req: Request<Body>,
+        ) -> Result<Response, std::convert::Infallible> {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            Ok(Response::builder()
+                .header(header::CONTENT_TYPE, "application/connect+json")
+                .body(Body::from_stream(futures::stream::pending::<
+                    Result<Bytes, std::convert::Infallible>,
+                >()))
+                .unwrap())
+        }
+
+        let svc = tower::ServiceBuilder::new()
+            .layer(ConnectLayer::new())
+            .service_fn(delayed_streaming_service);
+        let started_at = Instant::now();
+        let response = svc.oneshot(connect_request(Some("5000"))).await.unwrap();
+        assert_eq!(started_at.elapsed(), Duration::from_secs(3));
+
+        let body = response.into_body().collect();
+        tokio::pin!(body);
+        assert!(futures::poll!(body.as_mut()).is_pending());
+        tokio::time::advance(Duration::from_millis(1999)).await;
+        assert!(futures::poll!(body.as_mut()).is_pending());
+        tokio::time::advance(Duration::from_millis(1)).await;
+
+        let body = body.await.unwrap().to_bytes();
+        assert_eq!(started_at.elapsed(), Duration::from_secs(5));
+        assert_eq!(body[0], envelope_flags::END_STREAM);
+        let payload_length = u32::from_be_bytes(body[1..5].try_into().unwrap()) as usize;
+        assert_eq!(body.len(), payload_length + 5);
+        let payload: serde_json::Value = serde_json::from_slice(&body[5..]).unwrap();
+        assert_eq!(payload["error"]["code"], "deadline_exceeded");
+        assert_eq!(payload["error"]["message"], "request timeout exceeded");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn completed_streaming_response_does_not_emit_deadline_error() {
+        async fn completed_streaming_service(
+            _req: Request<Body>,
+        ) -> Result<Response, std::convert::Infallible> {
+            let frame = build_end_stream_frame_with_limit(None, None, None);
+            Ok(Response::builder()
+                .header(header::CONTENT_TYPE, "application/connect+proto")
+                .body(Body::from(frame))
+                .unwrap())
+        }
+
+        let svc = tower::ServiceBuilder::new()
+            .layer(ConnectLayer::new())
+            .service_fn(completed_streaming_service);
+        let expected = build_end_stream_frame_with_limit(None, None, None);
+        let response = svc.oneshot(connect_request(Some("5000"))).await.unwrap();
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body.as_ref(), expected);
     }
 }

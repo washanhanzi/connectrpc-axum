@@ -41,11 +41,11 @@ MakeServiceBuilder::new()
 
 ## Implementation Details
 
-The timeout is applied via `ConnectLayer`, which wraps the handler future with `tokio::time::timeout`. When the timeout is exceeded, a proper Connect protocol `deadline_exceeded` error is returned.
+The timeout is applied via `ConnectLayer` using one absolute deadline for handler execution and response streaming. When the timeout is exceeded, a proper Connect protocol `deadline_exceeded` error is returned.
 
 ```rust
 // Simplified implementation
-match tokio::time::timeout(duration, handler.call(req)).await {
+match tokio::time::timeout_at(deadline, handler.call(req)).await {
     Ok(result) => result,
     Err(_elapsed) => ConnectError::new(Code::DeadlineExceeded, "request timeout exceeded"),
 }
@@ -53,16 +53,12 @@ match tokio::time::timeout(duration, handler.call(req)).await {
 
 ### Streaming RPCs
 
-The timeout applies only to handler execution, not to response body streaming. This means:
+The timeout covers the complete RPC lifecycle:
 
-- **Unary RPCs**: Timeout covers the entire request-response cycle
-- **Server-streaming RPCs**: Timeout covers handler execution until the response headers are sent; the stream body can continue indefinitely after
+- **Unary and client-streaming RPCs**: The request and single response must complete before the deadline.
+- **Server-streaming and bidirectional RPCs**: Handler execution and response stream consumption share the same deadline. If it expires after response headers are sent, the server emits a `deadline_exceeded` EndStream frame and stops the response body.
 
-This differs from connect-go's full lifecycle timeout but suits long-lived streaming scenarios where streams may intentionally run longer than typical request timeouts.
-
-::: warning
-If you need to enforce deadlines on streaming bodies, implement timeout logic within your stream handler.
-:::
+Clients enforce the same absolute deadline locally, so an unresponsive or non-conforming server cannot keep a response stream open indefinitely.
 
 ## Avoid Using Axum's TimeoutLayer Directly
 
