@@ -15,3 +15,20 @@ This project includes [Claude Code skills](https://docs.anthropic.com/en/docs/cl
 | `sync-docs` | Sync VitePress documentation with main branch changes. Compares origin/docs against local main, analyzes new commits, and updates relevant documentation files. |
 | `test` | Run the complete test suite including unit tests, doc tests, and integration tests. |
 | `tonic-client-reference` | Reference the local `tonic/` directory for gRPC client implementation patterns. |
+
+## Verification
+
+Run the same checks enforced by pull requests and release publishing:
+
+```bash
+cargo make ci
+```
+
+For faster formatting and Clippy feedback without tests:
+
+```bash
+cargo make ci-quick
+```
+
+The full CI task runs formatting, Clippy, workspace unit and documentation tests,
+trybuild signature tests, and the cross-implementation Rust/Go integration suite.

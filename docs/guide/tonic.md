@@ -8,13 +8,13 @@ Add the `tonic` feature to your dependencies:
 
 ```toml
 [dependencies]
-connectrpc-axum = { version = "*", features = ["tonic"] }
+connectrpc-axum = { version = "0.2.1", features = ["tonic"] }
 tonic = "0.14"
 futures = "0.3"
 tower = "0.5"
 
 [build-dependencies]
-connectrpc-axum-build = { version = "*", features = ["tonic"] }
+connectrpc-axum-build = { version = "0.2.1", features = ["tonic"] }
 ```
 
 ## Update build.rs
@@ -111,6 +111,13 @@ Requests are routed by `Content-Type` header:
 
 - `application/grpc*` → Tonic gRPC server (includes gRPC-Web)
 - Otherwise → Axum (Connect protocol)
+
+## Error Metadata and Details
+
+When `ConnectError` and `tonic::Status` are converted for dual-protocol handlers,
+the status code, message, non-protocol metadata, and rich `google.rpc.Status`
+details are preserved. This allows clients using either protocol to receive the
+same structured error details and application metadata.
 
 ## gRPC Compression
 

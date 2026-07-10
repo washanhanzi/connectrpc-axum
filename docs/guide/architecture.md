@@ -8,7 +8,7 @@ connectrpc-axum bridges the Connect protocol with Axum's handler model through m
 
 | Crate | Purpose |
 |-------|---------|
-| `connectrpc-axum` | Server runtime library - layers, extractors, response types |
+| `connectrpc-axum` | Server library - layers, extractors, response types |
 | `connectrpc-axum-client` | Client library - HTTP client, streaming, interceptors |
 | `connectrpc-axum-core` | Shared protocol types - compression, error codes, envelope framing |
 | `connectrpc-axum-build` | Build-time code generation from proto files |
@@ -24,7 +24,7 @@ The core modules in the client library:
 | `request.rs` | Request encoding, `FrameEncoder` for streaming |
 | `response.rs` | Response types, `Streaming<T>`, `FrameDecoder` |
 
-The core modules in the server runtime library:
+The core modules in the server library:
 
 | Module | Purpose |
 |--------|---------|
@@ -64,7 +64,7 @@ HTTP Response
 ```
 
 **BridgeLayer** (outermost) - see `layer/bridge.rs`:
-- Checks `Content-Length` against receive size limits (on compressed body)
+- Checks unary `Content-Length` against the receive limit before decompression
 - Detects Connect streaming requests (`application/connect+*`)
 - For streaming: prevents Tower compression by setting identity encoding
 
@@ -77,7 +77,7 @@ HTTP Response
 - Parses `Content-Type` to determine encoding (JSON/Protobuf)
 - Parses `?encoding=` query param for GET requests
 - Validates `Connect-Protocol-Version` header when required
-- Parses timeout from `Connect-Timeout-Ms` header
+- Parses `Connect-Timeout-Ms` and applies one absolute deadline to handler execution and response streaming
 - Builds `ConnectContext` and stores it in request extensions
 
 ### Compression Paths
@@ -102,9 +102,14 @@ Request → BridgeLayer (bypass Tower) → ConnectLayer → Handler
 ```
 - Uses `Connect-Accept-Encoding` / `Connect-Content-Encoding` headers
 - BridgeLayer sets `Accept-Encoding: identity` to prevent Tower from interfering
+- Receive limits apply to each decompressed message envelope, not the aggregate streaming `Content-Length`
 - Codec implementations (`GzipCodec`, `DeflateCodec`, `BrotliCodec`, `ZstdCodec`) live in `connectrpc-axum-core`'s `codec.rs`; `context/envelope_compression.rs` re-exports them and handles envelope-compression negotiation
 
-Envelope flags are treated as a bitfield (`COMPRESSED | END_STREAM`); frames with unknown flag bits are rejected. Streaming decompression is bounded by `receive_max_bytes` via `Codec::decompress_limited`, so a compressed envelope cannot expand past the configured limit (see `envelope.rs` and `codec.rs` in `connectrpc-axum-core`).
+Envelope flags are treated as a bitfield (`COMPRESSED | END_STREAM`); frames with unknown flag bits are rejected. Streaming decompression is bounded by `receive_max_bytes` via `Codec::decompress_limited`, so a compressed envelope cannot expand past the configured limit (see `envelope.rs` and `codec.rs` in `connectrpc-axum-core`). A client accepts an EndStream envelope only as the terminal frame and rejects bytes or transport errors after it.
+
+### Client Response Flow
+
+For successful calls, the client requires HTTP 200 and the response media type for the selected JSON or Protobuf mode before decoding the body. Server-streaming and bidirectional calls retain the same absolute deadline while the response stream is consumed. If it expires, the stream returns `deadline_exceeded` and then terminates.
 
 ### Code Structure
 
@@ -174,6 +179,8 @@ Handlers can include any types implementing `FromRequestParts` before the `Conne
 | Client streaming | `ConnectRequest<Streaming<Req>>` | `ConnectResponse<Resp>` |
 | Bidi streaming | `ConnectRequest<Streaming<Req>>` | `ConnectResponse<StreamBody<St>>` |
 
+Bidirectional streaming requires HTTP/2 or later. HTTP/1.x requests are rejected with HTTP 505 before the request body is read.
+
 See `handler.rs` for the implementation.
 
 ### Tonic-Compatible Handlers
@@ -198,6 +205,8 @@ One caveat: axum uses a trait for the factory layer, while we use closures. See 
 
 This allows generated code to work with user-provided trait implementations without knowing concrete types at compile time. See `tonic/handler.rs` for the boxed call types and factory traits.
 
+When Connect and gRPC handlers share error paths, conversion between `ConnectError` and `tonic::Status` preserves application metadata and `google.rpc.Status` details, including each `Any` type URL. Protocol-owned headers are filtered instead of being copied into application metadata.
+
 ### Multi-Stage Code Generation
 
 Code generation uses staged passes to avoid type duplication while keeping serde and tonic output aligned:
@@ -218,6 +227,8 @@ File descriptor set → pbjson_build → {package}.serde.rs
                                   → Appended into Pass 1 files
 ```
 
+This pass also covers proto files without a `package` declaration.
+
 **Pass 2: Tonic server (optional)**
 ```
 File descriptor set → tonic_build → Server traits/stubs
@@ -230,7 +241,7 @@ File descriptor set → tonic_build → Client stubs
                                   → Uses extern_path to reference Pass 1 types
 ```
 
-The key is `extern_path`: tonic passes don't regenerate message types, they reference Pass 1 output using the build crate's internal prost-compatible schema resolution. pbjson is a separate builder, so extern mappings for pbjson must be configured separately when needed (for example with `with_pbjson_config`).
+The key is `extern_path`: tonic passes don't regenerate message types, they reference Pass 1 output using the build crate's internal prost-compatible schema resolution. Well-known protobuf types are mapped to `pbjson_types` across Prost, pbjson, and tonic by default. Custom Prost extern mappings still need matching pbjson mappings through `with_pbjson_config`.
 
 See `CompileBuilder` in `connectrpc-axum-build` for the type-state pattern that enforces valid configurations at compile time.
 
@@ -346,5 +357,7 @@ Each `with_interceptor` or `with_message_interceptor` call wraps the interceptor
 
 For requests, interceptors run in the order added (first added = first to run).
 For responses, interceptors run in reverse order (middleware unwinding pattern).
+
+For streaming calls, header interceptors receive `on_response` once after the client accepts the response status and content type, even when the stream has no messages. Message interceptors still run per message, and `StreamContext` contains the finalized request headers sent on the wire together with the accepted response headers.
 
 See `config/interceptor.rs` for the implementation.

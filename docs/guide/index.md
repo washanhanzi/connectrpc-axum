@@ -16,7 +16,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-connectrpc-axum = "*"
+connectrpc-axum = "0.2.1"
 axum = "0.8"
 prost = "0.14"
 pbjson = "0.9"
@@ -26,18 +26,18 @@ tokio = { version = "1", features = ["full"] }
 async-stream = "0.3"
 
 [build-dependencies]
-connectrpc-axum-build = "*"
+connectrpc-axum-build = "0.2.1"
 ```
 
 For gRPC support, add the tonic feature:
 
 ```toml
 [dependencies]
-connectrpc-axum = { version = "*", features = ["tonic"] }
+connectrpc-axum = { version = "0.2.1", features = ["tonic"] }
 tonic = "0.14"
 
 [build-dependencies]
-connectrpc-axum-build = { version = "*", features = ["tonic"] }
+connectrpc-axum-build = { version = "0.2.1", features = ["tonic"] }
 ```
 
 ## Quick Start

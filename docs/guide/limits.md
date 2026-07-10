@@ -35,6 +35,11 @@ MakeServiceBuilder::new()
 
 When exceeded, the server returns a `ResourceExhausted` error before processing the request.
 
+For streaming requests, the limit applies independently to each decompressed message payload,
+not to the total HTTP request body. A stream can therefore exceed the configured
+limit in aggregate as long as every message stays within it. Connect's five-byte
+envelope header is not counted toward the message limit.
+
 For streaming requests, `receive_max_bytes` also bounds decompression itself: compressed envelopes are decompressed with the limit enforced as output is produced, so a small compressed frame (a "decompression bomb") cannot expand past the limit. Exceeding the limit during decompression returns `ResourceExhausted`, while a frame that fails to decompress returns `InvalidArgument`.
 
 ### Axum Router Behavior

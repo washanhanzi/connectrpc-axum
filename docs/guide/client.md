@@ -8,7 +8,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-connectrpc-axum-client = "0.1"
+connectrpc-axum-client = "0.2.1"
 prost = "0.14"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
@@ -19,7 +19,7 @@ For compression support:
 
 ```toml
 [dependencies]
-connectrpc-axum-client = { version = "0.1", features = ["compression-gzip-stream"] }
+connectrpc-axum-client = { version = "0.2.1", features = ["compression-gzip-stream"] }
 ```
 
 ## Quick Start with Generated Client
@@ -236,7 +236,7 @@ let response = client.call_unary_with_options::<Req, Res>(
 
 Timeouts are enforced on both client and server:
 
-- **Client-side**: The request is cancelled if it exceeds the timeout
+- **Client-side**: The entire call, including response stream consumption, ends with `DeadlineExceeded` if it exceeds the timeout
 - **Server-side**: The `Connect-Timeout-Ms` header is sent, allowing cooperative cancellation
 
 ## Compression
@@ -394,6 +394,10 @@ impl Interceptor for AuthInterceptor {
 }
 ```
 
+For server-streaming and bidirectional calls, `on_response` runs once after the
+client accepts the response status and content type, before any response messages
+are consumed. It also runs when the response stream contains no messages.
+
 ### Message Interceptor
 
 Implement `MessageInterceptor` for typed access to request/response messages:
@@ -486,6 +490,12 @@ RPC method) — as a typed alternative to the low-level `with_interceptor` /
 `with_message_interceptor` API. These take closures with the concrete request/response
 types for that method, so no trait implementation is needed.
 
+Request interceptor contexts start with the protocol headers for the call,
+including `Content-Type`, `Connect-Protocol-Version`, configured timeout and
+compression negotiation, and custom call headers. Stream message contexts carry
+the finalized request headers; receive contexts also include the initial response
+headers.
+
 ## Error Handling
 
 The client returns `ClientError` for all failure cases:
@@ -519,6 +529,11 @@ match client.call_unary::<Req, Res>("service/Method", &request).await {
     }
 }
 ```
+
+A successful Connect response must use HTTP status `200` and the content type for
+the call's encoding and RPC shape. Other successful HTTP statuses or mismatched
+content types are returned as client errors before the body is decoded as a
+Connect message.
 
 ### Error Code Mapping
 
@@ -557,6 +572,8 @@ let client = ConnectClient::builder("http://localhost:3000")
 ```
 
 This is required for bidi streaming over `http://` URLs (e.g., development environments).
+connectrpc-axum servers reject bidirectional streaming over HTTP/1.x with
+`505 HTTP Version Not Supported`.
 
 ### Connection Pool
 
@@ -571,6 +588,18 @@ let client = ConnectClient::builder("http://localhost:3000")
 ```
 
 ## TLS Configuration
+
+TLS is enabled by default. Applications that only connect to `http://` endpoints
+can remove the TLS crypto provider and root certificate dependencies:
+
+```toml
+[dependencies]
+connectrpc-axum-client = { version = "0.2.1", default-features = false }
+```
+
+An HTTP-only build supports both HTTP/1.1 and cleartext HTTP/2. `https://` URLs
+require the `tls` feature, a compatible combination of provider and root features,
+or a custom `TlsClientConfig`.
 
 ### Custom Root Certificates
 
@@ -686,7 +715,7 @@ Enable tracing with the `tracing` feature:
 
 ```toml
 [dependencies]
-connectrpc-axum-client = { version = "0.1", features = ["tracing"] }
+connectrpc-axum-client = { version = "0.2.1", features = ["tracing"] }
 ```
 
 Each RPC call creates a span with:
@@ -700,6 +729,9 @@ Each RPC call creates a span with:
 
 | Feature | Description |
 |---------|-------------|
+| `tls` | Default TLS configuration using ring and native root certificates |
+| `tls-ring` / `tls-aws-lc` | Select a TLS crypto provider |
+| `tls-native-roots` / `tls-webpki-roots` | Select trusted root certificates |
 | `compression-gzip-stream` | Gzip compression for streaming |
 | `compression-deflate-stream` | Deflate compression |
 | `compression-br-stream` | Brotli compression |
