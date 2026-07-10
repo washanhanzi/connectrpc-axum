@@ -17,10 +17,10 @@ impl<'a> ProstSchemaResolver<'a> {
     /// Compute `extern_path` mappings for the tonic pass generating services in
     /// `package`. Rust paths are relative to that package's module, so tonic's
     /// `super::` prefix (applied inside the `{service}_server` module) resolves
-    /// them correctly. Types covered by user extern overrides are skipped —
-    /// the tonic pass registers the overrides themselves as package-level
-    /// `extern_path` entries. Other well-known types are skipped because
-    /// prost's default extern mappings already cover them.
+    /// them correctly. Types covered by extern overrides are skipped because
+    /// the tonic pass registers those overrides as package-level `extern_path`
+    /// entries. Well-known types use the selected protobuf-JSON-compatible
+    /// external module.
     #[cfg(any(test, feature = "tonic", feature = "tonic-client"))]
     pub(crate) fn type_path_mappings(&self, package: &str) -> Vec<TypePathMapping> {
         self.schema
@@ -117,43 +117,24 @@ impl<'a> ProstSchemaResolver<'a> {
     }
 }
 
-/// Resolve a `.google.protobuf.*` well-known type to the Rust type prost-build
-/// maps it to by default (prost never generates code for these packages).
-///
-/// Keep this table in sync with prost-build's `ExternPaths::new` defaults:
-/// wrapper types map to Rust primitives, `Empty` maps to `()`, and everything
-/// else under `.google.protobuf` maps into `::prost_types`.
+/// Resolve a `.google.protobuf.*` well-known type to its protobuf-JSON-compatible
+/// `pbjson_types` representation. Compiled schemas normally resolve these through
+/// an extern override first; this fallback keeps direct schema use consistent.
 fn wkt_rust_type(proto_fqn: &str) -> Option<String> {
     let name = proto_fqn
         .strip_prefix(".google.protobuf.")
         .filter(|name| !name.is_empty())?;
 
-    let mapped = match name {
-        "BoolValue" => "bool",
-        "BytesValue" => "::prost::alloc::vec::Vec<u8>",
-        "DoubleValue" => "f64",
-        "Empty" => "()",
-        "FloatValue" => "f32",
-        "Int32Value" => "i32",
-        "Int64Value" => "i64",
-        "StringValue" => "::prost::alloc::string::String",
-        "UInt32Value" => "u32",
-        "UInt64Value" => "u64",
-        _ => {
-            let segments: Vec<&str> = name.split('.').collect();
-            let (rust_type_name, parent_modules) = segments.split_last()?;
+    let segments: Vec<&str> = name.split('.').collect();
+    let (rust_type_name, parent_modules) = segments.split_last()?;
 
-            return Some(
-                std::iter::once("::prost_types".to_string())
-                    .chain(parent_modules.iter().map(to_snake))
-                    .chain(std::iter::once(to_upper_camel(rust_type_name)))
-                    .collect::<Vec<_>>()
-                    .join("::"),
-            );
-        }
-    };
-
-    Some(mapped.to_string())
+    Some(
+        std::iter::once("::pbjson_types".to_string())
+            .chain(parent_modules.iter().map(to_snake))
+            .chain(std::iter::once(to_upper_camel(rust_type_name)))
+            .collect::<Vec<_>>()
+            .join("::"),
+    )
 }
 
 pub(super) fn to_snake(ident: impl AsRef<str>) -> String {

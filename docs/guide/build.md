@@ -161,18 +161,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Customize `pbjson_build::Builder`.
 
-When you map protobuf packages with `prost` extern paths, configure matching pbjson extern paths too:
+Well-known types are mapped to `pbjson_types` automatically so their JSON encoding follows the
+protobuf specification. Add matching `pbjson-types` and `pbjson` runtime dependencies to crates
+that include generated code.
+
+When you map another protobuf package with a `prost` extern path, configure the matching pbjson
+extern path too:
 
 ```rust
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     connectrpc_axum_build::compile_dir("proto")
         .with_prost_config(|config| {
-            config
-                .compile_well_known_types()
-                .extern_path(".google.protobuf", "::pbjson_types");
+            config.extern_path(".acme.types", "::acme_types");
         })
         .with_pbjson_config(|builder| {
-            builder.extern_path(".google.protobuf", "::pbjson_types");
+            builder.extern_path(".acme.types", "::acme_types");
         })
         .compile()?;
     Ok(())
@@ -252,7 +255,7 @@ include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/generated/protos.rs"));
 
 When `out_dir(...)` is set, nested includes inside generated `protos.rs` are written as absolute paths.
 
-### `extern_module("google.protobuf", "::pbjson_types")`
+### `extern_module("acme.types", "::acme_types")`
 
 Adds a re-export shim in generated include file for externalized proto modules.
 
@@ -260,11 +263,10 @@ Adds a re-export shim in generated include file for externalized proto modules.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     connectrpc_axum_build::compile_dir("proto")
         .with_prost_config(|config| {
-            config.compile_well_known_types();
-            config.extern_path(".google.protobuf", "::pbjson_types");
+            config.extern_path(".acme.types", "::acme_types");
         })
         .include_file("protos.rs")
-        .extern_module("google.protobuf", "::pbjson_types")
+        .extern_module("acme.types", "::acme_types")
         .compile()?;
     Ok(())
 }

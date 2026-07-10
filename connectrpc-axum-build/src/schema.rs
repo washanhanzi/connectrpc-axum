@@ -449,29 +449,29 @@ mod tests {
     }
 
     #[test]
-    fn prost_resolver_maps_well_known_types_to_prost_defaults() {
+    fn prost_resolver_maps_well_known_types_to_pbjson_types() {
         let schema = SchemaSet::default();
         let prost = schema.prost();
 
         assert_eq!(
             prost.rust_type_relative(".google.protobuf.Empty", "greet.v1", 1),
-            Some("()".to_string())
+            Some("::pbjson_types::Empty".to_string())
         );
         assert_eq!(
             prost.rust_type_relative(".google.protobuf.Timestamp", "greet.v1", 0),
-            Some("::prost_types::Timestamp".to_string())
+            Some("::pbjson_types::Timestamp".to_string())
         );
         assert_eq!(
             prost.rust_type_relative(".google.protobuf.Field.Kind", "", 0),
-            Some("::prost_types::field::Kind".to_string())
+            Some("::pbjson_types::field::Kind".to_string())
         );
         assert_eq!(
             prost.rust_type_relative(".google.protobuf.StringValue", "greet.v1", 2),
-            Some("::prost::alloc::string::String".to_string())
+            Some("::pbjson_types::StringValue".to_string())
         );
         assert_eq!(
             prost.rust_type_relative(".google.protobuf.BytesValue", "greet.v1", 0),
-            Some("::prost::alloc::vec::Vec<u8>".to_string())
+            Some("::pbjson_types::BytesValue".to_string())
         );
         assert_eq!(
             prost.rust_type_relative(".google.protobufish.Thing", "greet.v1", 0),
@@ -499,14 +499,14 @@ mod tests {
             prost.rust_type_relative(".google.protobuf.Field.Kind", "", 0),
             Some("::pbjson_types::field::Kind".to_string())
         );
-        // Packages outside the override still use prost defaults
+        // Packages outside the override still use the protobuf-JSON-compatible defaults.
         let plain = SchemaSet::default()
             .with_extern_overrides(&[("acme.types".to_string(), "::acme_types".to_string())]);
         assert_eq!(
             plain
                 .prost()
                 .rust_type_relative(".google.protobuf.Timestamp", "greet.v1", 0),
-            Some("::prost_types::Timestamp".to_string())
+            Some("::pbjson_types::Timestamp".to_string())
         );
     }
 

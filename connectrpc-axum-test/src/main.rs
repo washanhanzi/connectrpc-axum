@@ -8,6 +8,10 @@ mod echo_pb {
 }
 use echo_pb::*;
 
+mod wkt_pb {
+    include!(concat!(env!("OUT_DIR"), "/wkt.rs"));
+}
+
 mod axum_router;
 mod client_streaming_compression;
 mod compression_algos;
@@ -80,4 +84,32 @@ async fn main() -> anyhow::Result<()> {
     grpc_web::run(&rust_sock, &go_sock).await?;
     tonic_extractor::run(&rust_sock, &go_sock).await?;
     idempotency_get_connect_client::run(&rust_sock, &go_sock).await
+}
+
+#[cfg(test)]
+mod well_known_types_json_tests {
+    use super::wkt_pb::TimestampMessage;
+
+    #[test]
+    fn generated_well_known_types_use_protobuf_json_mapping() {
+        let timestamp = pbjson_types::Timestamp {
+            seconds: 0,
+            nanos: 0,
+        };
+        assert_eq!(
+            serde_json::to_string(&timestamp).unwrap(),
+            "\"1970-01-01T00:00:00+00:00\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TimestampMessage {
+                value: Some(timestamp),
+            })
+            .unwrap(),
+            "{\"value\":\"1970-01-01T00:00:00+00:00\"}"
+        );
+        assert_eq!(
+            serde_json::to_string(&pbjson_types::Empty {}).unwrap(),
+            "{}"
+        );
+    }
 }

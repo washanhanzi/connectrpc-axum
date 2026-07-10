@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package wkt;
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+message TimestampMessage {
+  google.protobuf.Timestamp value = 1;
+}
+
+service WellKnownTypesService {
+  rpc Read(google.protobuf.Empty) returns (TimestampMessage) {}
+  rpc Clear(TimestampMessage) returns (google.protobuf.Empty) {}
+}

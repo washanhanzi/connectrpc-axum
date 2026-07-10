@@ -5,6 +5,9 @@ use std::io::Result;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
+const WELL_KNOWN_TYPES_PROTO_PATH: &str = "google.protobuf";
+const DEFAULT_WELL_KNOWN_TYPES_RUST_PATH: &str = "::pbjson_types";
+
 /// Code generation module for service builders.
 mod r#gen;
 mod include_file;
@@ -389,8 +392,8 @@ impl<S, C, T, TC, CC> CompileBuilder<S, C, T, TC, CC> {
     /// applied before descriptor registration and code generation.
     ///
     /// Use this when pbjson needs explicit extern mappings that mirror prost's
-    /// `extern_path` behavior, for example:
-    /// `builder.extern_path(".google.protobuf", "::pbjson_types");`
+    /// `extern_path` behavior. Well-known types are already mapped to
+    /// `::pbjson_types` by default.
     pub fn with_pbjson_config<F>(mut self, f: F) -> Self
     where
         F: Fn(&mut pbjson_build::Builder) + 'static,
@@ -458,7 +461,7 @@ impl<S, C, T, TC, CC> CompileBuilder<S, C, T, TC, CC> {
     /// Register an extern module re-export for the include file.
     ///
     /// When using `extern_path` in prost config to map a protobuf package to an
-    /// external crate (e.g. `config.extern_path(".google.protobuf", "::pbjson_types")`),
+    /// external crate (e.g. `config.extern_path(".acme.types", "::acme_types")`),
     /// prost-generated code may still reference types through relative module paths
     /// (e.g. `super::super::google::protobuf::...`). This method creates a shim module
     /// in the include file that re-exports the external crate's types, allowing those
@@ -466,8 +469,8 @@ impl<S, C, T, TC, CC> CompileBuilder<S, C, T, TC, CC> {
     ///
     /// # Arguments
     ///
-    /// * `proto_path` - The dotted protobuf package name (e.g. `"google.protobuf"`)
-    /// * `rust_path` - The Rust crate path to re-export (e.g. `"::pbjson_types"`)
+    /// * `proto_path` - The dotted protobuf package name (e.g. `"acme.types"`)
+    /// * `rust_path` - The Rust crate path to re-export (e.g. `"::acme_types"`)
     ///
     /// # Example
     ///
@@ -475,11 +478,10 @@ impl<S, C, T, TC, CC> CompileBuilder<S, C, T, TC, CC> {
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
     ///     connectrpc_axum_build::compile_dir("proto")
     ///         .with_prost_config(|config| {
-    ///             config.compile_well_known_types();
-    ///             config.extern_path(".google.protobuf", "::pbjson_types");
+    ///             config.extern_path(".acme.types", "::acme_types");
     ///         })
     ///         .include_file("protos.rs")
-    ///         .extern_module("google.protobuf", "::pbjson_types")
+    ///         .extern_module("acme.types", "::acme_types")
     ///         .compile()?;
     ///     Ok(())
     /// }
@@ -707,6 +709,18 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
             config_fn(&mut config);
         }
 
+        let well_known_types_rust_path = self
+            .extern_reexports
+            .iter()
+            .find(|(proto_path, _)| proto_path == WELL_KNOWN_TYPES_PROTO_PATH)
+            .map(|(_, rust_path)| rust_path.as_str())
+            .unwrap_or(DEFAULT_WELL_KNOWN_TYPES_RUST_PATH);
+        config.compile_well_known_types();
+        config.extern_path(
+            format!(".{WELL_KNOWN_TYPES_PROTO_PATH}"),
+            well_known_types_rust_path,
+        );
+
         // Set protoc executable if fetched (internal config takes precedence).
         // tonic-prost-build has no per-builder protoc setter, so also export
         // PROTOC for the tonic passes, which resolve protoc from the
@@ -730,8 +744,18 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
         let descriptor_bytes = fs::read(&descriptor_path)
             .map_err(|e| std::io::Error::other(format!("read descriptor: {e}")))?;
 
+        let mut extern_reexports = self.extern_reexports.clone();
+        if !extern_reexports
+            .iter()
+            .any(|(proto_path, _)| proto_path == WELL_KNOWN_TYPES_PROTO_PATH)
+        {
+            extern_reexports.push((
+                WELL_KNOWN_TYPES_PROTO_PATH.to_string(),
+                DEFAULT_WELL_KNOWN_TYPES_RUST_PATH.to_string(),
+            ));
+        }
         let schema = SchemaSet::from_descriptor_bytes(&descriptor_bytes)?
-            .with_extern_overrides(&self.extern_reexports);
+            .with_extern_overrides(&extern_reexports);
 
         let connect_generator = AxumConnectServiceGenerator::new()
             .with_connect_server(generate_handlers)
@@ -741,7 +765,12 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
         connect_generator.append_to_out_dir(&schema, &out_dir)?;
 
         // -------- Pass 1.5: pbjson serde implementations (always) --------
-        Self::generate_pbjson(&out_dir, &descriptor_bytes, self.pbjson_config.as_deref())?;
+        Self::generate_pbjson(
+            &out_dir,
+            &descriptor_bytes,
+            well_known_types_rust_path,
+            self.pbjson_config.as_deref(),
+        )?;
 
         // -------- Pass 2: tonic server-only (feature + user requested) --------
         #[cfg(feature = "tonic")]
@@ -801,6 +830,7 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
     fn generate_pbjson(
         out_dir: &str,
         descriptor_bytes: &[u8],
+        well_known_types_rust_path: &str,
         pbjson_config: Option<&dyn Fn(&mut pbjson_build::Builder)>,
     ) -> Result<()> {
         use ::prost::Message;
@@ -824,6 +854,10 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
 
         let mut pbjson_builder = pbjson_build::Builder::new();
         pbjson_builder.out_dir(out_dir);
+        pbjson_builder.extern_path(
+            format!(".{WELL_KNOWN_TYPES_PROTO_PATH}"),
+            well_known_types_rust_path,
+        );
         if let Some(config_fn) = pbjson_config {
             config_fn(&mut pbjson_builder);
         }
