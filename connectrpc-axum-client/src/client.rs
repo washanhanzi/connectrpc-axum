@@ -206,6 +206,42 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         }
     }
 
+    fn check_success_response_content_type(
+        &self,
+        headers: &http::HeaderMap,
+        streaming: bool,
+    ) -> Result<(), ClientError> {
+        let content_type = headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        let expected = if streaming {
+            self.streaming_content_type()
+        } else {
+            self.unary_content_type()
+        };
+        let valid = content_type == expected
+            || (!streaming && !self.use_proto && content_type == "application/json; charset=utf-8");
+        if valid {
+            return Ok(());
+        }
+
+        let prefix = if streaming {
+            "application/connect+"
+        } else {
+            "application/"
+        };
+        let code = if content_type.starts_with(prefix) {
+            Code::Internal
+        } else {
+            Code::Unknown
+        };
+        Err(ClientError::new(
+            code,
+            format!("invalid content-type: {content_type:?}; expecting {expected:?}"),
+        ))
+    }
+
     /// Encode a message for sending.
     fn encode_message<T>(&self, msg: &T) -> Result<Bytes, ClientError>
     where
@@ -517,7 +553,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             };
 
             // Check response status
-            if !status.is_success() {
+            if status != http::StatusCode::OK {
                 return Err(match body {
                     LimitedBody::Complete(body_bytes) => decompress_and_parse_error(
                         status,
@@ -528,6 +564,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                     LimitedBody::TooLarge => error_body_exceeds_limit(status),
                 });
             }
+            self.check_success_response_content_type(&response_headers, false)?;
 
             let body_bytes = match body {
                 LimitedBody::Complete(body_bytes) => body_bytes,
@@ -763,7 +800,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             let status = response.status();
             let response_headers = response.headers().clone();
 
-            if !status.is_success() {
+            if status != http::StatusCode::OK {
                 let body = collect_body_limited(
                     response.into_body(),
                     self.receive_max_bytes,
@@ -780,6 +817,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                     LimitedBody::TooLarge => error_body_exceeds_limit(status),
                 });
             }
+            self.check_success_response_content_type(&response_headers, true)?;
 
             // Get compression encoding from Connect-Content-Encoding header
             let content_encoding = response_headers
@@ -1041,7 +1079,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             let status = response.status();
             let response_headers = response.headers().clone();
 
-            if !status.is_success() {
+            if status != http::StatusCode::OK {
                 let body_result = collect_body_limited(
                     response.into_body(),
                     self.receive_max_bytes,
@@ -1064,6 +1102,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                     LimitedBody::TooLarge => error_body_exceeds_limit(status),
                 });
             }
+            self.check_success_response_content_type(&response_headers, true)?;
 
             let content_encoding = response_headers
                 .get("connect-content-encoding")
@@ -1464,7 +1503,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         let status = response.status();
         let response_headers = response.headers().clone();
 
-        if !status.is_success() {
+        if status != http::StatusCode::OK {
             let body_result =
                 collect_body_limited(response.into_body(), self.receive_max_bytes, "error body")
                     .await;
@@ -1484,6 +1523,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                 LimitedBody::TooLarge => error_body_exceeds_limit(status),
             });
         }
+        self.check_success_response_content_type(&response_headers, true)?;
 
         // Bidi streaming requires HTTP/2 for full-duplex operation. Checked
         // after the HTTP status so a server error is reported as itself
@@ -1831,6 +1871,94 @@ mod tests {
                     message_json,
                 )))
                 .unwrap()
+        }
+
+        #[tokio::test]
+        async fn unary_rejects_non_200_success_status() {
+            let app = Router::new().route(
+                "/test.Service/Unary",
+                post(|| async {
+                    http::Response::builder()
+                        .status(http::StatusCode::NO_CONTENT)
+                        .body(axum::body::Body::empty())
+                        .unwrap()
+                }),
+            );
+            let base_url = spawn_server(app).await;
+            let client = ConnectClient::builder(&base_url).build().unwrap();
+
+            let err = client
+                .call_unary::<TestMessage, TestMessage>(
+                    "test.Service/Unary",
+                    &TestMessage::default(),
+                )
+                .await
+                .unwrap_err();
+
+            assert_eq!(err.code(), Code::Unknown);
+            assert_eq!(err.message(), Some("No Content"));
+        }
+
+        #[tokio::test]
+        async fn unary_rejects_mismatched_response_content_type() {
+            let app = Router::new().route(
+                "/test.Service/Unary",
+                post(|| async {
+                    http::Response::builder()
+                        .status(http::StatusCode::OK)
+                        .header(header::CONTENT_TYPE, "application/proto")
+                        .body(axum::body::Body::from(Bytes::from_static(b"{}")))
+                        .unwrap()
+                }),
+            );
+            let base_url = spawn_server(app).await;
+            let client = ConnectClient::builder(&base_url).build().unwrap();
+
+            let err = client
+                .call_unary::<TestMessage, TestMessage>(
+                    "test.Service/Unary",
+                    &TestMessage::default(),
+                )
+                .await
+                .unwrap_err();
+
+            assert_eq!(err.code(), Code::Internal);
+            assert_eq!(
+                err.message(),
+                Some("invalid content-type: \"application/proto\"; expecting \"application/json\"")
+            );
+        }
+
+        #[tokio::test]
+        async fn server_stream_rejects_unary_response_content_type() {
+            let app = Router::new().route(
+                "/test.Service/ServerStream",
+                post(|| async {
+                    http::Response::builder()
+                        .status(http::StatusCode::OK)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(axum::body::Body::from(streaming_response_body(
+                            br#"{"value":"response"}"#,
+                        )))
+                        .unwrap()
+                }),
+            );
+            let base_url = spawn_server(app).await;
+            let client = ConnectClient::builder(&base_url).build().unwrap();
+
+            let err = match client
+                .call_server_stream::<TestMessage, TestMessage>(
+                    "test.Service/ServerStream",
+                    &TestMessage::default(),
+                )
+                .await
+            {
+                Err(err) => err,
+                Ok(_) => panic!("expected invalid content-type error"),
+            };
+
+            assert_eq!(err.code(), Code::Unknown);
+            assert!(err.message().unwrap().contains("invalid content-type"));
         }
 
         /// Captured request headers and body from the test server.
