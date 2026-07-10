@@ -682,6 +682,13 @@ where
             while buffer.len() >= 5 {
                 let flags = buffer[0];
                 let length = u32::from_be_bytes([buffer[1], buffer[2], buffer[3], buffer[4]]) as usize;
+                let Some(frame_len) = 5usize.checked_add(length) else {
+                    yield Err(ConnectError::new(
+                        Code::ResourceExhausted,
+                        "message size exceeds platform address space",
+                    ));
+                    return;
+                };
 
                 // Check message size limit BEFORE allocating memory
                 if let Err(err) = limits.check_size_connect(length) {
@@ -690,14 +697,12 @@ where
                 }
 
                 // Check if we have the complete frame
-                if buffer.len() < 5 + length {
-                    // Pre-allocate space for the frame to reduce reallocations
-                    buffer.reserve(5 + length - buffer.len());
+                if buffer.len() < frame_len {
                     break; // Need more data
                 }
 
                 // Extract payload
-                let raw_payload = buffer.split_to(5 + length).split_off(5);
+                let raw_payload = buffer.split_to(frame_len).split_off(5);
 
                 // Process envelope: validate flags and decompress if needed.
                 // Bound decompression output to the receive limit (bomb guard).
@@ -1049,6 +1054,34 @@ mod client_end_stream_tests {
         .into_connect_error();
         assert_eq!(err.code(), Code::Unimplemented);
         assert_eq!(err.message().unwrap(), "unary request has zero messages");
+    }
+}
+
+#[cfg(test)]
+mod incremental_frame_read_tests {
+    use super::*;
+    use futures::{StreamExt, stream};
+    use std::{convert::Infallible, time::Duration};
+
+    #[tokio::test]
+    async fn maximum_declared_frame_length_waits_for_body_without_preallocation() {
+        let chunks = stream::once(async {
+            Ok::<_, Infallible>(Bytes::from_static(&[0, 0xff, 0xff, 0xff, 0xff]))
+        })
+        .chain(stream::pending());
+        let body = Body::from_stream(chunks);
+        let mut messages = Box::pin(create_frame_stream::<pbjson_types::Empty>(
+            body,
+            true,
+            MessageLimits::new(),
+            CompressionEncoding::Identity,
+        ));
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), messages.next())
+                .await
+                .is_err()
+        );
     }
 }
 
