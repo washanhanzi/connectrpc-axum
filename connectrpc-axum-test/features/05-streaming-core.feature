@@ -13,7 +13,7 @@ Feature: connectrpc-axum-test integration behavior — streaming core
   # Source refs:
   # - connectrpc-axum-test/src/connect_server_stream.rs (orchestrator)
   # - connectrpc-axum-test/src/connect_server_stream/server.rs (Rust server: streams 2 messages)
-  # - connectrpc-axum-test/src/connect_server_stream/client.rs (Rust client: 1 test case)
+  # - connectrpc-axum-test/src/connect_server_stream/client.rs (Rust protocol client and generated-client interceptor cases)
   # - connectrpc-axum-test/go/connect_server_stream/server/server.go (Go server: streams 2 messages)
   # - connectrpc-axum-test/go/connect_server_stream/client/client.go (Go client: 1 test case)
 
@@ -23,6 +23,13 @@ Feature: connectrpc-axum-test integration behavior — streaming core
     Then the response contains at least 2 envelope-framed messages
     And the first message contains "Hello"
     And the response content-type is application/connect+json
+
+  Scenario: connect_server_stream — typed on_receive sees the transmitted request headers
+    Given a generated Rust client compresses a SayHelloStream request with gzip
+    When its typed on_receive interceptor receives a response message
+    Then the stream context request headers include application/connect+json
+    And the stream context request headers include Connect-Protocol-Version 1
+    And the stream context request headers include Connect-Content-Encoding gzip
 
 
   # Source refs:

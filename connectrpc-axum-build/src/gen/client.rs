@@ -279,16 +279,17 @@ pub fn generate_connect_client(
                             &self,
                             request: &#request_type,
                         ) -> Result<connectrpc_axum_client::ConnectResponse<#response_type>, connectrpc_axum_client::ClientError> {
-                            let mut request = request.clone();
+                            let mut request = <#request_type as ::std::clone::Clone>::clone(request);
 
                             // Before interceptor - may modify headers and request body
-                            let mut interceptor_headers = connectrpc_axum_client::HeaderMap::new();
+                            let options = connectrpc_axum_client::CallOptions::new();
+                            let mut interceptor_headers = self.inner.create_unary_request_headers(&options);
                             if let Some(ref interceptor) = self.#interceptors_field.before {
                                 let mut ctx = connectrpc_axum_client::RequestContext::new(#procedure_path, &mut interceptor_headers);
                                 interceptor.intercept(&mut ctx, &mut request)?;
                             }
 
-                            let options = connectrpc_axum_client::CallOptions::new().headers(interceptor_headers);
+                            let options = options.headers(interceptor_headers);
                             let mut response: connectrpc_axum_client::ConnectResponse<#response_type> =
                                 self.inner.call_unary_with_options(#procedure_path, &request, options).await?;
 
@@ -328,20 +329,22 @@ pub fn generate_connect_client(
                             >,
                             connectrpc_axum_client::ClientError
                         > {
-                            let mut request = request.clone();
+                            let mut request = <#request_type as ::std::clone::Clone>::clone(request);
 
                             // Before interceptor - may modify headers and request body
-                            let mut interceptor_headers = connectrpc_axum_client::HeaderMap::new();
+                            let options = connectrpc_axum_client::CallOptions::new();
+                            let mut interceptor_headers = self.inner.create_streaming_request_headers(&options, false);
                             if let Some(ref interceptor) = self.#interceptors_field.before {
                                 let mut ctx = connectrpc_axum_client::RequestContext::new(#procedure_path, &mut interceptor_headers);
                                 interceptor.intercept(&mut ctx, &mut request)?;
                             }
 
-                            let options = connectrpc_axum_client::CallOptions::new().headers(interceptor_headers.clone());
+                            let options = options.headers(interceptor_headers);
                             let response = self.inner.call_server_stream_with_options(#procedure_path, &request, options).await?;
 
                             // Get headers for context
                             let response_headers = response.metadata().headers().clone();
+                            let request_headers = response.get_ref().request_headers().clone();
 
                             // Wrap the stream with typed interceptor
                             let on_receive = self.#interceptors_field.on_receive.clone();
@@ -351,7 +354,7 @@ pub fn generate_connect_client(
                                     on_receive,
                                     #procedure_path.to_string(),
                                     connectrpc_axum_client::StreamType::ServerStream,
-                                    interceptor_headers,
+                                    request_headers,
                                     response_headers,
                                 )
                             }))
@@ -386,19 +389,26 @@ pub fn generate_connect_client(
                             S: ::futures::Stream<Item = #request_type> + Send + Unpin + 'static,
                         {
                             // Apply the typed on_send interceptor; abort the stream on first error
+                            let options = connectrpc_axum_client::CallOptions::new();
+                            let request_headers = self.inner.create_streaming_request_headers(&options, true);
                             let request_error = connectrpc_axum_client::RequestStreamError::new();
                             let wrapped = connectrpc_axum_client::TypedSendStream::with_request_error_capture(
                                 request,
                                 self.#interceptors_field.on_send.clone(),
                                 #procedure_path.to_string(),
                                 connectrpc_axum_client::StreamType::ClientStream,
-                                connectrpc_axum_client::HeaderMap::new(),
+                                request_headers.clone(),
                                 request_error.clone(),
                             );
 
-                            let options = connectrpc_axum_client::CallOptions::new();
                             let mut response: connectrpc_axum_client::ConnectResponse<#response_type> =
-                                self.inner.call_client_stream_fallible_with_options(#procedure_path, wrapped, options, request_error).await?;
+                                self.inner.call_client_stream_fallible_with_headers(
+                                    #procedure_path,
+                                    wrapped,
+                                    options,
+                                    request_headers,
+                                    request_error,
+                                ).await?;
 
                             // After interceptor
                             if let Some(ref interceptor) = self.#interceptors_field.after {
@@ -457,27 +467,28 @@ pub fn generate_connect_client(
                         {
                             // Apply the typed on_send interceptor; abort the stream on first error.
                             // Bidi returns a receive stream, so request stream failures must wake parked receive polls.
+                            let options = connectrpc_axum_client::CallOptions::new();
+                            let request_headers = self.inner.create_streaming_request_headers(&options, true);
                             let request_error = connectrpc_axum_client::RequestStreamError::new();
                             let wrapped = connectrpc_axum_client::TypedSendStream::with_request_error_capture(
                                 request,
                                 self.#interceptors_field.on_send.clone(),
                                 #procedure_path.to_string(),
                                 connectrpc_axum_client::StreamType::BidiStream,
-                                connectrpc_axum_client::HeaderMap::new(),
+                                request_headers.clone(),
                                 request_error.clone(),
                             );
 
-                            let options = connectrpc_axum_client::CallOptions::new();
-                            let response = self.inner.call_bidi_stream_fallible_with_options(
+                            let response = self.inner.call_bidi_stream_fallible_with_headers(
                                 #procedure_path,
                                 wrapped,
                                 options,
+                                request_headers.clone(),
                                 request_error.clone(),
                             ).await?;
 
                             // Get headers for context
                             let response_headers = response.metadata().headers().clone();
-                            let req_headers = connectrpc_axum_client::HeaderMap::new();
 
                             // Wrap the response stream with typed interceptor
                             let on_receive = self.#interceptors_field.on_receive.clone();
@@ -487,7 +498,7 @@ pub fn generate_connect_client(
                                     on_receive,
                                     #procedure_path.to_string(),
                                     connectrpc_axum_client::StreamType::BidiStream,
-                                    req_headers,
+                                    request_headers,
                                     response_headers,
                                     request_error,
                                 )

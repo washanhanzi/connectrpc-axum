@@ -297,6 +297,49 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         Ok((compressed, true))
     }
 
+    /// Build the full request header map for a unary call.
+    #[doc(hidden)]
+    pub fn create_unary_request_headers(&self, options: &CallOptions) -> http::HeaderMap {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static(self.unary_content_type()),
+        );
+        headers.insert(
+            CONNECT_PROTOCOL_VERSION_HEADER,
+            http::HeaderValue::from_static(CONNECT_PROTOCOL_VERSION),
+        );
+
+        let effective_timeout = options.timeout.or(self.default_timeout);
+        if let Some(t) = effective_timeout
+            && let Some(timeout_ms) = duration_to_timeout_header(t)
+        {
+            headers.insert(CONNECT_TIMEOUT_HEADER, timeout_ms.parse().unwrap());
+        }
+
+        if let Some(accept) = self.accept_encoding {
+            headers.insert(
+                header::ACCEPT_ENCODING,
+                http::HeaderValue::from_static(accept.as_str()),
+            );
+        }
+
+        for name in options.headers.keys() {
+            if is_reserved_header(name) {
+                continue;
+            }
+            let mut values = options.headers.get_all(name).iter();
+            if let Some(first) = values.next() {
+                headers.insert(name.clone(), first.clone());
+            }
+            for value in values {
+                headers.append(name.clone(), value.clone());
+            }
+        }
+
+        headers
+    }
+
     /// Build the full request header map for a streaming call.
     ///
     /// Includes the streaming content type, protocol version, compression
@@ -309,10 +352,10 @@ impl<I: InterceptorInternal> ConnectClient<I> {
     /// for calls whose streaming body may contain compressed frames; calls
     /// that compress a single buffered message add the header themselves
     /// once they know whether compression was applied.
-    fn streaming_request_headers(
+    #[doc(hidden)]
+    pub fn create_streaming_request_headers(
         &self,
         options: &CallOptions,
-        effective_timeout: Option<Duration>,
         announce_content_encoding: bool,
     ) -> http::HeaderMap {
         let mut headers = http::HeaderMap::new();
@@ -346,7 +389,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         }
 
         // Add Connect-Timeout-Ms header (options timeout overrides default)
-        if let Some(t) = effective_timeout
+        if let Some(t) = options.timeout.or(self.default_timeout)
             && let Some(timeout_ms) = duration_to_timeout_header(t)
         {
             headers.insert(CONNECT_TIMEOUT_HEADER, timeout_ms.parse().unwrap());
@@ -452,48 +495,8 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         Res: Message + DeserializeOwned + Default + 'static,
     {
         rpc_call_span!(self, procedure, "unary", {
-            // Build headers (before RPC interceptor so it can modify them)
-            let mut headers = http::HeaderMap::new();
-            headers.insert(
-                http::header::CONTENT_TYPE,
-                http::HeaderValue::from_static(self.unary_content_type()),
-            );
-            headers.insert(
-                CONNECT_PROTOCOL_VERSION_HEADER,
-                http::HeaderValue::from_static(CONNECT_PROTOCOL_VERSION),
-            );
-
-            // Add Connect-Timeout-Ms header (options timeout overrides default)
             let effective_timeout = options.timeout.or(self.default_timeout);
-            if let Some(t) = effective_timeout
-                && let Some(timeout_ms) = duration_to_timeout_header(t)
-            {
-                headers.insert(CONNECT_TIMEOUT_HEADER, timeout_ms.parse().unwrap());
-            }
-
-            // Add Accept-Encoding if configured
-            if let Some(accept) = self.accept_encoding {
-                headers.insert(
-                    header::ACCEPT_ENCODING,
-                    http::HeaderValue::from_static(accept.as_str()),
-                );
-            }
-
-            // Add custom headers from options (skip reserved protocol headers).
-            // Insert the first value for each name (overriding any default) and
-            // append the rest so multi-valued headers are preserved.
-            for name in options.headers.keys() {
-                if is_reserved_header(name) {
-                    continue;
-                }
-                let mut values = options.headers.get_all(name).iter();
-                if let Some(first) = values.next() {
-                    headers.insert(name.clone(), first.clone());
-                }
-                for value in values {
-                    headers.append(name.clone(), value.clone());
-                }
-            }
+            let mut headers = self.create_unary_request_headers(&options);
 
             // Apply interceptors to the headers and the request message
             let mut request = request.clone();
@@ -744,7 +747,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             // Build headers (before interceptors so they can modify them)
             let effective_timeout = options.timeout.or(self.default_timeout);
             let deadline = effective_timeout.map(|duration| Instant::now() + duration);
-            let mut headers = self.streaming_request_headers(&options, effective_timeout, false);
+            let mut headers = self.create_streaming_request_headers(&options, false);
 
             // Apply interceptors to the headers and the request message.
             // The single request of a server-streaming call goes through
@@ -823,6 +826,10 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                 });
             }
             self.check_success_response_content_type(&response_headers, true)?;
+            {
+                let ctx = ResponseContext::new(procedure, &response_headers);
+                self.interceptor.intercept_stream_response_headers(&ctx)?;
+            }
 
             // Get compression encoding from Connect-Content-Encoding header
             let content_encoding = response_headers
@@ -966,8 +973,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             // Build the full request header map, then let interceptors mutate
             // it (message interception for streaming requests happens per
             // message via on_stream_send, so the request placeholder is unit)
-            let effective_timeout = options.timeout.or(self.default_timeout);
-            let mut headers = self.streaming_request_headers(&options, effective_timeout, true);
+            let mut headers = self.create_streaming_request_headers(&options, true);
             {
                 let mut ctx = RequestContext::new(procedure, &mut headers);
                 self.interceptor.intercept_request(&mut ctx, &mut ())?;
@@ -1019,8 +1025,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         rpc_call_span!(self, procedure, "client_stream", {
             let procedure = procedure.strip_prefix('/').unwrap_or(procedure);
 
-            let effective_timeout = options.timeout.or(self.default_timeout);
-            let mut headers = self.streaming_request_headers(&options, effective_timeout, true);
+            let mut headers = self.create_streaming_request_headers(&options, true);
             {
                 let mut ctx = RequestContext::new(procedure, &mut headers);
                 self.interceptor.intercept_request(&mut ctx, &mut ())?;
@@ -1037,7 +1042,8 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         })
     }
 
-    async fn call_client_stream_fallible_with_headers<Req, Res, S>(
+    #[doc(hidden)]
+    pub async fn call_client_stream_fallible_with_headers<Req, Res, S>(
         &self,
         procedure: &str,
         request: S,
@@ -1050,6 +1056,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         Res: Message + DeserializeOwned + Default + 'static,
         S: Stream<Item = Result<Req, ClientError>> + Send + Unpin + 'static,
     {
+        let procedure = procedure.strip_prefix('/').unwrap_or(procedure);
         let url = format!("{}/{}", self.base_url, procedure);
 
         let encoder: FrameEncoder<_, Req> = FrameEncoder::new(
@@ -1358,8 +1365,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             // Build the full request header map, then let interceptors mutate
             // it (message interception for streaming requests happens per
             // message via on_stream_send, so the request placeholder is unit)
-            let effective_timeout = options.timeout.or(self.default_timeout);
-            let mut headers = self.streaming_request_headers(&options, effective_timeout, true);
+            let mut headers = self.create_streaming_request_headers(&options, true);
             {
                 let mut ctx = RequestContext::new(procedure, &mut headers);
                 self.interceptor.intercept_request(&mut ctx, &mut ())?;
@@ -1432,8 +1438,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         rpc_call_span!(self, procedure, "bidi_stream", {
             let procedure = procedure.strip_prefix('/').unwrap_or(procedure);
 
-            let effective_timeout = options.timeout.or(self.default_timeout);
-            let mut headers = self.streaming_request_headers(&options, effective_timeout, true);
+            let mut headers = self.create_streaming_request_headers(&options, true);
             {
                 let mut ctx = RequestContext::new(procedure, &mut headers);
                 self.interceptor.intercept_request(&mut ctx, &mut ())?;
@@ -1450,7 +1455,8 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         })
     }
 
-    async fn call_bidi_stream_fallible_with_headers<Req, Res, S>(
+    #[doc(hidden)]
+    pub async fn call_bidi_stream_fallible_with_headers<Req, Res, S>(
         &self,
         procedure: &str,
         request: S,
@@ -1469,6 +1475,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         Res: Message + DeserializeOwned + Default + 'static,
         S: Stream<Item = Result<Req, ClientError>> + Send + Unpin + 'static,
     {
+        let procedure = procedure.strip_prefix('/').unwrap_or(procedure);
         let effective_timeout = options.timeout.or(self.default_timeout);
         let deadline = effective_timeout.map(|duration| Instant::now() + duration);
         let url = format!("{}/{}", self.base_url, procedure);
@@ -1545,6 +1552,10 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             });
         }
         self.check_success_response_content_type(&response_headers, true)?;
+        {
+            let ctx = ResponseContext::new(procedure, &response_headers);
+            self.interceptor.intercept_stream_response_headers(&ctx)?;
+        }
 
         // Bidi streaming requires HTTP/2 for full-duplex operation. Checked
         // after the HTTP status so a server error is reported as itself
@@ -2007,6 +2018,15 @@ mod tests {
                 .unwrap()
         }
 
+        fn empty_streaming_response() -> axum::response::Response {
+            http::Response::builder()
+                .status(200)
+                .header(header::CONTENT_TYPE, "application/connect+json")
+                .header("x-server", "yes")
+                .body(axum::body::Body::from(make_frame(0x02, b"{}")))
+                .unwrap()
+        }
+
         #[tokio::test]
         async fn unary_rejects_non_200_success_status() {
             let app = Router::new().route(
@@ -2124,6 +2144,83 @@ mod tests {
                 ctx.headers.insert("x-intercepted", "1".parse().unwrap());
                 Ok(())
             }
+        }
+
+        #[derive(Clone)]
+        struct StreamingResponseHeaderRecorder {
+            name: &'static str,
+            calls: Arc<Mutex<Vec<&'static str>>>,
+        }
+
+        impl Interceptor for StreamingResponseHeaderRecorder {
+            fn on_response(&self, ctx: &ResponseContext) -> Result<(), ClientError> {
+                if ctx.headers.get("x-server").and_then(|v| v.to_str().ok()) != Some("yes") {
+                    return Err(ClientError::internal("missing streaming response header"));
+                }
+                self.calls.lock().unwrap().push(self.name);
+                Ok(())
+            }
+        }
+
+        #[tokio::test]
+        async fn streaming_response_headers_are_intercepted_once() {
+            let app = Router::new()
+                .route(
+                    "/test.Service/ServerStream",
+                    post(|| async { empty_streaming_response() }),
+                )
+                .route(
+                    "/test.Service/BidiStream",
+                    post(|| async { empty_streaming_response() }),
+                );
+            let base_url = spawn_server(app).await;
+            let transport = crate::transport::HyperTransportBuilder::new()
+                .http2_only(true)
+                .build()
+                .unwrap();
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let client = ConnectClient::builder(&base_url)
+                .with_transport(transport)
+                .with_interceptor(StreamingResponseHeaderRecorder {
+                    name: "first",
+                    calls: calls.clone(),
+                })
+                .with_interceptor(StreamingResponseHeaderRecorder {
+                    name: "second",
+                    calls: calls.clone(),
+                })
+                .build()
+                .unwrap();
+
+            let response = client
+                .call_server_stream::<TestMessage, TestMessage>(
+                    "test.Service/ServerStream",
+                    &TestMessage::default(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(&*calls.lock().unwrap(), &["second", "first"]);
+            let mut stream = response.into_inner();
+            assert!(stream.next().await.is_none());
+            assert_eq!(&*calls.lock().unwrap(), &["second", "first"]);
+
+            let response = client
+                .call_bidi_stream::<TestMessage, TestMessage, _>(
+                    "test.Service/BidiStream",
+                    futures::stream::empty(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                &*calls.lock().unwrap(),
+                &["second", "first", "second", "first"]
+            );
+            let mut stream = response.into_inner();
+            assert!(stream.next().await.is_none());
+            assert_eq!(
+                &*calls.lock().unwrap(),
+                &["second", "first", "second", "first"]
+            );
         }
 
         /// Message interceptor that rewrites request/response payloads and

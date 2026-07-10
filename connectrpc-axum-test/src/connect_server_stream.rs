@@ -27,6 +27,9 @@ pub async fn run(rust_sock: &TestSocket, go_sock: &TestSocket) -> anyhow::Result
     // Start both servers
     let rust_listener = rust_sock.bind()?;
     let rust_server = tokio::spawn(server::start(rust_listener));
+    let rust_tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let rust_tcp_addr = rust_tcp_listener.local_addr()?;
+    let rust_tcp_server = tokio::spawn(server::start_tcp(rust_tcp_listener));
 
     let mut go_server = Command::new(&go_server_bin)
         .env("SOCKET_PATH", go_sock.go_addr())
@@ -39,15 +42,17 @@ pub async fn run(rust_sock: &TestSocket, go_sock: &TestSocket) -> anyhow::Result
     println!("=== Connect Server Stream Integration Tests ===");
 
     // Run all 4 client tests concurrently
-    let (rs_go, rs_rs, go_go, go_rs) = tokio::join!(
+    let (rs_go, rs_rs, go_go, go_rs, interceptor_cases) = tokio::join!(
         run_go_client(rust_sock, &go_client_bin),
         client::run_server_stream_tests(rust_sock),
         run_go_client(go_sock, &go_client_bin),
         client::run_server_stream_tests(go_sock),
+        client::run_server_stream_interceptor_tests(rust_tcp_addr),
     );
 
     // Stop servers
     rust_server.abort();
+    rust_tcp_server.abort();
     go_server.kill().await.ok();
 
     // Report results
@@ -81,6 +86,7 @@ pub async fn run(rust_sock: &TestSocket, go_sock: &TestSocket) -> anyhow::Result
     };
     report_rust("Rust Server + Rust Client", rs_rs);
     report_rust("Go Server + Rust Client", go_rs);
+    report_rust("Rust TCP Server + Rust Client", interceptor_cases);
 
     println!();
     println!("{passed}/{total} passed");

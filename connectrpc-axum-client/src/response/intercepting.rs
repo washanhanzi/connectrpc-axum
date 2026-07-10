@@ -430,6 +430,12 @@ impl<S, T, I> InterceptingStreaming<S, T, I> {
         self.inner
     }
 
+    /// Get the request headers sent for this call.
+    #[doc(hidden)]
+    pub fn request_headers(&self) -> &HeaderMap {
+        &self.request_headers
+    }
+
     /// Get the inner streaming wrapper.
     #[deprecated(note = "renamed to `into_inner`")]
     pub fn get_inner(self) -> Streaming<S> {

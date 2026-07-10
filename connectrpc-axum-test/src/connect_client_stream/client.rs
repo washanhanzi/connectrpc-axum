@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use bytes::Bytes;
 use connectrpc_axum_client::{ClientError, stream_interceptor};
 use futures::stream;
-use http::Request;
+use http::{Request, header};
 use http_body_util::{BodyExt, Full};
 use hyper::client::conn::http1;
 use hyper_util::rt::TokioIo;
@@ -54,7 +54,23 @@ async fn run_typed_send_interceptor_error_wins(addr: SocketAddr) -> anyhow::Resu
     let sent = Arc::new(AtomicUsize::new(0));
     let client = EchoServiceClient::builder(format!("http://{addr}"))
         .http2_prior_knowledge()
-        .with_on_send_echo_client_stream(stream_interceptor(move |_ctx, _msg: &mut EchoRequest| {
+        .with_on_send_echo_client_stream(stream_interceptor(move |ctx, _msg: &mut EchoRequest| {
+            if ctx
+                .request_headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                != Some("application/connect+json")
+                || ctx
+                    .request_headers
+                    .get("connect-protocol-version")
+                    .and_then(|value| value.to_str().ok())
+                    != Some("1")
+            {
+                return Err(ClientError::internal(
+                    "typed send interceptor received incomplete request headers",
+                ));
+            }
+
             if sent.fetch_add(1, Ordering::SeqCst) == 0 {
                 Ok(())
             } else {

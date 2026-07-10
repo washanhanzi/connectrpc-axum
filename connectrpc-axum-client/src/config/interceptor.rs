@@ -174,7 +174,9 @@ pub trait Interceptor: Send + Sync + Clone + 'static {
 
     /// Called after the response is received.
     ///
-    /// Can inspect response headers.
+    /// For server-streaming and bidirectional calls, this runs once when the
+    /// initial response status and content type are accepted, before response
+    /// messages are consumed. It can inspect response headers.
     fn on_response(&self, ctx: &ResponseContext) -> Result<(), ClientError> {
         let _ = ctx;
         Ok(())
@@ -294,6 +296,11 @@ pub trait InterceptorInternal: Send + Sync + Clone + 'static {
     where
         Res: Message + DeserializeOwned + Default + 'static;
 
+    /// Intercept the initial response headers for a streaming response.
+    fn intercept_stream_response_headers(&self, _ctx: &ResponseContext) -> Result<(), ClientError> {
+        Ok(())
+    }
+
     /// Intercept a stream send.
     fn intercept_stream_send<Req>(
         &self,
@@ -400,6 +407,10 @@ impl<I: Interceptor> InterceptorInternal for HeaderWrapper<I> {
     where
         Res: Message + DeserializeOwned + Default + 'static,
     {
+        self.0.on_response(ctx)
+    }
+
+    fn intercept_stream_response_headers(&self, ctx: &ResponseContext) -> Result<(), ClientError> {
         self.0.on_response(ctx)
     }
 
@@ -519,6 +530,11 @@ where
         // Reverse order for responses (middleware unwinding)
         self.1.intercept_response(ctx, response)?;
         self.0.intercept_response(ctx, response)
+    }
+
+    fn intercept_stream_response_headers(&self, ctx: &ResponseContext) -> Result<(), ClientError> {
+        self.1.intercept_stream_response_headers(ctx)?;
+        self.0.intercept_stream_response_headers(ctx)
     }
 
     fn intercept_stream_send<Req>(

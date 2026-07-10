@@ -25,14 +25,21 @@ async fn say_hello_stream(
 }
 
 pub async fn start(listener: tokio::net::UnixListener) -> anyhow::Result<()> {
+    axum::serve(listener, app()).await?;
+    Ok(())
+}
+
+pub async fn start_tcp(listener: tokio::net::TcpListener) -> anyhow::Result<()> {
+    axum::serve(listener, app()).await?;
+    Ok(())
+}
+
+fn app() -> axum::Router<()> {
     let router = hello_world_service_connect::HelloWorldServiceBuilder::new()
         .say_hello_stream(say_hello_stream)
         .build();
 
-    let app = connectrpc_axum::MakeServiceBuilder::new()
+    connectrpc_axum::MakeServiceBuilder::new()
         .add_router(router)
-        .build();
-
-    axum::serve(listener, app).await?;
-    Ok(())
+        .build()
 }

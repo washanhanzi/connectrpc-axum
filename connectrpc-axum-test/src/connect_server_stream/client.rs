@@ -1,9 +1,16 @@
 use bytes::Bytes;
+use connectrpc_axum_client::{
+    ClientError, CompressionConfig, CompressionEncoding, stream_interceptor,
+};
+use futures::StreamExt;
 use http::Request;
 use http_body_util::{BodyExt, Full};
 use hyper::client::conn::http1;
 use hyper_util::rt::TokioIo;
+use std::net::SocketAddr;
 
+use crate::HelloRequest;
+use crate::hello_world_service_connect_client::HelloWorldServiceClient;
 use crate::socket::TestSocket;
 
 struct TestCase {
@@ -46,6 +53,65 @@ pub async fn run_server_stream_tests(sock: &TestSocket) -> Vec<CaseResult> {
         });
     }
     results
+}
+
+pub async fn run_server_stream_interceptor_tests(addr: SocketAddr) -> Vec<CaseResult> {
+    let error = run_typed_receive_request_headers(addr)
+        .await
+        .err()
+        .map(|error| error.to_string());
+    vec![CaseResult {
+        name: "typed on_receive observes transmitted request headers",
+        error,
+    }]
+}
+
+async fn run_typed_receive_request_headers(addr: SocketAddr) -> anyhow::Result<()> {
+    let client = HelloWorldServiceClient::builder(format!("http://{addr}"))
+        .compression(CompressionConfig::new(0))
+        .request_encoding(CompressionEncoding::Gzip)
+        .with_on_receive_say_hello_stream(stream_interceptor(|ctx, _response| {
+            if ctx
+                .request_headers
+                .get("content-type")
+                .and_then(|value| value.to_str().ok())
+                != Some("application/connect+json")
+                || ctx
+                    .request_headers
+                    .get("connect-protocol-version")
+                    .and_then(|value| value.to_str().ok())
+                    != Some("1")
+                || ctx
+                    .request_headers
+                    .get("connect-content-encoding")
+                    .and_then(|value| value.to_str().ok())
+                    != Some("gzip")
+            {
+                return Err(ClientError::internal(
+                    "typed receive interceptor received incomplete request headers",
+                ));
+            }
+            Ok(())
+        }))
+        .build()?;
+
+    let response = client
+        .say_hello_stream(&HelloRequest {
+            name: Some("headers".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let mut stream = response.into_inner();
+    let mut received = 0;
+    while let Some(response) = stream.next().await {
+        response?;
+        received += 1;
+    }
+    if received != 2 {
+        anyhow::bail!("expected 2 server stream messages, got {received}");
+    }
+
+    Ok(())
 }
 
 async fn run_one(sock: &TestSocket, tc: &TestCase) -> anyhow::Result<()> {

@@ -408,8 +408,8 @@ fn test_generated_stream_send_request_errors_abort_request_body() {
     // Typed streaming clients must route request stream errors through the
     // fallible call path (interceptor error wins over transport/server errors)
     // using the shared TypedSendStream wrapper.
-    assert!(buf.contains("call_client_stream_fallible_with_options"));
-    assert!(buf.contains("call_bidi_stream_fallible_with_options"));
+    assert!(buf.contains("call_client_stream_fallible_with_headers"));
+    assert!(buf.contains("call_bidi_stream_fallible_with_headers"));
     assert!(buf.contains("TypedSendStream"));
 }
 
