@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+message PackageLessRequest {
+  string display_name = 1;
+}
+
+message PackageLessResponse {
+  string greeting = 1;
+}
+
+service PackageLessService {
+  rpc Call(PackageLessRequest) returns (PackageLessResponse) {}
+}

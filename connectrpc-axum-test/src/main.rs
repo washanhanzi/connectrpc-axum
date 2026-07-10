@@ -12,6 +12,10 @@ mod wkt_pb {
     include!(concat!(env!("OUT_DIR"), "/wkt.rs"));
 }
 
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/protos.rs"));
+}
+
 mod axum_router;
 mod client_streaming_compression;
 mod compression_algos;
@@ -111,5 +115,37 @@ mod well_known_types_json_tests {
             serde_json::to_string(&pbjson_types::Empty {}).unwrap(),
             "{}"
         );
+    }
+}
+
+#[cfg(test)]
+mod package_less_proto_tests {
+    use super::generated::{PackageLessRequest, PackageLessResponse};
+    use connectrpc_axum::{ConnectRequest, ConnectResponse};
+
+    async fn call(
+        ConnectRequest(request): ConnectRequest<PackageLessRequest>,
+    ) -> Result<ConnectResponse<PackageLessResponse>, connectrpc_axum::ConnectError> {
+        Ok(ConnectResponse::new(PackageLessResponse {
+            greeting: format!("Hello, {}", request.display_name),
+        }))
+    }
+
+    #[test]
+    fn generated_package_less_messages_support_json_handlers() {
+        let request = PackageLessRequest {
+            display_name: "Ada".to_string(),
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert_eq!(json, r#"{"displayName":"Ada"}"#);
+        assert_eq!(
+            serde_json::from_str::<PackageLessRequest>(&json).unwrap(),
+            request
+        );
+
+        let _router =
+            super::generated::package_less_service_connect::PackageLessServiceBuilder::new()
+                .call(call)
+                .build();
     }
 }

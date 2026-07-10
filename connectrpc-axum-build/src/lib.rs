@@ -836,21 +836,16 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
         use ::prost::Message;
         use std::fs;
 
-        // pbjson-build panics on FileDescriptorProtos without a package, so
-        // filter them out of the registered descriptors.
+        // pbjson-build expects the package option to be present. An explicitly
+        // empty package generates the package-less `.serde.rs` output correctly.
         let mut fds = prost_types::FileDescriptorSet::decode(descriptor_bytes)
             .map_err(|e| std::io::Error::other(format!("decode descriptor: {e}")))?;
-        fds.file.retain(|file| {
-            let has_package = file.package.as_deref().is_some_and(|p| !p.is_empty());
-            if !has_package {
-                println!(
-                    "cargo:warning=Skipping pbjson serde implementations for '{}': proto file has no package.",
-                    file.name.as_deref().unwrap_or("<unknown>")
-                );
+        for file in &mut fds.file {
+            if file.package.is_none() {
+                file.package = Some(String::new());
             }
-            has_package
-        });
-        let filtered_descriptor_bytes = fds.encode_to_vec();
+        }
+        let registered_descriptor_bytes = fds.encode_to_vec();
 
         let mut pbjson_builder = pbjson_build::Builder::new();
         pbjson_builder.out_dir(out_dir);
@@ -862,7 +857,7 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
             config_fn(&mut pbjson_builder);
         }
         pbjson_builder
-            .register_descriptors(&filtered_descriptor_bytes)
+            .register_descriptors(&registered_descriptor_bytes)
             .map_err(|e| std::io::Error::other(format!("register descriptors: {e}")))?
             .build(&["."]) // Generate for all packages
             .map_err(|e| std::io::Error::other(format!("pbjson build: {e}")))?;
@@ -875,9 +870,11 @@ impl<C: BuildMarker, T: BuildMarker, TC: BuildMarker, CC: BuildMarker>
             if let Some(file_name) = path.file_name().and_then(|n| n.to_str())
                 && file_name.ends_with(".serde.rs")
             {
-                // Get the base name (e.g., "hello" from "hello.serde.rs")
+                // Prost uses `_` for package-less output while pbjson uses an
+                // empty file stem (`.serde.rs`).
                 let base_name = file_name.strip_suffix(".serde.rs").unwrap();
-                let main_file = format!("{}/{}.rs", out_dir, base_name);
+                let generated_file_stem = if base_name.is_empty() { "_" } else { base_name };
+                let main_file = format!("{out_dir}/{generated_file_stem}.rs");
 
                 if std::path::Path::new(&main_file).exists() {
                     append_generated_file(

@@ -276,7 +276,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Depending on enabled methods/features:
 
-- Message types with `prost::Message` + `serde` derives (pbjson serde generation is skipped, with a cargo warning, for proto files without a `package` declaration — those messages only get `prost::Message`)
+- Message types with `prost::Message` and protobuf-JSON-compatible serde implementations, including proto files without a `package` declaration
 - Connect service builders (unless `no_connect_server()` is used)
 - Per-method procedure path constants in the `{service}_procedures` module (if `with_connect_client()`)
 - Typed Connect clients (if `with_connect_client()`)
