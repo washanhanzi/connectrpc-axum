@@ -41,19 +41,25 @@ Feature: connectrpc-axum-test integration behavior — streaming core
   # Source refs:
   # - connectrpc-axum-test/src/connect_bidi_stream.rs (orchestrator)
   # - connectrpc-axum-test/src/connect_bidi_stream/server.rs (Rust server: EchoBidiStream handler)
-  # - connectrpc-axum-test/src/connect_bidi_stream/client.rs (Rust client: HTTP/1.1 half-duplex, HTTP/2 for Go server, send-interceptor wake test)
+  # - connectrpc-axum-test/src/connect_bidi_stream/client.rs (Rust client: HTTP/1.1 rejection, HTTP/2 streaming, send-interceptor wake test)
   # - connectrpc-axum-test/go/connect_bidi_stream/server/server.go (Go server: h2c, requires HTTP/2 for bidi)
   # - connectrpc-axum-test/go/connect_bidi_stream/client/client.go (Go client: HTTP/2 h2c transport)
 
   Scenario: connect_bidi_stream — bidirectional streaming echoes messages
     Given an EchoBidiStream server that echoes each message
-    When the client sends 3 messages via Connect bidi streaming
+    When the client sends 3 messages via Connect bidi streaming over HTTP/2
     Then the response contains at least 3 echo responses
     And the first echo contains "Echo #1"
+
+  Scenario: connect_bidi_stream — HTTP/1 is rejected before reading the request stream
+    Given a Connect bidirectional streaming request over HTTP/1.1
+    When the request body sends one message and remains open
+    Then the server promptly responds with HTTP 505
+    And the response includes "Connection: close"
+    And the response body is empty
 
   Scenario: connect_bidi_stream — send interceptor error wakes pending receive
     Given a Rust Connect client opens an HTTP/2 bidirectional stream
     And the receive side is waiting for the next response
     When an on_send interceptor rejects the next request message
     Then the receive side returns that send interceptor error instead of timing out
-

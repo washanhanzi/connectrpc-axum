@@ -44,7 +44,7 @@ pub async fn run(rust_sock: &TestSocket, go_sock: &TestSocket) -> anyhow::Result
         run_go_client(rust_sock, &go_client_bin),
         client::run_bidi_stream_tests(rust_sock),
         run_go_client(go_sock, &go_client_bin),
-        client::run_bidi_stream_tests_h2(go_sock),
+        client::run_bidi_stream_tests(go_sock),
         client::run_bidi_stream_interceptor_tests(rust_tcp_addr),
     );
 

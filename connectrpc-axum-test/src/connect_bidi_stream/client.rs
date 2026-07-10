@@ -1,3 +1,4 @@
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -8,8 +9,9 @@ use connectrpc_axum_client::{
     ClientError, ConnectClient, MessageInterceptor, StreamContext, stream_interceptor,
 };
 use futures::StreamExt;
-use http::Request;
-use http_body_util::{BodyExt, Full};
+use http::{Request, StatusCode, header};
+use http_body_util::{BodyExt, Full, StreamBody};
+use hyper::body::Frame;
 use hyper::client::conn::http1;
 use hyper_util::rt::TokioIo;
 use prost::Message;
@@ -36,20 +38,17 @@ fn envelope_frame(flags: u8, payload: &[u8]) -> Vec<u8> {
 }
 
 pub async fn run_bidi_stream_tests(sock: &TestSocket) -> Vec<CaseResult> {
-    let err = run_one_http1(sock).await.err().map(|e| e.to_string());
-    vec![CaseResult {
-        name: "bidi stream echoes messages",
-        error: err,
-    }]
-}
-
-/// Tests bidi stream over HTTP/2 (required by connect-go servers)
-pub async fn run_bidi_stream_tests_h2(sock: &TestSocket) -> Vec<CaseResult> {
-    let err = run_one_http2(sock).await.err().map(|e| e.to_string());
-    vec![CaseResult {
-        name: "bidi stream echoes messages",
-        error: err,
-    }]
+    let (http1_result, http2_result) = tokio::join!(rejects_http1(sock), run_one_http2(sock));
+    vec![
+        CaseResult {
+            name: "bidi stream rejects HTTP/1 without reading the request body",
+            error: http1_result.err().map(|e| e.to_string()),
+        },
+        CaseResult {
+            name: "bidi stream echoes messages over HTTP/2",
+            error: http2_result.err().map(|e| e.to_string()),
+        },
+    ]
 }
 
 pub async fn run_bidi_stream_interceptor_tests(addr: SocketAddr) -> Vec<CaseResult> {
@@ -218,19 +217,21 @@ async fn run_typed_send_interceptor_wakes_receive(addr: SocketAddr) -> anyhow::R
     receive.await?
 }
 
-/// Bidi stream over HTTP/1.1 (half-duplex, works with Rust server)
-async fn run_one_http1(sock: &TestSocket) -> anyhow::Result<()> {
+async fn rejects_http1(sock: &TestSocket) -> anyhow::Result<()> {
     let stream = sock.connect().await?;
     let io = TokioIo::new(stream);
 
     let (mut sender, conn) = http1::handshake(io).await?;
     tokio::spawn(async move {
-        if let Err(e) = conn.await {
-            eprintln!("connection error: {e}");
-        }
+        let _ = conn.await;
     });
 
-    let body = build_bidi_request_body();
+    let first_frame = envelope_frame(0x00, br#"{"message":"Hello"}"#);
+    let request_frames =
+        futures::stream::once(
+            async move { Ok::<_, Infallible>(Frame::data(Bytes::from(first_frame))) },
+        )
+        .chain(futures::stream::pending());
 
     let req = Request::builder()
         .method("POST")
@@ -238,10 +239,37 @@ async fn run_one_http1(sock: &TestSocket) -> anyhow::Result<()> {
         .header("Content-Type", "application/connect+json")
         .header("Connect-Protocol-Version", "1")
         .header("Host", "localhost")
-        .body(Full::new(Bytes::from(body)))?;
+        .body(StreamBody::new(request_frames))?;
 
-    let resp = sender.send_request(req).await?;
-    validate_response(resp).await
+    let resp = tokio::time::timeout(Duration::from_secs(1), sender.send_request(req))
+        .await
+        .map_err(|_| anyhow::anyhow!("HTTP/1 bidi request was not rejected promptly"))??;
+
+    if resp.status() != StatusCode::HTTP_VERSION_NOT_SUPPORTED {
+        anyhow::bail!(
+            "expected HTTP 505 for HTTP/1 bidi request, got {}",
+            resp.status()
+        );
+    }
+    if resp.headers().get(header::CONNECTION) != Some(&http::HeaderValue::from_static("close")) {
+        anyhow::bail!(
+            "expected Connection: close for HTTP/1 bidi request, got {:?}",
+            resp.headers().get(header::CONNECTION)
+        );
+    }
+
+    let response_body = tokio::time::timeout(Duration::from_secs(1), resp.into_body().collect())
+        .await
+        .map_err(|_| anyhow::anyhow!("HTTP/1 rejection body did not finish promptly"))??
+        .to_bytes();
+    if !response_body.is_empty() {
+        anyhow::bail!(
+            "expected empty HTTP/1 rejection body, got {} bytes",
+            response_body.len()
+        );
+    }
+
+    Ok(())
 }
 
 /// Bidi stream over HTTP/2 (required by connect-go servers)

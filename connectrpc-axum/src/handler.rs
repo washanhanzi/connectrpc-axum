@@ -1,6 +1,8 @@
 use axum::{
+    body::Body,
     extract::{FromRequest, FromRequestParts, Request},
     handler::Handler,
+    http::{StatusCode, Version, header},
     response::{IntoResponse, Response},
     routing::MethodRouter,
 };
@@ -60,6 +62,23 @@ pub(crate) fn validate_unary_protocol(ctx: &ConnectContext) -> Option<Response> 
 /// Unary content-types are rejected with `Code::Unknown`.
 pub(crate) fn validate_streaming_protocol(ctx: &ConnectContext) -> Option<Response> {
     validate_streaming_content_type(ctx.protocol).map(|err| err.into_response_with_context(ctx))
+}
+
+fn check_bidi_http_version(version: Version) -> Option<Response> {
+    if matches!(
+        version,
+        Version::HTTP_09 | Version::HTTP_10 | Version::HTTP_11
+    ) {
+        return Some(
+            Response::builder()
+                .status(StatusCode::HTTP_VERSION_NOT_SUPPORTED)
+                .header(header::CONNECTION, "close")
+                .body(Body::empty())
+                .expect("valid HTTP version error response"),
+        );
+    }
+
+    None
 }
 
 /// A wrapper that adapts ConnectHandler functions to work with Axum's Handler trait
@@ -403,6 +422,10 @@ macro_rules! impl_bidi_stream_handler_for_connect_handler_wrapper {
             #[allow(unused_mut)]
             fn call(self, req: Request, state: S) -> Self::Future {
                 Box::pin(async move {
+                    if let Some(response) = check_bidi_http_version(req.version()) {
+                        return response;
+                    }
+
                     let ctx = req
                         .extensions()
                         .get::<ConnectContext>()
@@ -557,6 +580,10 @@ where
 
     fn call(self, req: Request, _state: ()) -> Self::Future {
         Box::pin(async move {
+            if let Some(response) = check_bidi_http_version(req.version()) {
+                return response;
+            }
+
             let ctx = req
                 .extensions()
                 .get::<ConnectContext>()
