@@ -72,10 +72,14 @@ pub struct FrameDecoder<S, T> {
     max_message_size: Option<usize>,
     /// Stored trailers from EndStream frame.
     trailers: Option<Metadata>,
-    /// Whether the stream has finished (received EndStream or error).
+    /// Whether a terminal result has been emitted.
     finished: bool,
-    /// Error from the EndStream frame, if any.
-    end_stream_error: Option<ClientError>,
+    /// Whether an EndStream frame was received and the transport is being drained.
+    received_end_stream: bool,
+    /// EndStream payload to parse after confirming that the frame was terminal.
+    end_stream_payload: Option<Bytes>,
+    /// Number of bytes received after the EndStream frame.
+    bytes_after_end_stream: usize,
     /// Type marker for the message type.
     _marker: PhantomData<T>,
 }
@@ -97,7 +101,9 @@ impl<S, T> FrameDecoder<S, T> {
             max_message_size: None,
             trailers: None,
             finished: false,
-            end_stream_error: None,
+            received_end_stream: false,
+            end_stream_payload: None,
+            bytes_after_end_stream: 0,
             _marker: PhantomData,
         }
     }
@@ -187,16 +193,8 @@ impl<S, T> FrameDecoder<S, T> {
         // compressed EndStream frame (0x03) is handled here too.
         match process_envelope_payload(flags, payload, self.encoding, self.max_message_size)? {
             EnvelopePayload::EndStream(payload) => {
-                let (error, trailers) = parse_end_stream(&payload)?;
-
-                // Store trailers
-                self.trailers = trailers;
-                self.finished = true;
-
-                if let Some(err) = error {
-                    // Store error for next poll
-                    self.end_stream_error = Some(err);
-                }
+                self.received_end_stream = true;
+                self.end_stream_payload = Some(payload);
 
                 Ok(Some(DecodedFrame::EndStream))
             }
@@ -223,14 +221,55 @@ where
         let this = self.get_mut();
 
         loop {
-            // Check for stored EndStream error
-            if let Some(err) = this.end_stream_error.take() {
-                return Poll::Ready(Some(Err(err)));
-            }
-
             // If finished, no more items
             if this.finished {
                 return Poll::Ready(None);
+            }
+
+            if this.received_end_stream {
+                if !this.buffer.is_empty() {
+                    this.bytes_after_end_stream = this
+                        .bytes_after_end_stream
+                        .saturating_add(this.buffer.len());
+                    this.buffer.clear();
+                }
+
+                match Pin::new(&mut this.stream).poll_next(cx) {
+                    Poll::Ready(Some(Ok(chunk))) if chunk.is_empty() => continue,
+                    Poll::Ready(Some(Ok(chunk))) => {
+                        this.bytes_after_end_stream =
+                            this.bytes_after_end_stream.saturating_add(chunk.len());
+                        continue;
+                    }
+                    Poll::Ready(Some(Err(error))) => {
+                        this.finished = true;
+                        return Poll::Ready(Some(Err(ClientError::Protocol(format!(
+                            "corrupt response: I/O error after end-stream message: {error}"
+                        )))));
+                    }
+                    Poll::Ready(None) => {
+                        this.finished = true;
+                        if this.bytes_after_end_stream > 0 {
+                            return Poll::Ready(Some(Err(ClientError::Protocol(format!(
+                                "corrupt response: {} extra bytes after end of stream",
+                                this.bytes_after_end_stream
+                            )))));
+                        }
+
+                        let payload = this
+                            .end_stream_payload
+                            .take()
+                            .expect("received EndStream without its payload");
+                        return match parse_end_stream(&payload) {
+                            Ok((error, trailers)) => {
+                                this.trailers = trailers;
+                                Poll::Ready(error.map(Err))
+                            }
+                            Err(error) => Poll::Ready(Some(Err(error))),
+                        };
+                    }
+                    Poll::Pending => return Poll::Pending,
+                }
             }
 
             // Try to parse a frame from the buffer
@@ -239,12 +278,8 @@ where
                     return Poll::Ready(Some(Ok(msg)));
                 }
                 Ok(Some(DecodedFrame::EndStream)) => {
-                    // Check for error from EndStream
-                    if let Some(err) = this.end_stream_error.take() {
-                        return Poll::Ready(Some(Err(err)));
-                    }
-                    // Successful end of stream
-                    return Poll::Ready(None);
+                    // Drain the transport to validate that EndStream was terminal.
+                    continue;
                 }
                 Ok(None) => {
                     // Need more data, poll the underlying stream
@@ -317,13 +352,11 @@ struct EndStreamError {
 fn parse_end_stream(
     payload: &[u8],
 ) -> Result<(Option<ClientError>, Option<Metadata>), ClientError> {
-    // Empty payload is valid (no error, no trailers)
-    if payload.is_empty() || payload == b"{}" {
-        return Ok((None, None));
-    }
-
-    let end_stream: EndStreamJson = serde_json::from_slice(payload)
+    let end_stream: Option<EndStreamJson> = serde_json::from_slice(payload)
         .map_err(|e| ClientError::Protocol(format!("invalid EndStream JSON: {}", e)))?;
+    let Some(end_stream) = end_stream else {
+        return Ok((None, None));
+    };
 
     // Parse error if present
     let error = end_stream.error.map(|e| {
@@ -366,8 +399,8 @@ fn parse_end_stream(
 mod tests {
     use super::*;
     use bytes::Bytes;
-    use futures::StreamExt;
     use futures::stream;
+    use futures::{FutureExt, StreamExt};
 
     // Helper to create a frame
     fn make_frame(flags: u8, payload: &[u8]) -> Bytes {
@@ -544,6 +577,73 @@ mod tests {
         assert_eq!(values, vec!["value1", "value2"]);
     }
 
+    #[tokio::test]
+    async fn test_decode_waits_for_eof_after_end_stream() {
+        let end_frame = make_frame(0x02, b"{}");
+        let stream = stream::iter(vec![Ok::<_, ClientError>(end_frame)])
+            .chain(stream::pending::<Result<Bytes, ClientError>>());
+        let mut decoder =
+            FrameDecoder::<_, TestMessage>::new(stream, false, CompressionEncoding::Identity);
+
+        assert!(decoder.next().now_or_never().is_none());
+        assert!(!decoder.is_finished());
+    }
+
+    #[tokio::test]
+    async fn test_decode_rejects_bytes_after_end_stream_in_same_chunk() {
+        let end_payload = br#"{"error":{"code":"internal","message":"end error"}}"#;
+        let mut response = make_frame(0x02, end_payload).to_vec();
+        response.extend_from_slice(b"extra");
+
+        let stream = stream::iter(vec![Ok::<_, ClientError>(Bytes::from(response))]);
+        let mut decoder =
+            FrameDecoder::<_, TestMessage>::new(stream, false, CompressionEncoding::Identity);
+
+        let error = decoder.next().await.unwrap().unwrap_err();
+        assert!(matches!(error, ClientError::Protocol(_)));
+        assert_eq!(
+            error.message(),
+            Some("corrupt response: 5 extra bytes after end of stream")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_decode_rejects_bytes_after_end_stream_in_later_chunk() {
+        let end_payload = br#"{"error":{"code":"internal","message":"end error"}}"#;
+        let stream = stream::iter(vec![
+            Ok::<_, ClientError>(make_frame(0x02, end_payload)),
+            Ok(Bytes::from_static(b"later")),
+        ]);
+        let mut decoder =
+            FrameDecoder::<_, TestMessage>::new(stream, false, CompressionEncoding::Identity);
+
+        let error = decoder.next().await.unwrap().unwrap_err();
+        assert!(matches!(error, ClientError::Protocol(_)));
+        assert_eq!(
+            error.message(),
+            Some("corrupt response: 5 extra bytes after end of stream")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_decode_reports_io_error_after_end_stream() {
+        let stream = stream::iter(vec![
+            Ok::<_, ClientError>(make_frame(0x02, b"{}")),
+            Err(ClientError::Transport("connection closed".to_string())),
+        ]);
+        let mut decoder =
+            FrameDecoder::<_, TestMessage>::new(stream, false, CompressionEncoding::Identity);
+
+        let error = decoder.next().await.unwrap().unwrap_err();
+        assert!(matches!(error, ClientError::Protocol(_)));
+        assert_eq!(
+            error.message(),
+            Some(
+                "corrupt response: I/O error after end-stream message: transport error: connection closed"
+            )
+        );
+    }
+
     /// A frame with the COMPRESSED bit set while no compression was negotiated
     /// (Identity) is a protocol error, matching connect-go's
     /// "sent compressed message without compression support".
@@ -667,6 +767,20 @@ mod tests {
     #[test]
     fn test_parse_end_stream_empty() {
         let (error, trailers) = parse_end_stream(b"{}").unwrap();
+        assert!(error.is_none());
+        assert!(trailers.is_none());
+    }
+
+    #[test]
+    fn test_parse_end_stream_rejects_empty_payload() {
+        let error = parse_end_stream(b"").unwrap_err();
+        assert!(matches!(error, ClientError::Protocol(_)));
+        assert!(error.to_string().contains("invalid EndStream JSON"));
+    }
+
+    #[test]
+    fn test_parse_end_stream_accepts_null_payload() {
+        let (error, trailers) = parse_end_stream(b"null").unwrap();
         assert!(error.is_none());
         assert!(trailers.is_none());
     }
