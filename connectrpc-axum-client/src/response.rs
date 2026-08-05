@@ -24,3 +24,4 @@ pub use intercepting::{
 };
 pub use streaming::Streaming;
 pub use types::{ConnectResponse, Metadata};
+pub(crate) use types::{ResponseMetadataMode, normalize_response_metadata};

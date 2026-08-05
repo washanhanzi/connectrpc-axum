@@ -3,6 +3,7 @@
 //! This module provides [`ClientError`], the error type for Connect RPC client operations.
 
 use connectrpc_axum_core::{Code, EnvelopeError, ErrorDetail, Status};
+use http::HeaderMap;
 
 /// Client-side Connect protocol error variants.
 ///
@@ -78,6 +79,17 @@ impl ClientError {
         match self {
             ClientError::Rpc(status) => status.details(),
             _ => &[],
+        }
+    }
+
+    /// Get response metadata received with the RPC error.
+    ///
+    /// Transport, encoding, decoding, and protocol errors do not carry
+    /// response metadata.
+    pub fn metadata(&self) -> Option<&HeaderMap> {
+        match self {
+            ClientError::Rpc(status) => status.metadata(),
+            _ => None,
         }
     }
 
@@ -227,6 +239,7 @@ impl From<EnvelopeError> for ClientError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http::HeaderValue;
 
     #[test]
     fn test_client_error_new() {
@@ -313,6 +326,41 @@ mod tests {
         let status = err.into_status();
         assert!(status.is_some());
         assert_eq!(status.unwrap().code(), Code::Internal);
+    }
+
+    #[test]
+    fn test_client_error_metadata_delegates_only_for_rpc_errors() {
+        let mut metadata = HeaderMap::new();
+        metadata.append("x-request-id", HeaderValue::from_static("request-1"));
+        metadata.append("x-request-id", HeaderValue::from_static("request-2"));
+        let err = ClientError::Rpc(Status::unavailable("retry").with_metadata(metadata));
+
+        let values: Vec<_> = err
+            .metadata()
+            .unwrap()
+            .get_all("x-request-id")
+            .iter()
+            .collect();
+        assert_eq!(
+            values,
+            vec![
+                &HeaderValue::from_static("request-1"),
+                &HeaderValue::from_static("request-2"),
+            ]
+        );
+
+        assert!(
+            ClientError::Transport("offline".into())
+                .metadata()
+                .is_none()
+        );
+        assert!(ClientError::Encode("encode".into()).metadata().is_none());
+        assert!(ClientError::Decode("decode".into()).metadata().is_none());
+        assert!(
+            ClientError::Protocol("protocol".into())
+                .metadata()
+                .is_none()
+        );
     }
 
     #[test]

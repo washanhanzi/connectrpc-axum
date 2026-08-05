@@ -3,8 +3,72 @@
 //! This module provides the [`ConnectResponse`] type which wraps RPC responses
 //! along with metadata (headers) from the server.
 
-use http::HeaderMap;
+use http::{HeaderMap, HeaderName};
 use std::ops::Deref;
+
+/// How response metadata is represented on the wire.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ResponseMetadataMode {
+    /// Unary trailing metadata uses `Trailer-`-prefixed HTTP headers.
+    Unary,
+    /// Streaming trailing metadata is carried by the EndStream envelope.
+    Streaming,
+}
+
+/// Build the metadata exposed by the client from response headers and
+/// protocol trailers.
+///
+/// Values are copied as raw [`http::HeaderValue`]s. Initial header values are
+/// appended before trailing values when both use the same normalized name.
+pub(crate) fn normalize_response_metadata(
+    headers: &HeaderMap,
+    trailers: Option<&HeaderMap>,
+    mode: ResponseMetadataMode,
+) -> HeaderMap {
+    let mut metadata =
+        HeaderMap::with_capacity(headers.len() + trailers.map(HeaderMap::len).unwrap_or_default());
+
+    // Copy leading metadata first. For unary responses, `Trailer-*` entries
+    // are handled in a second pass so their values always follow ordinary
+    // values with the same normalized name.
+    for name in headers.keys() {
+        if mode == ResponseMetadataMode::Unary && name.as_str().starts_with("trailer-") {
+            continue;
+        }
+        append_header_values(&mut metadata, name.clone(), name, headers);
+    }
+
+    if mode == ResponseMetadataMode::Unary {
+        for name in headers.keys() {
+            let Some(suffix) = name.as_str().strip_prefix("trailer-") else {
+                continue;
+            };
+            let Ok(normalized_name) = HeaderName::from_bytes(suffix.as_bytes()) else {
+                continue;
+            };
+            append_header_values(&mut metadata, normalized_name, name, headers);
+        }
+    }
+
+    if let Some(trailers) = trailers {
+        for name in trailers.keys() {
+            append_header_values(&mut metadata, name.clone(), name, trailers);
+        }
+    }
+
+    metadata
+}
+
+fn append_header_values(
+    target: &mut HeaderMap,
+    target_name: HeaderName,
+    source_name: &HeaderName,
+    source: &HeaderMap,
+) {
+    for value in source.get_all(source_name) {
+        target.append(target_name.clone(), value.clone());
+    }
+}
 
 /// Response wrapper for Connect RPC client calls.
 ///
@@ -255,5 +319,62 @@ mod tests {
         let (inner, metadata) = response.into_parts();
         assert_eq!(inner, 42);
         assert_eq!(metadata.get("x-test"), Some("test-value"));
+    }
+
+    #[test]
+    fn unary_metadata_normalizes_trailer_prefix_after_leading_values() {
+        let mut headers = HeaderMap::new();
+        headers.append("x-shared", HeaderValue::from_static("header-1"));
+        headers.append("x-shared", HeaderValue::from_static("header-2"));
+        headers.append("trailer-x-shared", HeaderValue::from_static("trailer-1"));
+        headers.append("trailer-x-shared", HeaderValue::from_static("trailer-2"));
+        headers.append("trailer-payload-bin", HeaderValue::from_static("AQID"));
+
+        let metadata = normalize_response_metadata(&headers, None, ResponseMetadataMode::Unary);
+
+        let shared: Vec<_> = metadata
+            .get_all("x-shared")
+            .iter()
+            .map(HeaderValue::as_bytes)
+            .collect();
+        assert_eq!(
+            shared,
+            vec![
+                b"header-1".as_slice(),
+                b"header-2".as_slice(),
+                b"trailer-1".as_slice(),
+                b"trailer-2".as_slice(),
+            ]
+        );
+        assert!(!metadata.contains_key("trailer-x-shared"));
+        assert_eq!(metadata["payload-bin"].as_bytes(), b"AQID");
+    }
+
+    #[test]
+    fn streaming_metadata_keeps_trailer_prefix_and_appends_end_stream_values() {
+        let mut headers = HeaderMap::new();
+        headers.append("x-shared", HeaderValue::from_static("header"));
+        headers.append("trailer-x-shared", HeaderValue::from_static("literal"));
+        let mut trailers = HeaderMap::new();
+        trailers.append("x-shared", HeaderValue::from_static("end-stream-1"));
+        trailers.append("x-shared", HeaderValue::from_static("end-stream-2"));
+
+        let metadata =
+            normalize_response_metadata(&headers, Some(&trailers), ResponseMetadataMode::Streaming);
+
+        let shared: Vec<_> = metadata
+            .get_all("x-shared")
+            .iter()
+            .map(HeaderValue::as_bytes)
+            .collect();
+        assert_eq!(
+            shared,
+            vec![
+                b"header".as_slice(),
+                b"end-stream-1".as_slice(),
+                b"end-stream-2".as_slice(),
+            ]
+        );
+        assert_eq!(metadata["trailer-x-shared"], "literal");
     }
 }

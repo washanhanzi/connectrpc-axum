@@ -12,10 +12,11 @@ use connectrpc_axum_core::{
     Code, CompressionEncoding, ENVELOPE_HEADER_SIZE, EnvelopePayload, parse_envelope_header,
     process_envelope_payload,
 };
+use http::HeaderMap;
 
 use crate::ClientError;
-use crate::response::Metadata;
 use crate::response::error_parser::{ErrorDetailJson, parse_error_detail};
+use crate::response::{Metadata, ResponseMetadataMode, normalize_response_metadata};
 use futures::Stream;
 use prost::Message;
 use serde::Deserialize;
@@ -72,6 +73,8 @@ pub struct FrameDecoder<S, T> {
     max_message_size: Option<usize>,
     /// Stored trailers from EndStream frame.
     trailers: Option<Metadata>,
+    /// Initial HTTP response headers to attach to explicit EndStream errors.
+    response_headers: HeaderMap,
     /// Whether a terminal result has been emitted.
     finished: bool,
     /// Whether an EndStream frame was received and the transport is being drained.
@@ -100,6 +103,7 @@ impl<S, T> FrameDecoder<S, T> {
             encoding,
             max_message_size: None,
             trailers: None,
+            response_headers: HeaderMap::new(),
             finished: false,
             received_end_stream: false,
             end_stream_payload: None,
@@ -114,6 +118,16 @@ impl<S, T> FrameDecoder<S, T> {
     /// rejected with a `ResourceExhausted` error (decompression-bomb guard).
     pub fn with_max_message_size(mut self, max_message_size: Option<usize>) -> Self {
         self.max_message_size = max_message_size;
+        self
+    }
+
+    /// Set the initial HTTP response headers.
+    ///
+    /// Explicit RPC errors in an EndStream frame receive the union of these
+    /// headers and the EndStream metadata. Decoder and transport errors remain
+    /// metadata-free.
+    pub fn with_response_headers(mut self, response_headers: HeaderMap) -> Self {
+        self.response_headers = response_headers;
         self
     }
 
@@ -263,6 +277,17 @@ where
                         return match parse_end_stream(&payload) {
                             Ok((error, trailers)) => {
                                 this.trailers = trailers;
+                                let error = error.map(|error| match error {
+                                    ClientError::Rpc(status) => {
+                                        let metadata = normalize_response_metadata(
+                                            &this.response_headers,
+                                            this.trailers.as_ref().map(Metadata::headers),
+                                            ResponseMetadataMode::Streaming,
+                                        );
+                                        ClientError::Rpc(status.with_metadata(metadata))
+                                    }
+                                    other => other,
+                                });
                                 Poll::Ready(error.map(Err))
                             }
                             Err(error) => Poll::Ready(Some(Err(error))),
@@ -553,6 +578,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn end_stream_error_has_headers_and_trailers_while_trailers_remain_accessible() {
+        let end_payload = br#"{"error":{"code":"unavailable","message":"retry"},"metadata":{"x-shared":["trailer-1","trailer-2"],"payload-bin":["AQID"]}}"#;
+        let end_frame = make_frame(0x02, end_payload);
+        let stream = stream::iter(vec![Ok::<_, ClientError>(end_frame)]);
+        let mut response_headers = HeaderMap::new();
+        response_headers.append("x-shared", "header-1".parse().unwrap());
+        response_headers.append("x-shared", "header-2".parse().unwrap());
+        response_headers.append("trailer-literal", "unchanged".parse().unwrap());
+        let mut decoder =
+            FrameDecoder::<_, TestMessage>::new(stream, false, CompressionEncoding::Identity)
+                .with_response_headers(response_headers);
+
+        let error = decoder.next().await.unwrap().unwrap_err();
+        let metadata = error.metadata().unwrap();
+        let values: Vec<_> = metadata
+            .get_all("x-shared")
+            .iter()
+            .map(http::HeaderValue::as_bytes)
+            .collect();
+        assert_eq!(
+            values,
+            vec![
+                b"header-1".as_slice(),
+                b"header-2".as_slice(),
+                b"trailer-1".as_slice(),
+                b"trailer-2".as_slice(),
+            ]
+        );
+        assert_eq!(metadata["payload-bin"].as_bytes(), b"AQID");
+        assert_eq!(metadata["trailer-literal"], "unchanged");
+
+        let trailers = decoder.trailers().unwrap();
+        assert_eq!(
+            trailers.get_all("x-shared").collect::<Vec<_>>(),
+            vec!["trailer-1", "trailer-2"]
+        );
+        assert_eq!(trailers.get("payload-bin"), Some("AQID"));
+    }
+
+    #[tokio::test]
+    async fn malformed_end_stream_error_does_not_receive_response_metadata() {
+        let end_frame = make_frame(0x02, b"not JSON");
+        let stream = stream::iter(vec![Ok::<_, ClientError>(end_frame)]);
+        let mut response_headers = HeaderMap::new();
+        response_headers.insert("x-request-id", "request-1".parse().unwrap());
+        let mut decoder =
+            FrameDecoder::<_, TestMessage>::new(stream, false, CompressionEncoding::Identity)
+                .with_response_headers(response_headers);
+
+        let error = decoder.next().await.unwrap().unwrap_err();
+        assert!(matches!(error, ClientError::Protocol(_)));
+        assert!(error.metadata().is_none());
+    }
+
+    #[tokio::test]
     async fn test_decode_with_trailers() {
         let frame = make_frame(0x00, br#"{"value":"hello"}"#);
         let end_payload = br#"{"metadata":{"x-custom":["value1","value2"]}}"#;
@@ -710,13 +790,17 @@ mod tests {
 
         let stream =
             stream::iter(vec![Ok::<_, ClientError>(Bytes::from(header))]).chain(stream::pending());
+        let mut response_headers = HeaderMap::new();
+        response_headers.insert("x-request-id", "request-1".parse().unwrap());
         let mut decoder =
             FrameDecoder::<_, TestMessage>::new(stream, false, CompressionEncoding::Identity)
-                .with_max_message_size(Some(64 * 1024));
+                .with_max_message_size(Some(64 * 1024))
+                .with_response_headers(response_headers);
 
         // The error surfaces without waiting for the (never-sent) payload.
         let err = decoder.next().await.unwrap().unwrap_err();
         assert_eq!(err.code(), Code::ResourceExhausted);
+        assert!(err.metadata().is_none());
     }
 
     /// A small compressed frame must not expand past `max_message_size`

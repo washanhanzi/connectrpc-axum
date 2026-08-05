@@ -30,7 +30,8 @@ use crate::request::FrameEncoder;
 use crate::response::error_parser::parse_error_response;
 use crate::response::{
     ConnectResponse, FrameDecoder, InterceptingSendStream, InterceptingStreaming, Metadata,
-    RequestStreamError, Streaming, take_request_stream_error,
+    RequestStreamError, ResponseMetadataMode, Streaming, normalize_response_metadata,
+    take_request_stream_error,
 };
 
 /// A raw streaming RPC response: the decoded response stream (a [`FrameDecoder`]
@@ -557,7 +558,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
 
             // Check response status
             if status != http::StatusCode::OK {
-                return Err(match body {
+                let error = match body {
                     LimitedBody::Complete(body_bytes) => decompress_and_parse_error(
                         status,
                         &response_headers,
@@ -565,7 +566,12 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                         self.receive_max_bytes,
                     ),
                     LimitedBody::TooLarge => error_body_exceeds_limit(status),
-                });
+                };
+                return Err(attach_response_metadata(
+                    error,
+                    &response_headers,
+                    ResponseMetadataMode::Unary,
+                ));
             }
             self.check_success_response_content_type(&response_headers, false)?;
 
@@ -619,7 +625,11 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             }
 
             // Extract metadata
-            let metadata = Metadata::new(response_headers);
+            let metadata = Metadata::new(normalize_response_metadata(
+                &response_headers,
+                None,
+                ResponseMetadataMode::Unary,
+            ));
 
             Ok(ConnectResponse::new(message, metadata))
         })
@@ -815,7 +825,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                     }
                     None => collect_body.await?,
                 };
-                return Err(match body {
+                let error = match body {
                     LimitedBody::Complete(body_bytes) => decompress_and_parse_error(
                         status,
                         &response_headers,
@@ -823,7 +833,12 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                         self.receive_max_bytes,
                     ),
                     LimitedBody::TooLarge => error_body_exceeds_limit(status),
-                });
+                };
+                return Err(attach_response_metadata(
+                    error,
+                    &response_headers,
+                    ResponseMetadataMode::Unary,
+                ));
             }
             self.check_success_response_content_type(&response_headers, true)?;
             {
@@ -850,7 +865,8 @@ impl<I: InterceptorInternal> ConnectClient<I> {
 
             // Wrap with FrameDecoder
             let decoder = FrameDecoder::new(byte_stream, self.use_proto, response_encoding)
-                .with_max_message_size(self.receive_max_bytes);
+                .with_max_message_size(self.receive_max_bytes)
+                .with_response_headers(response_headers.clone());
 
             // Wrap with Streaming
             let stream_body = match deadline {
@@ -1112,7 +1128,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                 if let Some(request_error) = take_request_stream_error(&request_error) {
                     return Err(request_error);
                 }
-                return Err(match body_result? {
+                let error = match body_result? {
                     LimitedBody::Complete(body_bytes) => decompress_and_parse_error(
                         status,
                         &response_headers,
@@ -1120,7 +1136,12 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                         self.receive_max_bytes,
                     ),
                     LimitedBody::TooLarge => error_body_exceeds_limit(status),
-                });
+                };
+                return Err(attach_response_metadata(
+                    error,
+                    &response_headers,
+                    ResponseMetadataMode::Unary,
+                ));
             }
             self.check_success_response_content_type(&response_headers, true)?;
 
@@ -1140,7 +1161,8 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             let byte_stream = body_to_stream(body);
             let mut decoder =
                 FrameDecoder::<_, Res>::new(byte_stream, self.use_proto, response_encoding)
-                    .with_max_message_size(self.receive_max_bytes);
+                    .with_max_message_size(self.receive_max_bytes)
+                    .with_response_headers(response_headers.clone());
 
             let message = match decoder.next().await {
                 Some(Ok(msg)) => msg,
@@ -1187,9 +1209,15 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                 return Err(request_error);
             }
 
-            Ok::<_, ClientError>((message, response_headers))
+            let response_metadata = normalize_response_metadata(
+                &response_headers,
+                decoder.trailers().map(Metadata::headers),
+                ResponseMetadataMode::Streaming,
+            );
+
+            Ok::<_, ClientError>((message, response_headers, response_metadata))
         };
-        let (mut message, response_headers) = match effective_timeout {
+        let (mut message, response_headers, response_metadata) = match effective_timeout {
             Some(t) => match timeout(t, call).await {
                 Ok(result) => result?,
                 Err(_) => {
@@ -1214,7 +1242,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             self.interceptor.intercept_response(&ctx, &mut message)?;
         }
 
-        let metadata = Metadata::new(response_headers);
+        let metadata = Metadata::new(response_metadata);
 
         Ok(ConnectResponse::new(message, metadata))
     }
@@ -1541,7 +1569,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             if let Some(request_error) = take_request_stream_error(&request_error) {
                 return Err(request_error);
             }
-            return Err(match body_result? {
+            let error = match body_result? {
                 LimitedBody::Complete(body_bytes) => decompress_and_parse_error(
                     status,
                     &response_headers,
@@ -1549,7 +1577,12 @@ impl<I: InterceptorInternal> ConnectClient<I> {
                     self.receive_max_bytes,
                 ),
                 LimitedBody::TooLarge => error_body_exceeds_limit(status),
-            });
+            };
+            return Err(attach_response_metadata(
+                error,
+                &response_headers,
+                ResponseMetadataMode::Unary,
+            ));
         }
         self.check_success_response_content_type(&response_headers, true)?;
         {
@@ -1587,7 +1620,8 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         let byte_stream = body_to_stream(body);
 
         let decoder = FrameDecoder::new(byte_stream, self.use_proto, response_encoding)
-            .with_max_message_size(self.receive_max_bytes);
+            .with_max_message_size(self.receive_max_bytes)
+            .with_response_headers(response_headers.clone());
 
         let stream_body = match deadline {
             Some(deadline) => Streaming::new(decoder).with_deadline(deadline),
@@ -1605,6 +1639,23 @@ enum LimitedBody {
     Complete(Bytes),
     /// The body exceeded `receive_max_bytes`; reading stopped early.
     TooLarge,
+}
+
+/// Attach received response metadata to an RPC error.
+///
+/// Non-RPC errors are returned unchanged so transport and local processing
+/// failures never gain response metadata by accident.
+fn attach_response_metadata(
+    error: ClientError,
+    response_headers: &http::HeaderMap,
+    mode: ResponseMetadataMode,
+) -> ClientError {
+    match error {
+        ClientError::Rpc(status) => ClientError::Rpc(
+            status.with_metadata(normalize_response_metadata(response_headers, None, mode)),
+        ),
+        other => other,
+    }
 }
 
 /// Collect a response body, stopping as soon as more than `limit` bytes have
@@ -1959,7 +2010,9 @@ mod tests {
                     .send(FailingJsonMessage { fail: false })
                     .await
                     .unwrap();
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                // Leave enough time for response headers to arrive even when
+                // the test suite is running many local servers in parallel.
+                tokio::time::sleep(Duration::from_millis(500)).await;
                 sender
                     .send(FailingJsonMessage { fail: true })
                     .await
@@ -2027,6 +2080,27 @@ mod tests {
                 .unwrap()
         }
 
+        fn immediate_error_response() -> axum::response::Response {
+            let mut response = http::Response::builder()
+                .status(http::StatusCode::UNAUTHORIZED)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from("not a Connect error"))
+                .unwrap();
+            response
+                .headers_mut()
+                .append("x-request-id", "header-1".parse().unwrap());
+            response
+                .headers_mut()
+                .append("x-request-id", "header-2".parse().unwrap());
+            response
+                .headers_mut()
+                .append("trailer-x-request-id", "trailer-1".parse().unwrap());
+            response
+                .headers_mut()
+                .append("payload-bin", "AQID".parse().unwrap());
+            response
+        }
+
         #[tokio::test]
         async fn unary_rejects_non_200_success_status() {
             let app = Router::new().route(
@@ -2054,6 +2128,245 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn unary_success_normalizes_trailing_metadata() {
+            let app = Router::new().route(
+                "/test.Service/Unary",
+                post(|| async {
+                    let mut response = http::Response::builder()
+                        .status(http::StatusCode::OK)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(axum::body::Body::from(r#"{"value":"ok"}"#))
+                        .unwrap();
+                    response
+                        .headers_mut()
+                        .append("x-shared", "header-1".parse().unwrap());
+                    response
+                        .headers_mut()
+                        .append("x-shared", "header-2".parse().unwrap());
+                    response
+                        .headers_mut()
+                        .append("trailer-x-shared", "trailer-1".parse().unwrap());
+                    response
+                        .headers_mut()
+                        .append("trailer-x-shared", "trailer-2".parse().unwrap());
+                    response
+                        .headers_mut()
+                        .append("trailer-payload-bin", "AQID".parse().unwrap());
+                    response
+                }),
+            );
+            let base_url = spawn_server(app).await;
+            let client = ConnectClient::builder(&base_url).build().unwrap();
+
+            let response = client
+                .call_unary::<TestMessage, TestMessage>(
+                    "test.Service/Unary",
+                    &TestMessage::default(),
+                )
+                .await
+                .unwrap();
+
+            let shared: Vec<_> = response.metadata().get_all("x-shared").collect();
+            assert_eq!(
+                shared,
+                vec!["header-1", "header-2", "trailer-1", "trailer-2"]
+            );
+            assert_eq!(response.metadata().get("payload-bin"), Some("AQID"));
+            assert!(!response.metadata().contains("trailer-x-shared"));
+        }
+
+        #[tokio::test]
+        async fn immediate_errors_preserve_metadata_for_all_rpc_shapes() {
+            let app = Router::new()
+                .route(
+                    "/test.Service/Unary",
+                    post(|| async { immediate_error_response() }),
+                )
+                .route(
+                    "/test.Service/ServerStream",
+                    post(|| async { immediate_error_response() }),
+                )
+                .route(
+                    "/test.Service/ClientStream",
+                    post(|| async { immediate_error_response() }),
+                )
+                .route(
+                    "/test.Service/BidiStream",
+                    post(|| async { immediate_error_response() }),
+                );
+            let base_url = spawn_server(app).await;
+            let client = ConnectClient::builder(&base_url).build().unwrap();
+
+            let unary_error = client
+                .call_unary::<TestMessage, TestMessage>(
+                    "test.Service/Unary",
+                    &TestMessage::default(),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(unary_error.code(), Code::Unauthenticated);
+            assert_eq!(
+                unary_error
+                    .metadata()
+                    .unwrap()
+                    .get_all("x-request-id")
+                    .iter()
+                    .map(|value| value.to_str().unwrap())
+                    .collect::<Vec<_>>(),
+                vec!["header-1", "header-2", "trailer-1"]
+            );
+            assert!(
+                !unary_error
+                    .metadata()
+                    .unwrap()
+                    .contains_key("trailer-x-request-id")
+            );
+
+            let server_error = match client
+                .call_server_stream::<TestMessage, TestMessage>(
+                    "test.Service/ServerStream",
+                    &TestMessage::default(),
+                )
+                .await
+            {
+                Err(error) => error,
+                Ok(_) => panic!("expected server-streaming error"),
+            };
+
+            let client_error = client
+                .call_client_stream::<TestMessage, TestMessage, _>(
+                    "test.Service/ClientStream",
+                    futures::stream::iter(vec![TestMessage::default()]),
+                )
+                .await
+                .unwrap_err();
+
+            let bidi_error = match client
+                .call_bidi_stream::<TestMessage, TestMessage, _>(
+                    "test.Service/BidiStream",
+                    futures::stream::iter(vec![TestMessage::default()]),
+                )
+                .await
+            {
+                Err(error) => error,
+                Ok(_) => panic!("expected bidirectional-streaming error"),
+            };
+
+            for error in [&server_error, &client_error, &bidi_error] {
+                assert_eq!(error.code(), Code::Unauthenticated);
+                let metadata = error.metadata().unwrap();
+                assert_eq!(
+                    metadata
+                        .get_all("x-request-id")
+                        .iter()
+                        .map(|value| value.to_str().unwrap())
+                        .collect::<Vec<_>>(),
+                    vec!["header-1", "header-2", "trailer-1"]
+                );
+                assert!(!metadata.contains_key("trailer-x-request-id"));
+                assert_eq!(metadata["payload-bin"].as_bytes(), b"AQID");
+            }
+        }
+
+        #[tokio::test]
+        async fn unknown_error_encoding_preserves_response_metadata() {
+            let app = Router::new().route(
+                "/test.Service/Unary",
+                post(|| async {
+                    http::Response::builder()
+                        .status(http::StatusCode::UNAUTHORIZED)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .header(header::CONTENT_ENCODING, "unknown-encoding")
+                        .header("x-request-id", "request-1")
+                        .body(axum::body::Body::from("ignored"))
+                        .unwrap()
+                }),
+            );
+            let base_url = spawn_server(app).await;
+            let client = ConnectClient::builder(&base_url).build().unwrap();
+
+            let error = client
+                .call_unary::<TestMessage, TestMessage>(
+                    "test.Service/Unary",
+                    &TestMessage::default(),
+                )
+                .await
+                .unwrap_err();
+
+            assert_eq!(error.code(), Code::Internal);
+            assert_eq!(error.metadata().unwrap()["x-request-id"], "request-1");
+        }
+
+        #[cfg(feature = "compression-gzip-stream")]
+        #[tokio::test]
+        async fn compressed_error_body_preserves_response_metadata() {
+            let codec = CompressionEncoding::Gzip.codec().unwrap();
+            let body = codec
+                .compress(br#"{"code":"unauthenticated","message":"compressed"}"#)
+                .unwrap();
+            let app = Router::new().route(
+                "/test.Service/Unary",
+                post(move || {
+                    let body = body.clone();
+                    async move {
+                        http::Response::builder()
+                            .status(http::StatusCode::UNAUTHORIZED)
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .header(header::CONTENT_ENCODING, "gzip")
+                            .header("x-request-id", "request-1")
+                            .body(axum::body::Body::from(body))
+                            .unwrap()
+                    }
+                }),
+            );
+            let base_url = spawn_server(app).await;
+            let client = ConnectClient::builder(&base_url).build().unwrap();
+
+            let error = client
+                .call_unary::<TestMessage, TestMessage>(
+                    "test.Service/Unary",
+                    &TestMessage::default(),
+                )
+                .await
+                .unwrap_err();
+
+            assert_eq!(error.code(), Code::Unauthenticated);
+            assert_eq!(error.message(), Some("compressed"));
+            assert_eq!(error.metadata().unwrap()["x-request-id"], "request-1");
+        }
+
+        #[tokio::test]
+        async fn error_body_read_failure_remains_metadata_free() {
+            let app = Router::new().route(
+                "/test.Service/Unary",
+                post(|| async {
+                    let body = axum::body::Body::from_stream(futures::stream::once(async {
+                        Err::<Bytes, _>(std::io::Error::other("body failed"))
+                    }));
+                    http::Response::builder()
+                        .status(http::StatusCode::UNAUTHORIZED)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .header("x-request-id", "request-1")
+                        .body(body)
+                        .unwrap()
+                }),
+            );
+            let base_url = spawn_server(app).await;
+            let client = ConnectClient::builder(&base_url).build().unwrap();
+
+            let error = client
+                .call_unary::<TestMessage, TestMessage>(
+                    "test.Service/Unary",
+                    &TestMessage::default(),
+                )
+                .await
+                .unwrap_err();
+
+            assert!(matches!(error, ClientError::Transport(_)));
+            assert!(error.metadata().is_none());
+        }
+
+        #[tokio::test]
         async fn unary_rejects_mismatched_response_content_type() {
             let app = Router::new().route(
                 "/test.Service/Unary",
@@ -2061,6 +2374,7 @@ mod tests {
                     http::Response::builder()
                         .status(http::StatusCode::OK)
                         .header(header::CONTENT_TYPE, "application/proto")
+                        .header("x-request-id", "request-1")
                         .body(axum::body::Body::from(Bytes::from_static(b"{}")))
                         .unwrap()
                 }),
@@ -2081,6 +2395,7 @@ mod tests {
                 err.message(),
                 Some("invalid content-type: \"application/proto\"; expecting \"application/json\"")
             );
+            assert!(err.metadata().is_none());
         }
 
         #[tokio::test]
@@ -2394,10 +2709,62 @@ mod tests {
             assert_eq!(headers.get_all(header::CONTENT_TYPE).iter().count(), 1);
         }
 
+        #[tokio::test]
+        async fn client_stream_success_merges_end_stream_metadata() {
+            let app = Router::new().route(
+                "/test.Service/ClientStream",
+                post(|request: http::Request<axum::body::Body>| async move {
+                    let _ = request.into_body().collect().await;
+                    let mut body = make_frame(0x00, br#"{"value":"response"}"#);
+                    body.extend_from_slice(&make_frame(
+                        0x02,
+                        br#"{"metadata":{"x-shared":["trailer-1","trailer-2"],"payload-bin":["AQID"]}}"#,
+                    ));
+                    let mut response = http::Response::builder()
+                        .status(http::StatusCode::OK)
+                        .header(header::CONTENT_TYPE, "application/connect+json")
+                        .body(axum::body::Body::from(body))
+                        .unwrap();
+                    response
+                        .headers_mut()
+                        .append("x-shared", "header-1".parse().unwrap());
+                    response
+                        .headers_mut()
+                        .append("x-shared", "header-2".parse().unwrap());
+                    response
+                        .headers_mut()
+                        .append("trailer-literal", "unchanged".parse().unwrap());
+                    response
+                }),
+            );
+            let base_url = spawn_server(app).await;
+            let client = ConnectClient::builder(&base_url).build().unwrap();
+
+            let response = client
+                .call_client_stream::<TestMessage, TestMessage, _>(
+                    "test.Service/ClientStream",
+                    futures::stream::iter(vec![TestMessage::default()]),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(response.value, "response");
+            assert_eq!(
+                response.metadata().get_all("x-shared").collect::<Vec<_>>(),
+                vec!["header-1", "header-2", "trailer-1", "trailer-2"]
+            );
+            assert_eq!(response.metadata().get("payload-bin"), Some("AQID"));
+            assert_eq!(
+                response.metadata().get("trailer-literal"),
+                Some("unchanged")
+            );
+        }
+
         fn stalled_body_response(content_type: &'static str) -> axum::response::Response {
             http::Response::builder()
                 .status(200)
                 .header(header::CONTENT_TYPE, content_type)
+                .header("x-request-id", "request-1")
                 .body(axum::body::Body::from_stream(futures::stream::pending::<
                     Result<Bytes, std::io::Error>,
                 >()))
@@ -2415,7 +2782,7 @@ mod tests {
             let base_url = spawn_server(app).await;
 
             let client = ConnectClient::builder(&base_url)
-                .timeout(Duration::from_millis(200))
+                .timeout(Duration::from_secs(1))
                 .build()
                 .unwrap();
 
@@ -2427,6 +2794,7 @@ mod tests {
                 .await
                 .unwrap_err();
             assert_eq!(err.code(), Code::DeadlineExceeded);
+            assert!(err.metadata().is_none());
         }
 
         #[tokio::test]
@@ -2437,7 +2805,7 @@ mod tests {
             );
             let base_url = spawn_server(app).await;
             let client = ConnectClient::builder(&base_url)
-                .timeout(Duration::from_millis(100))
+                .timeout(Duration::from_secs(1))
                 .build()
                 .unwrap();
 
@@ -2453,6 +2821,7 @@ mod tests {
 
             assert_eq!(error.code(), Code::DeadlineExceeded);
             assert_eq!(error.message(), Some("client timeout exceeded"));
+            assert!(error.metadata().is_none());
             assert!(stream.next().await.is_none());
         }
 
@@ -2467,7 +2836,7 @@ mod tests {
             let base_url = spawn_server(app).await;
 
             let client = ConnectClient::builder(&base_url)
-                .timeout(Duration::from_millis(200))
+                .timeout(Duration::from_secs(1))
                 .build()
                 .unwrap();
 
@@ -2480,6 +2849,7 @@ mod tests {
                 .await
                 .unwrap_err();
             assert_eq!(err.code(), Code::DeadlineExceeded);
+            assert!(err.metadata().is_none());
         }
 
         /// `receive_max_bytes` rejects an oversized unary response body.
@@ -2562,6 +2932,7 @@ mod tests {
                     http::Response::builder()
                         .status(401)
                         .header(header::CONTENT_TYPE, "application/json")
+                        .header("x-request-id", "request-1")
                         .body(axum::body::Body::from(body))
                         .unwrap()
                 }),
@@ -2582,6 +2953,10 @@ mod tests {
                 .unwrap_err();
             // 401 maps to Unauthenticated per connect-go's httpToCode
             assert_eq!(err.code(), Code::Unauthenticated);
+            assert_eq!(
+                err.metadata().unwrap().get("x-request-id").unwrap(),
+                "request-1"
+            );
         }
 
         /// An error body within the limit still parses fully.
@@ -2631,6 +3006,7 @@ mod tests {
                     http::Response::builder()
                         .status(401)
                         .header(header::CONTENT_TYPE, "application/json")
+                        .header("x-request-id", "request-1")
                         .body(axum::body::Body::from(body))
                         .unwrap()
                 }),
@@ -2653,6 +3029,10 @@ mod tests {
                 Ok(_) => panic!("expected error"),
             };
             assert_eq!(err.code(), Code::Unauthenticated);
+            assert_eq!(
+                err.metadata().unwrap().get("x-request-id").unwrap(),
+                "request-1"
+            );
         }
 
         /// Multi-valued custom headers reach the server intact on streaming
