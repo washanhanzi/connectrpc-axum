@@ -18,6 +18,12 @@ category = "Testing"
 command = "cargo"
 args = ["test", "--workspace"]
 
+[tasks.test-client-no-default-features]
+description = "Run client tests without default features"
+category = "Testing"
+command = "cargo"
+args = ["test", "-p", "connectrpc-axum-client", "--no-default-features"]
+
 # ============================================================================
 # CI Tasks
 # ============================================================================
@@ -51,7 +57,7 @@ args = [
 [tasks.ci]
 description = "Run all CI checks (fmt, clippy, test)"
 category = "CI"
-dependencies = ["fmt-check", "clippy", "test-unit", "test"]
+dependencies = ["fmt-check", "clippy", "test-unit", "test-client-no-default-features", "test"]
 
 [tasks.ci-quick]
 description = "Run quick CI checks (fmt, clippy only)"
