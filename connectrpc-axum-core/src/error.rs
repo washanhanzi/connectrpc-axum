@@ -7,6 +7,7 @@
 
 use std::str::FromStr;
 
+use http::HeaderMap;
 use serde::{Serialize, Serializer};
 
 /// Connect RPC error codes, matching the codes defined in the Connect protocol.
@@ -254,7 +255,8 @@ pub struct ErrorResponseBody {
 /// RPC status representing the result of an RPC call.
 ///
 /// This is the core error data type shared between client and server.
-/// Contains the error code, optional message, and optional structured details.
+/// Contains the error code, optional message, optional structured details, and
+/// response metadata received from the peer.
 ///
 /// # Example
 ///
@@ -270,11 +272,12 @@ pub struct ErrorResponseBody {
 /// let status = status.add_detail("google.rpc.RetryInfo", vec![1, 2, 3]);
 /// assert_eq!(status.details().len(), 1);
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Status {
     code: Code,
     message: Option<String>,
     details: Vec<ErrorDetail>,
+    metadata: Option<Box<HeaderMap>>,
 }
 
 impl Status {
@@ -284,6 +287,7 @@ impl Status {
             code,
             message: Some(message.into()),
             details: vec![],
+            metadata: None,
         }
     }
 
@@ -293,6 +297,7 @@ impl Status {
             code,
             message: None,
             details: vec![],
+            metadata: None,
         }
     }
 
@@ -309,6 +314,21 @@ impl Status {
     /// Get the error details.
     pub fn details(&self) -> &[ErrorDetail] {
         &self.details
+    }
+
+    /// Get metadata received with this RPC error, if any.
+    ///
+    /// The metadata is not part of the serialized Connect error body.
+    pub fn metadata(&self) -> Option<&HeaderMap> {
+        self.metadata.as_deref()
+    }
+
+    /// Attach metadata received with this RPC error.
+    ///
+    /// The metadata is not part of the serialized Connect error body.
+    pub fn with_metadata(mut self, metadata: HeaderMap) -> Self {
+        self.metadata = Some(Box::new(metadata));
+        self
     }
 
     /// Add an error detail with type URL and protobuf-encoded bytes.
@@ -411,6 +431,17 @@ impl Status {
     /// Create an unauthenticated status.
     pub fn unauthenticated<S: Into<String>>(message: S) -> Self {
         Self::new(Code::Unauthenticated, message)
+    }
+}
+
+impl std::fmt::Debug for Status {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Status")
+            .field("code", &self.code)
+            .field("message", &self.message)
+            .field("details", &self.details)
+            .field("metadata", &self.metadata.as_ref().map(|_| "[REDACTED]"))
+            .finish()
     }
 }
 
@@ -546,6 +577,7 @@ mod tests {
         assert_eq!(status.code(), Code::NotFound);
         assert_eq!(status.message(), Some("resource not found"));
         assert!(status.details().is_empty());
+        assert!(status.metadata().is_none());
     }
 
     #[test]
@@ -623,8 +655,12 @@ mod tests {
 
     #[test]
     fn test_status_serialize() {
+        let mut metadata = HeaderMap::new();
+        metadata.append("x-request-id", "request-1".parse().unwrap());
+        metadata.append("x-request-id", "request-2".parse().unwrap());
         let status = Status::new(Code::NotFound, "not found")
-            .add_detail("google.rpc.RetryInfo", vec![1, 2, 3]);
+            .add_detail("google.rpc.RetryInfo", vec![1, 2, 3])
+            .with_metadata(metadata);
 
         let json = serde_json::to_string(&status).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -633,5 +669,38 @@ mod tests {
         assert_eq!(parsed["message"], "not found");
         assert!(parsed["details"].is_array());
         assert_eq!(parsed["details"][0]["type"], "google.rpc.RetryInfo");
+        assert!(parsed.get("metadata").is_none());
+        assert!(!json.contains("request-1"));
+    }
+
+    #[test]
+    fn test_status_metadata_preserves_repeated_values_when_cloned() {
+        let mut metadata = HeaderMap::new();
+        metadata.append("x-request-id", "request-1".parse().unwrap());
+        metadata.append("x-request-id", "request-2".parse().unwrap());
+        let status = Status::unavailable("retry later").with_metadata(metadata);
+
+        let cloned = status.clone();
+        let values = cloned
+            .metadata()
+            .unwrap()
+            .get_all("x-request-id")
+            .iter()
+            .map(|value| value.to_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(values, ["request-1", "request-2"]);
+    }
+
+    #[test]
+    fn test_status_debug_redacts_metadata_values() {
+        let mut metadata = HeaderMap::new();
+        metadata.insert("authorization", "secret-token".parse().unwrap());
+        let status = Status::unauthenticated("invalid token").with_metadata(metadata);
+
+        let debug = format!("{status:?}");
+
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("secret-token"));
     }
 }

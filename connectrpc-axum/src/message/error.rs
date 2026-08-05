@@ -26,10 +26,19 @@ pub use connectrpc_axum_core::{Code, ErrorDetail, Status};
 ///
 /// This type wraps the core [`Status`] type and adds server-specific functionality
 /// like HTTP response generation and metadata headers.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ConnectError {
     inner: Status,
     meta: Option<HeaderMap>,
+}
+
+impl std::fmt::Debug for ConnectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConnectError")
+            .field("inner", &self.inner)
+            .field("meta", &self.meta.as_ref().map(|_| "[REDACTED]"))
+            .finish()
+    }
 }
 
 impl ConnectError {
@@ -827,6 +836,43 @@ mod tests {
 
         assert_eq!(err.code(), Code::NotFound);
         assert_eq!(err.message(), Some("user not found"));
+    }
+
+    #[test]
+    fn status_metadata_is_not_forwarded_as_server_metadata() {
+        let mut received = HeaderMap::new();
+        received.insert(
+            "x-upstream-secret",
+            HeaderValue::from_static("secret-value"),
+        );
+        let status = Status::unavailable("upstream unavailable").with_metadata(received);
+
+        let err = ConnectError::from(status);
+
+        assert_eq!(
+            err.status()
+                .metadata()
+                .and_then(|metadata| metadata.get("x-upstream-secret")),
+            Some(&HeaderValue::from_static("secret-value"))
+        );
+        assert!(err.meta().is_none());
+
+        let response = err.into_response_with_protocol(RequestProtocol::ConnectUnaryJson);
+        assert!(response.headers().get("x-upstream-secret").is_none());
+    }
+
+    #[test]
+    fn connect_error_debug_redacts_received_and_outgoing_metadata_values() {
+        let mut received = HeaderMap::new();
+        received.insert("x-received", HeaderValue::from_static("received-secret"));
+        let err = ConnectError::from(Status::internal("proxy error").with_metadata(received))
+            .with_meta("x-outgoing", "outgoing-secret");
+
+        let debug = format!("{err:?}");
+
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("received-secret"));
+        assert!(!debug.contains("outgoing-secret"));
     }
 
     #[test]
