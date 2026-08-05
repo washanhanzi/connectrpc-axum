@@ -12,6 +12,7 @@ use crate::message::error::{Code, ConnectError, build_end_stream_frame_with_limi
 use axum::body::{Body, Bytes};
 use axum::http::{Method, Request, StatusCode, header};
 use axum::response::Response;
+use bytes::BytesMut;
 use connectrpc_axum_core::{ENVELOPE_HEADER_SIZE, envelope_flags, parse_envelope_header};
 use futures::StreamExt;
 use http_body::Frame;
@@ -284,50 +285,72 @@ where
                 let mut frames = BodyStream::new(body);
                 let sleep = tokio::time::sleep_until(deadline);
                 tokio::pin!(sleep);
+                let mut scanner = EndStreamScanner::new();
+                let mut partial_envelope = BytesMut::new();
 
                 loop {
                     tokio::select! {
                         biased;
                         _ = &mut sleep => {
+                            // Partial envelope bytes have not been forwarded. Dropping
+                            // them keeps the deadline EndStream at an envelope boundary.
+                            partial_envelope.clear();
                             yield Ok::<_, axum::Error>(Frame::data(deadline_frame));
                             break;
                         }
                         frame = frames.next() => {
                             let Some(frame) = frame else {
+                                if !partial_envelope.is_empty() {
+                                    yield Ok(Frame::data(partial_envelope.split().freeze()));
+                                }
                                 break;
                             };
-                            let body_error = frame.is_err();
-                            let contains_end_stream = frame
-                                .as_ref()
-                                .ok()
-                                .and_then(Frame::data_ref)
-                                .is_some_and(|data| {
-                                    let mut offset = 0;
-                                    while data.len().saturating_sub(offset) >= ENVELOPE_HEADER_SIZE {
-                                        let Ok((flags, length)) = parse_envelope_header(&data[offset..])
-                                        else {
-                                            return false;
-                                        };
-                                        let Some(frame_end) = offset
-                                            .checked_add(ENVELOPE_HEADER_SIZE)
-                                            .and_then(|payload_start| payload_start.checked_add(length as usize))
-                                        else {
-                                            return false;
-                                        };
-                                        if frame_end > data.len() {
-                                            return false;
-                                        }
-                                        if flags & envelope_flags::END_STREAM != 0 {
-                                            return true;
-                                        }
-                                        offset = frame_end;
+
+                            let frame = match frame {
+                                Ok(frame) => frame,
+                                Err(error) => {
+                                    if !partial_envelope.is_empty() {
+                                        yield Ok(Frame::data(partial_envelope.split().freeze()));
                                     }
-                                    false
-                                });
-                            yield frame;
-                            if body_error || contains_end_stream {
+                                    yield Err(error);
+                                    break;
+                                }
+                            };
+                            let data = match frame.into_data() {
+                                Ok(data) => data,
+                                Err(frame) => {
+                                    if !partial_envelope.is_empty() {
+                                        yield Ok(Frame::data(partial_envelope.split().freeze()));
+                                    }
+                                    yield Ok(frame);
+                                    continue;
+                                }
+                            };
+
+                            let (complete_through, end_stream_done) = scanner.scan(&data);
+                            if end_stream_done {
+                                if partial_envelope.is_empty() {
+                                    yield Ok(Frame::data(data));
+                                } else {
+                                    partial_envelope.extend_from_slice(&data);
+                                    yield Ok(Frame::data(partial_envelope.split().freeze()));
+                                }
                                 break;
                             }
+
+                            if complete_through == 0 {
+                                partial_envelope.extend_from_slice(&data);
+                                continue;
+                            }
+
+                            let complete_envelopes = if partial_envelope.is_empty() {
+                                data.slice(..complete_through)
+                            } else {
+                                partial_envelope.extend_from_slice(&data[..complete_through]);
+                                partial_envelope.split().freeze()
+                            };
+                            partial_envelope.extend_from_slice(&data[complete_through..]);
+                            yield Ok(Frame::data(complete_envelopes));
                         }
                     }
                 }
@@ -338,6 +361,93 @@ where
                 Body::new(http_body_util::StreamBody::new(response_frames)),
             ))
         })
+    }
+}
+
+/// Incremental envelope scanner that finds complete envelope boundaries.
+///
+/// The deadline wrapper needs to know when the response body's EndStream
+/// envelope has passed through so it can stop watching the deadline. Body
+/// chunks are not guaranteed to align with envelope boundaries: middleware
+/// between the handler and [`ConnectLayer`] may re-chunk the body, splitting
+/// an envelope across chunks. A stateless per-chunk scan would then
+/// misinterpret payload bytes as envelope headers — a payload byte with the
+/// END_STREAM bit set (e.g. protobuf tag `0x12`) followed by a plausible
+/// length would falsely match, truncating the stream.
+///
+/// This scanner instead tracks envelope boundaries across chunks: it buffers
+/// the 5-byte header (which may itself span chunks), skips exactly `length`
+/// payload bytes, and only inspects flag bytes at true envelope offsets. The
+/// deadline wrapper withholds bytes after the last complete boundary so a
+/// timeout cannot insert an EndStream into an unfinished envelope.
+struct EndStreamScanner {
+    /// Partially accumulated envelope header.
+    header: [u8; ENVELOPE_HEADER_SIZE],
+    /// Number of header bytes accumulated so far.
+    header_filled: usize,
+    /// Payload bytes of the current envelope not yet observed.
+    payload_remaining: u64,
+    /// Whether the current envelope has the END_STREAM flag set.
+    in_end_stream: bool,
+}
+
+impl EndStreamScanner {
+    fn new() -> Self {
+        Self {
+            header: [0; ENVELOPE_HEADER_SIZE],
+            header_filled: 0,
+            payload_remaining: 0,
+            in_end_stream: false,
+        }
+    }
+
+    /// Feeds the next body chunk to the scanner.
+    ///
+    /// Returns the number of bytes from this chunk through the last complete
+    /// envelope and whether that envelope was EndStream. Bytes after the
+    /// returned offset belong to an incomplete envelope and must not be
+    /// forwarded until a later chunk completes it.
+    fn scan(&mut self, mut data: &[u8]) -> (usize, bool) {
+        let chunk_len = data.len();
+        let mut complete_through = 0;
+        loop {
+            // Skip payload bytes of the envelope currently being observed.
+            if self.payload_remaining > 0 {
+                let skip = self.payload_remaining.min(data.len() as u64) as usize;
+                data = &data[skip..];
+                self.payload_remaining -= skip as u64;
+                if self.payload_remaining > 0 {
+                    return (complete_through, false);
+                }
+                complete_through = chunk_len - data.len();
+                if self.in_end_stream {
+                    return (complete_through, true);
+                }
+            }
+            if data.is_empty() {
+                return (complete_through, false);
+            }
+            // Accumulate the next envelope header, which may span chunks.
+            let take = (ENVELOPE_HEADER_SIZE - self.header_filled).min(data.len());
+            self.header[self.header_filled..self.header_filled + take]
+                .copy_from_slice(&data[..take]);
+            self.header_filled += take;
+            data = &data[take..];
+            if self.header_filled < ENVELOPE_HEADER_SIZE {
+                return (complete_through, false);
+            }
+            let (flags, length) =
+                parse_envelope_header(&self.header).expect("header buffer is exactly header-sized");
+            self.header_filled = 0;
+            self.payload_remaining = u64::from(length);
+            self.in_end_stream = flags & envelope_flags::END_STREAM != 0;
+            if self.payload_remaining == 0 {
+                complete_through = chunk_len - data.len();
+                if self.in_end_stream {
+                    return (complete_through, true);
+                }
+            }
+        }
     }
 }
 
@@ -488,6 +598,141 @@ mod tests {
             .service_fn(completed_streaming_service);
         let expected = build_end_stream_frame_with_limit(None, None, None);
         let response = svc.oneshot(connect_request(Some("5000"))).await.unwrap();
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body.as_ref(), expected);
+    }
+
+    fn envelope(flags: u8, payload: &[u8]) -> Vec<u8> {
+        let mut frame = vec![flags];
+        frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        frame.extend_from_slice(payload);
+        frame
+    }
+
+    #[test]
+    fn scanner_detects_end_stream_in_aligned_chunk() {
+        let mut scanner = EndStreamScanner::new();
+        let mut chunk = envelope(envelope_flags::MESSAGE, b"hello");
+        chunk.extend_from_slice(&envelope(envelope_flags::END_STREAM, b"{}"));
+        assert_eq!(scanner.scan(&chunk), (chunk.len(), true));
+    }
+
+    #[test]
+    fn scanner_ignores_decoy_header_at_chunk_start() {
+        // Payload bytes that mimic an empty EndStream envelope header: a flag
+        // byte with the END_STREAM bit set followed by a zero length. When
+        // re-chunking puts them at the start of a chunk, a stateless scan
+        // would falsely detect the end of the stream.
+        let mut scanner = EndStreamScanner::new();
+        let frame = envelope(envelope_flags::MESSAGE, b"\x02\x00\x00\x00\x00rest");
+        assert_eq!(scanner.scan(&frame[..ENVELOPE_HEADER_SIZE]), (0, false));
+        assert_eq!(
+            scanner.scan(&frame[ENVELOPE_HEADER_SIZE..]),
+            (frame.len() - ENVELOPE_HEADER_SIZE, false)
+        );
+        let end_stream = envelope(envelope_flags::END_STREAM, b"{}");
+        assert_eq!(scanner.scan(&end_stream), (end_stream.len(), true));
+    }
+
+    #[test]
+    fn scanner_detects_end_stream_split_across_chunks() {
+        let mut scanner = EndStreamScanner::new();
+        let mut bytes = envelope(envelope_flags::MESSAGE, b"hi");
+        bytes.extend_from_slice(&envelope(envelope_flags::END_STREAM, b"{}"));
+        // Chunks of 3 split both envelope headers and payloads across chunks.
+        let mut done = false;
+        for chunk in bytes.chunks(3) {
+            assert!(!done, "scanner returned true before the final chunk");
+            done = scanner.scan(chunk).1;
+        }
+        assert!(done, "scanner missed the split EndStream envelope");
+    }
+
+    #[tokio::test]
+    async fn rechunked_streaming_response_passes_through_intact() {
+        // Regression test: middleware between the handler and ConnectLayer may
+        // re-chunk the body so envelopes span chunks. With a timeout armed,
+        // the deadline wrapper must not mistake payload bytes at a chunk start
+        // for an EndStream header and truncate the stream.
+        let mut body_bytes = envelope(envelope_flags::MESSAGE, b"\x02\x00\x00\x00\x00payload");
+        body_bytes.extend_from_slice(&envelope(envelope_flags::MESSAGE, b"second"));
+        body_bytes.extend_from_slice(&build_end_stream_frame_with_limit(None, None, None));
+        let expected = body_bytes.clone();
+
+        // 5-byte chunks: the second chunk starts with the decoy bytes
+        // \x02\x00\x00\x00\x00, which mimic an empty EndStream envelope.
+        let chunks: Vec<Result<Bytes, std::convert::Infallible>> = body_bytes
+            .chunks(ENVELOPE_HEADER_SIZE)
+            .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
+            .collect();
+
+        let rechunked_streaming_service = move |_req: Request<Body>| {
+            let chunks = chunks.clone();
+            async move {
+                Ok::<_, std::convert::Infallible>(
+                    Response::builder()
+                        .header(header::CONTENT_TYPE, "application/connect+proto")
+                        .body(Body::from_stream(futures::stream::iter(chunks)))
+                        .unwrap(),
+                )
+            }
+        };
+
+        let svc = tower::ServiceBuilder::new()
+            .layer(ConnectLayer::new())
+            .service_fn(rechunked_streaming_service);
+        let response = svc.oneshot(connect_request(Some("60000"))).await.unwrap();
+
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body.as_ref(), expected);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn deadline_replaces_partial_envelope_at_frame_boundary() {
+        // The first body chunk contains one complete envelope followed by a
+        // partial header. If the deadline expires before the rest arrives, the
+        // wrapper must discard only the partial envelope and append the
+        // deadline EndStream after the complete envelope.
+        let first_envelope = envelope(envelope_flags::MESSAGE, b"first");
+        let second_envelope = envelope(envelope_flags::MESSAGE, b"second");
+        let mut first_chunk = first_envelope.clone();
+        first_chunk.extend_from_slice(&second_envelope[..3]);
+        let second_chunk = Bytes::copy_from_slice(&second_envelope[3..]);
+        let success_end_stream = Bytes::from(build_end_stream_frame_with_limit(None, None, None));
+
+        let streaming_service = move |_req: Request<Body>| {
+            let first_chunk = Bytes::from(first_chunk.clone());
+            let second_chunk = second_chunk.clone();
+            let success_end_stream = success_end_stream.clone();
+            async move {
+                let body = async_stream::stream! {
+                    yield Ok::<_, std::convert::Infallible>(first_chunk);
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    yield Ok(second_chunk);
+                    yield Ok(success_end_stream);
+                };
+                Ok::<_, std::convert::Infallible>(
+                    Response::builder()
+                        .header(header::CONTENT_TYPE, "application/connect+proto")
+                        .body(Body::from_stream(body))
+                        .unwrap(),
+                )
+            }
+        };
+
+        let svc = tower::ServiceBuilder::new()
+            .layer(ConnectLayer::new())
+            .service_fn(streaming_service);
+        let response = svc.oneshot(connect_request(Some("1000"))).await.unwrap();
+
+        let deadline_error = ConnectError::new(Code::DeadlineExceeded, "request timeout exceeded");
+        let mut expected = first_envelope;
+        expected.extend_from_slice(&build_end_stream_frame_with_limit(
+            Some(&deadline_error),
+            None,
+            None,
+        ));
 
         let body = response.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body.as_ref(), expected);

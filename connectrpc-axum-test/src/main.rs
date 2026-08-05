@@ -44,6 +44,7 @@ mod streaming_extractor;
 mod streaming_extractor_client;
 mod streaming_receive_max_bytes;
 mod streaming_send_max_bytes;
+mod timeout_rechunked_stream;
 mod tonic_bidi_server;
 mod tonic_extractor;
 mod tonic_server_stream;
@@ -57,6 +58,7 @@ async fn main() -> anyhow::Result<()> {
     let go_sock = socket::TestSocket::new(&format!("connectrpc-test-{pid}-go"))?;
 
     server_timeout::run(&rust_sock, &go_sock).await?;
+    timeout_rechunked_stream::run(&rust_sock, &go_sock).await?;
     connect_unary::run(&rust_sock, &go_sock).await?;
     connect_server_stream::run(&rust_sock, &go_sock).await?;
     error_details::run(&rust_sock, &go_sock).await?;

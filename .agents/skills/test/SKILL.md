@@ -63,11 +63,12 @@ connectrpc-axum-test/
 └── integration-tests.feature            # BDD spec for all test scenarios
 ```
 
-## Current Test Scenarios (32 total)
+## Current Test Scenarios (33 total)
 
 | Scenario | Description |
 |----------|-------------|
 | server_timeout | Connect-Timeout-Ms header enforcement |
+| timeout_rechunked_stream | Deadline body wrapper with re-chunked streaming bodies |
 | connect_unary | Basic unary request/response |
 | connect_server_stream | Server streaming |
 | connect_client_stream | Client streaming |

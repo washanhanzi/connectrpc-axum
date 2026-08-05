@@ -70,3 +70,21 @@ Feature: connectrpc-axum-test integration behavior — streaming core
     And the receive side is waiting for the next response
     When an on_send interceptor rejects the next request message
     Then the receive side returns that send interceptor error instead of timing out
+
+
+  # Source refs:
+  # - connectrpc-axum-test/src/timeout_rechunked_stream.rs (orchestrator, Rust server only)
+  # - connectrpc-axum-test/src/timeout_rechunked_stream/server.rs (Rust server: re-chunking middleware between handler and ConnectLayer)
+  # - connectrpc-axum-test/src/timeout_rechunked_stream/client.rs (Rust client: 2 test cases)
+  # - connectrpc-axum-test/go/timeout_rechunked_stream/client/client.go (Go client: connect-go with context deadline)
+
+  Scenario: timeout_rechunked_stream — armed timeout delivers re-chunked stream intact
+    Given a SayHelloStream server whose middleware re-chunks the response body into 8-byte chunks
+    And the first message contains bytes that mimic an EndStream envelope header at a chunk boundary
+    When the client sends Connect-Timeout-Ms so the deadline body wrapper is armed
+    Then the client receives all 3 messages and a non-error EndStream frame
+
+  Scenario: timeout_rechunked_stream — no timeout delivers re-chunked stream intact
+    Given a SayHelloStream server whose middleware re-chunks the response body into 8-byte chunks
+    When the client sends no Connect-Timeout-Ms header
+    Then the client receives all 3 messages and a non-error EndStream frame
