@@ -2,12 +2,14 @@
 //!
 //! Provides a fluent API for configuring and building a [`ConnectClient`].
 
+use crate::ClientError;
 use crate::client::ConnectClient;
 use crate::config::{
     Chain, HeaderWrapper, Interceptor, InterceptorInternal, MessageInterceptor, MessageWrapper,
 };
 use crate::transport::{HyperTransport, HyperTransportBuilder, TlsClientConfig};
 use connectrpc_axum_core::{CompressionConfig, CompressionEncoding};
+use http::{HeaderMap, HeaderName, HeaderValue};
 use std::time::Duration;
 
 /// Builder for creating a [`ConnectClient`].
@@ -49,6 +51,8 @@ pub struct ClientBuilder<I = ()> {
     accept_encoding: Option<CompressionEncoding>,
     /// Default timeout for RPC calls.
     default_timeout: Option<Duration>,
+    /// Default application headers for every RPC.
+    default_headers: HeaderMap,
     /// Maximum size in bytes of a received (decompressed) message.
     receive_max_bytes: Option<usize>,
     /// Unified interceptor chain (compile-time composed).
@@ -65,6 +69,7 @@ impl<I> std::fmt::Debug for ClientBuilder<I> {
             .field("request_encoding", &self.request_encoding)
             .field("accept_encoding", &self.accept_encoding)
             .field("default_timeout", &self.default_timeout)
+            .field("default_header_value_count", &self.default_headers.len())
             .field("receive_max_bytes", &self.receive_max_bytes)
             .finish_non_exhaustive()
     }
@@ -91,6 +96,7 @@ impl ClientBuilder<()> {
             request_encoding: CompressionEncoding::Identity,
             accept_encoding: None,
             default_timeout: None,
+            default_headers: HeaderMap::new(),
             receive_max_bytes: None,
             interceptor: (),
         }
@@ -246,6 +252,56 @@ impl<I: InterceptorInternal> ClientBuilder<I> {
         self
     }
 
+    /// Add a default application header for every RPC.
+    ///
+    /// A later call with the same name replaces the previous value. Per-call
+    /// headers and request interceptors may also replace this value. Reserved
+    /// protocol headers are ignored when a request is built.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the header name or value is invalid.
+    pub fn default_header<K, V>(mut self, name: K, value: V) -> Self
+    where
+        K: TryInto<HeaderName>,
+        K::Error: std::fmt::Debug,
+        V: TryInto<HeaderValue>,
+        V::Error: std::fmt::Debug,
+    {
+        let name = name.try_into().expect("invalid header name");
+        let value = value.try_into().expect("invalid header value");
+        self.default_headers.insert(name, value);
+        self
+    }
+
+    /// Try to add a default application header for every RPC.
+    ///
+    /// Returns an invalid-argument error if the header name or value is
+    /// invalid. A later call with the same name replaces the previous value.
+    pub fn try_default_header<K, V>(mut self, name: K, value: V) -> Result<Self, ClientError>
+    where
+        K: TryInto<HeaderName>,
+        V: TryInto<HeaderValue>,
+    {
+        let name = name
+            .try_into()
+            .map_err(|_| ClientError::invalid_argument("invalid header name"))?;
+        let value = value
+            .try_into()
+            .map_err(|_| ClientError::invalid_argument("invalid header value"))?;
+        self.default_headers.insert(name, value);
+        Ok(self)
+    }
+
+    /// Replace all default application headers for every RPC.
+    ///
+    /// Repeated values in the supplied map are preserved. Reserved protocol
+    /// headers are ignored when a request is built.
+    pub fn default_headers(mut self, headers: HeaderMap) -> Self {
+        self.default_headers = headers;
+        self
+    }
+
     /// Add a header-level interceptor to the client.
     ///
     /// Header interceptors can inspect and modify request/response headers
@@ -289,6 +345,7 @@ impl<I: InterceptorInternal> ClientBuilder<I> {
             request_encoding: self.request_encoding,
             accept_encoding: self.accept_encoding,
             default_timeout: self.default_timeout,
+            default_headers: self.default_headers,
             receive_max_bytes: self.receive_max_bytes,
             interceptor: Chain(self.interceptor, HeaderWrapper(interceptor)),
         }
@@ -351,6 +408,7 @@ impl<I: InterceptorInternal> ClientBuilder<I> {
             request_encoding: self.request_encoding,
             accept_encoding: self.accept_encoding,
             default_timeout: self.default_timeout,
+            default_headers: self.default_headers,
             receive_max_bytes: self.receive_max_bytes,
             interceptor: Chain(self.interceptor, MessageWrapper(interceptor)),
         }
@@ -496,6 +554,7 @@ impl<I: InterceptorInternal> ClientBuilder<I> {
             self.request_encoding,
             self.accept_encoding,
             self.default_timeout,
+            self.default_headers,
             self.receive_max_bytes,
             self.interceptor,
         ))
@@ -514,6 +573,16 @@ pub enum ClientBuildError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Clone)]
+    struct NoDebugHeaderInterceptor;
+
+    impl Interceptor for NoDebugHeaderInterceptor {}
+
+    #[derive(Clone)]
+    struct NoDebugMessageInterceptor;
+
+    impl MessageInterceptor for NoDebugMessageInterceptor {}
 
     #[test]
     fn test_builder_defaults() {
@@ -593,6 +662,50 @@ mod tests {
     fn test_builder_receive_max_bytes_default_none() {
         let builder = ClientBuilder::new("http://localhost:3000");
         assert!(builder.receive_max_bytes.is_none());
+    }
+
+    #[test]
+    fn try_default_header_rejects_invalid_name_and_value() {
+        let invalid_name = ClientBuilder::new("http://localhost:3000")
+            .try_default_header("invalid\0name", "value")
+            .unwrap_err();
+        assert_eq!(
+            invalid_name.code(),
+            connectrpc_axum_core::Code::InvalidArgument
+        );
+
+        let invalid_value = ClientBuilder::new("http://localhost:3000")
+            .try_default_header("x-test", "invalid\nvalue")
+            .unwrap_err();
+        assert_eq!(
+            invalid_value.code(),
+            connectrpc_axum_core::Code::InvalidArgument
+        );
+    }
+
+    #[test]
+    fn default_headers_survive_interceptor_builders_and_debug_redacts_values() {
+        let builder = ClientBuilder::new("http://localhost:3000")
+            .default_header("authorization", "Bearer builder-secret")
+            .with_interceptor(NoDebugHeaderInterceptor)
+            .with_message_interceptor(NoDebugMessageInterceptor);
+
+        assert_eq!(
+            builder.default_headers["authorization"],
+            "Bearer builder-secret"
+        );
+        let builder_debug = format!("{builder:?}");
+        assert!(builder_debug.contains("default_header_value_count: 1"));
+        assert!(!builder_debug.contains("builder-secret"));
+        assert!(!builder_debug.contains("Bearer"));
+
+        let client = builder.build().unwrap();
+        let headers = client.create_unary_request_headers(&crate::CallOptions::new());
+        assert_eq!(headers["authorization"], "Bearer builder-secret");
+        let client_debug = format!("{client:?}");
+        assert!(client_debug.contains("default_header_value_count: 1"));
+        assert!(!client_debug.contains("builder-secret"));
+        assert!(!client_debug.contains("Bearer"));
     }
 
     #[test]

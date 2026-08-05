@@ -3,7 +3,7 @@
 //! This module provides the main [`ConnectClient`] type for making RPC calls.
 
 use bytes::Bytes;
-use http::{Method, Request, header};
+use http::{HeaderMap, Method, Request, header};
 use http_body_util::BodyExt;
 use tokio::time::{Instant, timeout, timeout_at};
 
@@ -84,6 +84,25 @@ fn is_reserved_header(name: &http::header::HeaderName) -> bool {
         || name_str == "content-length"
 }
 
+/// Merge application headers into a request map.
+///
+/// Reserved protocol names are ignored. The first value for each accepted
+/// name replaces every existing value, and later values are appended.
+fn merge_application_headers(target: &mut HeaderMap, source: &HeaderMap) {
+    for name in source.keys() {
+        if is_reserved_header(name) {
+            continue;
+        }
+        let mut values = source.get_all(name).iter();
+        if let Some(first) = values.next() {
+            target.insert(name.clone(), first.clone());
+        }
+        for value in values {
+            target.append(name.clone(), value.clone());
+        }
+    }
+}
+
 /// Connect RPC client.
 ///
 /// The client is generic over `I`: the interceptor chain type.
@@ -112,7 +131,7 @@ fn is_reserved_header(name: &http::header::HeaderName) -> bool {
 ///     &request,
 /// ).await?;
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ConnectClient<I = ()> {
     /// HTTP transport.
     transport: HyperTransport,
@@ -128,12 +147,29 @@ pub struct ConnectClient<I = ()> {
     accept_encoding: Option<CompressionEncoding>,
     /// Default timeout for RPC calls.
     default_timeout: Option<Duration>,
+    /// Default application headers for every RPC.
+    default_headers: HeaderMap,
     /// Maximum size in bytes of a received (decompressed) message.
     ///
     /// `None` means unlimited. Mirrors connect-go's `WithReadMaxBytes`.
     receive_max_bytes: Option<usize>,
     /// Unified interceptor chain (compile-time composed).
     interceptor: I,
+}
+
+impl<I> std::fmt::Debug for ConnectClient<I> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConnectClient")
+            .field("base_url", &self.base_url)
+            .field("use_proto", &self.use_proto)
+            .field("compression", &self.compression)
+            .field("request_encoding", &self.request_encoding)
+            .field("accept_encoding", &self.accept_encoding)
+            .field("default_timeout", &self.default_timeout)
+            .field("default_header_value_count", &self.default_headers.len())
+            .field("receive_max_bytes", &self.receive_max_bytes)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ConnectClient<()> {
@@ -157,6 +193,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
         request_encoding: CompressionEncoding,
         accept_encoding: Option<CompressionEncoding>,
         default_timeout: Option<Duration>,
+        default_headers: HeaderMap,
         receive_max_bytes: Option<usize>,
         interceptor: I,
     ) -> Self {
@@ -168,6 +205,7 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             request_encoding,
             accept_encoding,
             default_timeout,
+            default_headers,
             receive_max_bytes,
             interceptor,
         }
@@ -325,18 +363,8 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             );
         }
 
-        for name in options.headers.keys() {
-            if is_reserved_header(name) {
-                continue;
-            }
-            let mut values = options.headers.get_all(name).iter();
-            if let Some(first) = values.next() {
-                headers.insert(name.clone(), first.clone());
-            }
-            for value in values {
-                headers.append(name.clone(), value.clone());
-            }
-        }
+        merge_application_headers(&mut headers, &self.default_headers);
+        merge_application_headers(&mut headers, &options.headers);
 
         headers
     }
@@ -396,21 +424,8 @@ impl<I: InterceptorInternal> ConnectClient<I> {
             headers.insert(CONNECT_TIMEOUT_HEADER, timeout_ms.parse().unwrap());
         }
 
-        // Add custom headers from options (skip reserved protocol headers).
-        // Insert the first value for each name (overriding any default) and
-        // append the rest so multi-valued headers are preserved.
-        for name in options.headers.keys() {
-            if is_reserved_header(name) {
-                continue;
-            }
-            let mut values = options.headers.get_all(name).iter();
-            if let Some(first) = values.next() {
-                headers.insert(name.clone(), first.clone());
-            }
-            for value in values {
-                headers.append(name.clone(), value.clone());
-            }
-        }
+        merge_application_headers(&mut headers, &self.default_headers);
+        merge_application_headers(&mut headers, &options.headers);
 
         headers
     }
@@ -1839,6 +1854,58 @@ mod tests {
         assert_eq!(client.streaming_content_type(), "application/connect+proto");
     }
 
+    #[test]
+    fn default_and_per_call_headers_merge_for_unary_and_streaming() {
+        let mut defaults = HeaderMap::new();
+        defaults.append("x-default-repeat", "default-1".parse().unwrap());
+        defaults.append("x-default-repeat", "default-2".parse().unwrap());
+        defaults.append("x-overridden", "old-1".parse().unwrap());
+        defaults.append("x-overridden", "old-2".parse().unwrap());
+        defaults.insert(header::CONTENT_TYPE, "text/plain".parse().unwrap());
+        defaults.insert(CONNECT_TIMEOUT_HEADER, "999".parse().unwrap());
+        defaults.insert("grpc-timeout", "999m".parse().unwrap());
+
+        let client = ConnectClient::builder("http://localhost:3000")
+            .default_header("x-before-map", "replaced")
+            .default_headers(defaults)
+            .build()
+            .unwrap();
+        let mut options = CallOptions::new();
+        options
+            .headers_mut()
+            .append("x-overridden", "call-1".parse().unwrap());
+        options
+            .headers_mut()
+            .append("x-overridden", "call-2".parse().unwrap());
+
+        let unary = client.create_unary_request_headers(&options);
+        assert_merged_application_headers(&unary, "application/json");
+
+        let streaming = client.create_streaming_request_headers(&options, false);
+        assert_merged_application_headers(&streaming, "application/connect+json");
+    }
+
+    fn assert_merged_application_headers(headers: &HeaderMap, content_type: &str) {
+        let repeated: Vec<_> = headers
+            .get_all("x-default-repeat")
+            .iter()
+            .map(|value| value.to_str().unwrap())
+            .collect();
+        assert_eq!(repeated, ["default-1", "default-2"]);
+
+        let overridden: Vec<_> = headers
+            .get_all("x-overridden")
+            .iter()
+            .map(|value| value.to_str().unwrap())
+            .collect();
+        assert_eq!(overridden, ["call-1", "call-2"]);
+
+        assert!(!headers.contains_key("x-before-map"));
+        assert_eq!(headers[header::CONTENT_TYPE], content_type);
+        assert!(!headers.contains_key(CONNECT_TIMEOUT_HEADER));
+        assert!(!headers.contains_key("grpc-timeout"));
+    }
+
     /// End-to-end tests against a local axum server exercising interceptor
     /// coverage, timeouts, and receive-size limits.
     mod e2e {
@@ -2459,6 +2526,81 @@ mod tests {
                 ctx.headers.insert("x-intercepted", "1".parse().unwrap());
                 Ok(())
             }
+        }
+
+        #[derive(Clone)]
+        struct ReplacingDefaultHeaderInterceptor {
+            seen: Arc<Mutex<HeaderMap>>,
+        }
+
+        impl Interceptor for ReplacingDefaultHeaderInterceptor {
+            fn on_request(&self, ctx: &mut RequestContext) -> Result<(), ClientError> {
+                *self.seen.lock().unwrap() = ctx.headers.clone();
+                ctx.headers
+                    .insert("x-user-id", "interceptor".parse().unwrap());
+                Ok(())
+            }
+        }
+
+        #[tokio::test]
+        async fn interceptor_sees_and_replaces_merged_default_headers() {
+            let received = Arc::new(Mutex::new(HeaderMap::new()));
+            let received_clone = received.clone();
+            let app = Router::new().route(
+                "/test.Service/Unary",
+                post(move |headers: HeaderMap| {
+                    let received = received_clone.clone();
+                    async move {
+                        *received.lock().unwrap() = headers;
+                        http::Response::builder()
+                            .status(http::StatusCode::OK)
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(axum::body::Body::from(r#"{"value":"ok"}"#))
+                            .unwrap()
+                    }
+                }),
+            );
+            let base_url = spawn_server(app).await;
+            let seen = Arc::new(Mutex::new(HeaderMap::new()));
+            let mut defaults = HeaderMap::new();
+            defaults.append("x-user-id", "default-1".parse().unwrap());
+            defaults.append("x-user-id", "default-2".parse().unwrap());
+            let client = ConnectClient::builder(&base_url)
+                .default_headers(defaults)
+                .with_interceptor(ReplacingDefaultHeaderInterceptor { seen: seen.clone() })
+                .build()
+                .unwrap();
+
+            client
+                .call_unary_with_options::<TestMessage, TestMessage>(
+                    "test.Service/Unary",
+                    &TestMessage::default(),
+                    CallOptions::new().header("x-request-id", "per-call"),
+                )
+                .await
+                .unwrap();
+
+            let seen = seen.lock().unwrap();
+            assert_eq!(
+                seen.get_all("x-user-id")
+                    .iter()
+                    .map(|value| value.to_str().unwrap())
+                    .collect::<Vec<_>>(),
+                ["default-1", "default-2"]
+            );
+            assert_eq!(seen["x-request-id"], "per-call");
+            drop(seen);
+
+            let received = received.lock().unwrap();
+            assert_eq!(
+                received
+                    .get_all("x-user-id")
+                    .iter()
+                    .map(|value| value.to_str().unwrap())
+                    .collect::<Vec<_>>(),
+                ["interceptor"]
+            );
+            assert_eq!(received["x-request-id"], "per-call");
         }
 
         #[derive(Clone)]

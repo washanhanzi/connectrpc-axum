@@ -592,4 +592,4 @@ pub use connectrpc_axum_core::{
 
 // Re-export types needed for generated streaming code
 pub use bytes::Bytes;
-pub use http::HeaderMap;
+pub use http::{HeaderMap, HeaderName, HeaderValue};

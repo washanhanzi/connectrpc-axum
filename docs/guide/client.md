@@ -8,7 +8,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-connectrpc-axum-client = "0.2.1"
+connectrpc-axum-client = "0.2.2"
 prost = "0.14"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
@@ -19,7 +19,7 @@ For compression support:
 
 ```toml
 [dependencies]
-connectrpc-axum-client = { version = "0.2.1", features = ["compression-gzip-stream"] }
+connectrpc-axum-client = { version = "0.2.2", features = ["compression-gzip-stream"] }
 ```
 
 ## Quick Start with Generated Client
@@ -101,6 +101,44 @@ let response = client.call_unary::<MyRequest, MyResponse>(
 
 println!("Response: {:?}", response.into_inner());
 ```
+
+## Service-Wide Default Headers
+
+Set application headers once on a generated client builder to send them with
+every RPC shape:
+
+```rust
+let client = VertexServiceClient::builder(url)
+    .try_default_header("x-user-id", user_id)?
+    .build()?;
+```
+
+The same methods are available on the low-level `ConnectClient` builder:
+
+```rust
+use connectrpc_axum_client::{ConnectClient, HeaderMap};
+
+let client = ConnectClient::builder(url)
+    .try_default_header("x-user-id", user_id)?
+    .build()?;
+
+// To replace the complete default header map:
+let mut default_headers = HeaderMap::new();
+default_headers.insert("x-user-id", user_id.parse()?);
+let client = ConnectClient::builder(url)
+    .default_headers(default_headers)
+    .build()?;
+```
+
+`default_header` adds a value and panics if its name or value is invalid.
+`try_default_header` returns an error instead. `default_headers` replaces the
+complete default map.
+
+Protocol-reserved names, including `Connect-*`, `Grpc-*`, and protocol content
+headers, are filtered when the request is built. Per-call
+headers replace defaults with the same name. Request interceptors see the merged
+protocol, default, and per-call headers and may inspect or replace application
+header values.
 
 ## Encoding
 
@@ -530,6 +568,27 @@ match client.call_unary::<Req, Res>("service/Method", &request).await {
 }
 ```
 
+RPC errors can include response metadata such as request IDs and retry hints:
+
+```rust
+if let Err(error) = client.call_unary::<Req, Res>("service/Method", &request).await {
+    if let Some(metadata) = error.metadata() {
+        if let Some(request_id) = metadata.get("x-request-id") {
+            println!("Request ID: {:?}", request_id);
+        }
+        if let Some(retry_after) = metadata.get("retry-after") {
+            println!("Retry after: {:?}", retry_after);
+        }
+    }
+}
+```
+
+Among `ClientError` variants, only RPC errors carry response metadata. Unary
+`Trailer-*` names are normalized by removing the prefix, so `Trailer-Foo` is
+exposed as `foo`. An EndStream RPC error exposes the union of the initial
+response headers and EndStream trailing metadata. When the same name appears in
+both, header values come first and trailing values are appended.
+
 A successful Connect response must use HTTP status `200` and the content type for
 the call's encoding and RPC shape. Other successful HTTP statuses or mismatched
 content types are returned as client errors before the body is decoded as a
@@ -594,7 +653,7 @@ can remove the TLS crypto provider and root certificate dependencies:
 
 ```toml
 [dependencies]
-connectrpc-axum-client = { version = "0.2.1", default-features = false }
+connectrpc-axum-client = { version = "0.2.2", default-features = false }
 ```
 
 An HTTP-only build supports both HTTP/1.1 and cleartext HTTP/2. `https://` URLs
@@ -715,7 +774,7 @@ Enable tracing with the `tracing` feature:
 
 ```toml
 [dependencies]
-connectrpc-axum-client = { version = "0.2.1", features = ["tracing"] }
+connectrpc-axum-client = { version = "0.2.2", features = ["tracing"] }
 ```
 
 Each RPC call creates a span with:

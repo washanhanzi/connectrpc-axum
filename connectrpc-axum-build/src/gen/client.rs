@@ -659,6 +659,47 @@ pub fn generate_connect_client(
                     self
                 }
 
+                /// Add a default header to every request.
+                ///
+                /// Per-call headers and interceptors may replace this value.
+                ///
+                /// # Panics
+                ///
+                /// Panics if the header name or value is invalid.
+                pub fn default_header<K, V>(mut self, name: K, value: V) -> Self
+                where
+                    K: ::std::convert::TryInto<connectrpc_axum_client::HeaderName>,
+                    K::Error: ::std::fmt::Debug,
+                    V: ::std::convert::TryInto<connectrpc_axum_client::HeaderValue>,
+                    V::Error: ::std::fmt::Debug,
+                {
+                    self.inner = self.inner.default_header(name, value);
+                    self
+                }
+
+                /// Try to add a default header to every request.
+                pub fn try_default_header<K, V>(
+                    mut self,
+                    name: K,
+                    value: V,
+                ) -> Result<Self, connectrpc_axum_client::ClientError>
+                where
+                    K: ::std::convert::TryInto<connectrpc_axum_client::HeaderName>,
+                    V: ::std::convert::TryInto<connectrpc_axum_client::HeaderValue>,
+                {
+                    self.inner = self.inner.try_default_header(name, value)?;
+                    Ok(self)
+                }
+
+                /// Replace the default headers sent with every request.
+                pub fn default_headers(
+                    mut self,
+                    headers: connectrpc_axum_client::HeaderMap,
+                ) -> Self {
+                    self.inner = self.inner.default_headers(headers);
+                    self
+                }
+
                 /// Enable HTTP/2 prior knowledge (h2c) for plain HTTP URLs.
                 ///
                 /// Required for bidirectional streaming over `http://` URLs.

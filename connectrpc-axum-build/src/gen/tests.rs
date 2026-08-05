@@ -419,6 +419,70 @@ fn test_generated_stream_send_request_errors_abort_request_body() {
 }
 
 #[test]
+fn test_generated_client_default_headers_cover_all_rpc_shapes() {
+    let buf = render_service(
+        "matrix",
+        "MatrixService",
+        vec![
+            method(
+                "matrix",
+                "Unary",
+                "Request",
+                "Response",
+                false,
+                false,
+                Default::default(),
+            ),
+            method(
+                "matrix",
+                "ServerStream",
+                "Request",
+                "Response",
+                false,
+                true,
+                Default::default(),
+            ),
+            method(
+                "matrix",
+                "ClientStream",
+                "Request",
+                "Response",
+                true,
+                false,
+                Default::default(),
+            ),
+            method(
+                "matrix",
+                "BidiStream",
+                "Request",
+                "Response",
+                true,
+                true,
+                Default::default(),
+            ),
+        ],
+        AxumConnectServiceGenerator::new().with_connect_client(true),
+    );
+
+    assert!(buf.contains("pub fn default_header < K , V >"));
+    assert!(buf.contains("pub fn try_default_header < K , V >"));
+    assert!(buf.contains("pub fn default_headers"));
+    assert!(buf.contains("connectrpc_axum_client :: HeaderName"));
+    assert!(buf.contains("connectrpc_axum_client :: HeaderValue"));
+    assert!(buf.contains("connectrpc_axum_client :: HeaderMap"));
+
+    assert!(buf.contains("call_unary_with_options"));
+    assert!(buf.contains("call_server_stream_with_options"));
+    assert!(buf.contains("call_client_stream_fallible_with_headers"));
+    assert!(buf.contains("call_bidi_stream_fallible_with_headers"));
+
+    assert!(buf.contains("pub struct MatrixServiceClient {"));
+    assert!(buf.contains("pub struct MatrixServiceClientBuilder {"));
+    assert!(!buf.contains("pub struct MatrixServiceClient <"));
+    assert!(!buf.contains("pub struct MatrixServiceClientBuilder <"));
+}
+
+#[test]
 fn test_keyword_method_names_append_to_existing_output_file() {
     let message_types = vec![DescriptorProto {
         name: Some("Empty".to_string()),
