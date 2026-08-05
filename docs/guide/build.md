@@ -105,7 +105,7 @@ Requires `tonic` feature:
 
 ```toml
 [build-dependencies]
-connectrpc-axum-build = { version = "0.2.1", features = ["tonic"] }
+connectrpc-axum-build = { version = "0.2.2", features = ["tonic"] }
 ```
 
 ```rust
@@ -126,7 +126,7 @@ Requires `tonic-client` feature:
 
 ```toml
 [build-dependencies]
-connectrpc-axum-build = { version = "0.2.1", features = ["tonic-client"] }
+connectrpc-axum-build = { version = "0.2.2", features = ["tonic-client"] }
 ```
 
 ```rust
@@ -190,7 +190,7 @@ Requires `fetch-protoc` feature:
 
 ```toml
 [build-dependencies]
-connectrpc-axum-build = { version = "0.2.1", features = ["fetch-protoc"] }
+connectrpc-axum-build = { version = "0.2.2", features = ["fetch-protoc"] }
 ```
 
 ```rust

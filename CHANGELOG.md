@@ -7,44 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-05
+
 ### Added
 
-#### Client Library (`connectrpc-axum-client`)
-- New Connect RPC client implementation
-- Unary RPC calls with JSON and protobuf encoding
-- Server streaming RPC support with `StreamBody` wrapper
-- Client streaming RPC support with `FrameEncoder`
-- Bidirectional streaming RPC support (requires HTTP/2)
-- Request compression (gzip, brotli, zstd) with configurable thresholds
-- Response decompression
-- Middleware support via `reqwest-middleware`
-- `ConnectResponse<T>` wrapper with metadata access
-- `Metadata` type for accessing response headers and trailers
+- `Status::metadata()` and `ClientError::metadata()` expose received RPC response metadata.
+- Raw and generated client builders support service-wide default request headers. Per-call
+  headers override defaults, and interceptors may replace the merged application headers.
 
-#### Code Generation (`connectrpc-axum-build`)
-- Generated typed client structs with `.with_connect_client()` option
-- Service name and procedure path constants
-- Typed methods for all RPC patterns:
-  - Unary: `async fn method(&self, request) -> Result<ConnectResponse<T>>`
-  - Server streaming: returns `StreamBody<FrameDecoder<...>>`
-  - Client streaming: takes `impl Stream<Item = T>`
-  - Bidirectional streaming: takes stream, returns stream
-- `ClientBuilder` pattern for configuring encoding and compression
+### Fixed
 
-#### Core Library (`connectrpc-axum-core`)
-- Extracted shared protocol code from `connectrpc-axum`
-- `Codec` trait and implementations (gzip, deflate, brotli, zstd)
-- `CompressionConfig` and `CompressionEncoding` types
-- Envelope frame parsing and encoding functions
-- `ConnectError` and `Code` types
-- `Metadata` type for header management
-
-### Changed
-- `connectrpc-axum` now depends on `connectrpc-axum-core` for shared types
-- Streaming `send_max_bytes` enforcement now degrades oversized EndStream error
-  frames by stripping details before sending, instead of exempting them from the
-  limit. This differs from the current behavior discussed in
-  [connectrpc/connect-go#907](https://github.com/connectrpc/connect-go/issues/907).
+- Unary `Trailer-*` response headers are normalized to unprefixed metadata names.
+- Streaming EndStream errors carry the union of initial response headers and EndStream
+  metadata. Successful client-streaming responses also retain EndStream metadata.
+- CI tests the client without default features to guard existing plain HTTP support against
+  regression.
 
 ## [0.1.0-alpha.1] - Initial Release
 

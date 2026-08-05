@@ -11,13 +11,13 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 repository = "https://github.com/washanhanzi/connectrpc-axum"
 
 [workspace.dependencies]
 # Keep this semver requirement aligned with connectrpc-axum-core/Cargo.toml.
-connectrpc-axum-core = { version = "0.2.0", path = "./connectrpc-axum-core" }
+connectrpc-axum-core = { version = "0.2.1", path = "./connectrpc-axum-core" }
 anyhow = "1.0"
 async-stream = "0.3"
 axum = "0.8"
