@@ -8,12 +8,12 @@ Add the `tonic` feature and `tonic-web` dependency:
 
 ```toml
 [dependencies]
-connectrpc-axum = { version = "0.2.2", features = ["tonic"] }
+connectrpc-axum = { version = "0.2.3", features = ["tonic"] }
 tonic = "0.14"
 tonic-web = "0.14"
 
 [build-dependencies]
-connectrpc-axum-build = { version = "0.2.2", features = ["tonic"] }
+connectrpc-axum-build = { version = "0.2.3", features = ["tonic"] }
 ```
 
 ## Usage

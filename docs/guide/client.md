@@ -8,7 +8,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-connectrpc-axum-client = "0.2.2"
+connectrpc-axum-client = "0.2.3"
 prost = "0.14"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
@@ -19,7 +19,7 @@ For compression support:
 
 ```toml
 [dependencies]
-connectrpc-axum-client = { version = "0.2.2", features = ["compression-gzip-stream"] }
+connectrpc-axum-client = { version = "0.2.3", features = ["compression-gzip-stream"] }
 ```
 
 ## Quick Start with Generated Client
@@ -653,7 +653,7 @@ can remove the TLS crypto provider and root certificate dependencies:
 
 ```toml
 [dependencies]
-connectrpc-axum-client = { version = "0.2.2", default-features = false }
+connectrpc-axum-client = { version = "0.2.3", default-features = false }
 ```
 
 An HTTP-only build supports both HTTP/1.1 and cleartext HTTP/2. `https://` URLs
@@ -774,7 +774,7 @@ Enable tracing with the `tracing` feature:
 
 ```toml
 [dependencies]
-connectrpc-axum-client = { version = "0.2.2", features = ["tracing"] }
+connectrpc-axum-client = { version = "0.2.3", features = ["tracing"] }
 ```
 
 Each RPC call creates a span with:

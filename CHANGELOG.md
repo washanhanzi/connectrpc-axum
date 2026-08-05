@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-05
+
+### Fixed
+
+- Oversized HTTP/1 request bodies are drained without buffering before returning
+  `resource_exhausted`, allowing clients to receive the RPC error instead of a broken pipe.
+
 ## [0.2.2] - 2026-08-05
 
 ### Added

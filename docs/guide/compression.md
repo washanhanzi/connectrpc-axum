@@ -75,10 +75,10 @@ Enable additional algorithms in `Cargo.toml`:
 
 ```toml
 [dependencies]
-connectrpc-axum = { version = "0.2.2", features = ["compression-br", "compression-zstd"] }
+connectrpc-axum = { version = "0.2.3", features = ["compression-br", "compression-zstd"] }
 
 # Or enable all
-connectrpc-axum = { version = "0.2.2", features = ["compression-full"] }
+connectrpc-axum = { version = "0.2.3", features = ["compression-full"] }
 ```
 
 ## Configuration Options

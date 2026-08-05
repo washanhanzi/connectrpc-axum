@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "connectrpc-axum"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-stream",
  "axum",
@@ -485,7 +485,7 @@ dependencies = [
 
 [[package]]
 name = "connectrpc-axum-benchmarks"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -515,7 +515,7 @@ dependencies = [
 
 [[package]]
 name = "connectrpc-axum-build"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "heck",
  "pbjson-build",
@@ -531,7 +531,7 @@ dependencies = [
 
 [[package]]
 name = "connectrpc-axum-client"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "axum",
  "base64",

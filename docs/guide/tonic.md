@@ -8,13 +8,13 @@ Add the `tonic` feature to your dependencies:
 
 ```toml
 [dependencies]
-connectrpc-axum = { version = "0.2.2", features = ["tonic"] }
+connectrpc-axum = { version = "0.2.3", features = ["tonic"] }
 tonic = "0.14"
 futures = "0.3"
 tower = "0.5"
 
 [build-dependencies]
-connectrpc-axum-build = { version = "0.2.2", features = ["tonic"] }
+connectrpc-axum-build = { version = "0.2.3", features = ["tonic"] }
 ```
 
 ## Update build.rs

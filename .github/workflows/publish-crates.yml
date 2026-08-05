@@ -106,11 +106,11 @@ jobs:
       - name: Publish connectrpc-axum-core
         run: /tmp/publish.sh connectrpc-axum-core $DRY_RUN_FLAG
 
-      - name: Publish connectrpc-axum-build
-        run: /tmp/publish.sh connectrpc-axum-build $DRY_RUN_FLAG
-
       - name: Publish connectrpc-axum-client
         run: /tmp/publish.sh connectrpc-axum-client $DRY_RUN_FLAG
 
       - name: Publish connectrpc-axum
         run: /tmp/publish.sh connectrpc-axum $DRY_RUN_FLAG
+
+      - name: Publish connectrpc-axum-build
+        run: /tmp/publish.sh connectrpc-axum-build $DRY_RUN_FLAG
