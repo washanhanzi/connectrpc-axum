@@ -3,9 +3,12 @@
 //! See the [parent module](super) documentation for details on why this layer exists.
 
 use axum::body::Body;
-use axum::http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE};
-use axum::http::{HeaderValue, Request};
+use axum::http::header::{
+    ACCEPT_ENCODING, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, EXPECT,
+};
+use axum::http::{HeaderValue, Request, Version};
 use axum::response::Response;
+use http_body_util::BodyExt;
 use std::{
     future::Future,
     pin::Pin,
@@ -57,8 +60,8 @@ impl BridgeLayer {
     /// Create a new BridgeLayer with the specified receive size limit.
     ///
     /// This limits the compressed unary request body size (from `Content-Length` header).
-    /// Requests exceeding this limit are rejected with `ResourceExhausted` error
-    /// before decompression occurs.
+    /// Oversized HTTP/1 request bodies are drained without buffering so clients can
+    /// receive the error response. Rejection occurs before decompression.
     ///
     /// Use `None` for unlimited (not recommended for production).
     pub fn with_receive_limit(receive_max_bytes: Option<usize>) -> Self {
@@ -131,8 +134,23 @@ where
                 ),
             );
             let send_max_bytes = self.send_max_bytes;
+            let is_http1 = matches!(
+                req.version(),
+                Version::HTTP_09 | Version::HTTP_10 | Version::HTTP_11
+            );
+            let close_connection = is_http1 && expects_continue(&req);
+            let body = (is_http1 && !close_connection).then(|| req.into_body());
             return Box::pin(async move {
-                Ok(err.into_response_with_send_limit(protocol, send_max_bytes))
+                if let Some(body) = body {
+                    drain_body(body).await;
+                }
+                let mut response = err.into_response_with_send_limit(protocol, send_max_bytes);
+                if close_connection {
+                    response
+                        .headers_mut()
+                        .insert(CONNECTION, HeaderValue::from_static("close"));
+                }
+                Ok(response)
             });
         }
 
@@ -152,6 +170,25 @@ where
 
         Box::pin(async move { inner.oneshot(req).await })
     }
+}
+
+/// Drain an HTTP/1 request body so the client can finish writing and receive the RPC error.
+async fn drain_body(mut body: Body) {
+    while let Some(frame) = body.frame().await {
+        if frame.is_err() {
+            break;
+        }
+    }
+}
+
+/// Check whether an HTTP/1 client is waiting for permission to send the request body.
+fn expects_continue<B>(req: &Request<B>) -> bool {
+    req.headers()
+        .get_all(EXPECT)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|expectation| expectation.trim().eq_ignore_ascii_case("100-continue"))
 }
 
 /// Get Content-Length header value as usize.
@@ -179,6 +216,12 @@ fn is_connect_streaming<B>(req: &Request<B>) -> bool {
 mod tests {
     use super::*;
     use axum::http::{Request, StatusCode};
+    use bytes::Bytes;
+    use futures::StreamExt;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use tower::{ServiceBuilder, ServiceExt};
 
     // Simple echo service for testing
@@ -195,6 +238,19 @@ mod tests {
             .header("x-accept-encoding", accept)
             .body(Body::empty())
             .unwrap())
+    }
+
+    fn counted_body(chunks: Vec<Bytes>) -> (Body, Arc<AtomicUsize>) {
+        let chunks_read = Arc::new(AtomicUsize::new(0));
+        let stream =
+            futures::stream::iter(chunks.into_iter().map(Ok::<_, std::convert::Infallible>))
+                .inspect({
+                    let chunks_read = Arc::clone(&chunks_read);
+                    move |_| {
+                        chunks_read.fetch_add(1, Ordering::Relaxed);
+                    }
+                });
+        (Body::from_stream(stream), chunks_read)
     }
 
     #[tokio::test]
@@ -311,6 +367,66 @@ mod tests {
         let resp = svc.oneshot(req).await.unwrap();
         // ResourceExhausted maps to 429 Too Many Requests in Connect protocol
         assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn oversized_http1_unary_body_is_drained_before_response() {
+        let svc = ServiceBuilder::new()
+            .layer(BridgeLayer::with_receive_limit(Some(4)))
+            .service_fn(echo_service);
+        let (body, chunks_read) =
+            counted_body(vec![Bytes::from_static(b"abc"), Bytes::from_static(b"def")]);
+        let req = Request::builder()
+            .version(Version::HTTP_11)
+            .header(CONTENT_TYPE, "application/json")
+            .header(CONTENT_LENGTH, "6")
+            .body(body)
+            .unwrap();
+
+        let resp = svc.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(chunks_read.load(Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test]
+    async fn oversized_http2_unary_body_is_rejected_without_draining() {
+        let svc = ServiceBuilder::new()
+            .layer(BridgeLayer::with_receive_limit(Some(4)))
+            .service_fn(echo_service);
+        let (body, chunks_read) = counted_body(vec![Bytes::from_static(b"abcdef")]);
+        let req = Request::builder()
+            .version(Version::HTTP_2)
+            .header(CONTENT_TYPE, "application/json")
+            .header(CONTENT_LENGTH, "6")
+            .body(body)
+            .unwrap();
+
+        let resp = svc.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(chunks_read.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn oversized_expect_continue_body_is_rejected_without_draining() {
+        let svc = ServiceBuilder::new()
+            .layer(BridgeLayer::with_receive_limit(Some(4)))
+            .service_fn(echo_service);
+        let (body, chunks_read) = counted_body(vec![Bytes::from_static(b"abcdef")]);
+        let req = Request::builder()
+            .version(Version::HTTP_11)
+            .header(CONTENT_TYPE, "application/json")
+            .header(CONTENT_LENGTH, "6")
+            .header(EXPECT, "100-continue")
+            .body(body)
+            .unwrap();
+
+        let resp = svc.oneshot(req).await.unwrap();
+
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(resp.headers().get(CONNECTION).unwrap(), "close");
+        assert_eq!(chunks_read.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]
